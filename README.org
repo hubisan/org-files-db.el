@@ -1,66 +1,160 @@
+#+TITLE: org-files-db.el
 #+STARTUP: showall
-
-* org-files-db.el
 
 [[https://www.gnu.org/licenses/gpl-3.0][https://img.shields.io/badge/License-GPL%20v3-blue.svg]]
 [[https://github.com/hubisan/org-files-db.el/actions/workflows/ci.yml][https://github.com/hubisan/org-files-db.el/actions/workflows/ci.yml/badge.svg]]
 
-Emacs interface for [[https://github.com/hubisan/org-files-db][org-files-db]].
+Emacs interface for [[https://github.com/hubisan/org-files-db][org-files-db]].  The package keeps indexing and SQLite access in the ~orgfdb~ executable and uses its JSON interfaces for queries and search.
 
-The package is at an early stage.  The repository currently contains the
-package, test, lint, and continuous-integration skeleton but no public commands.
-
-** Requirements
+* Requirements
 
 - Emacs 29.4 or newer
-- [[https://github.com/hubisan/org-files-db][orgfdb]] available in =PATH=, once command integration is implemented
+- ~orgfdb~ installed or available through an explicit path
+- [[https://github.com/minad/consult][Consult]] for live FTS5 search
+- [[https://github.com/oantolin/embark][Embark]] for exporting the currently filtered completion candidates
 - [[https://emacs-eask.github.io/][Eask]] for development
 
-** Repository structure
+Consult and Embark are optional at runtime.  Ordinary queries, one-shot search, views, actions, and dynamic blocks work without them.
+
+* Configuration
+
+#+begin_src emacs-lisp
+(setq org-files-db-executable "orgfdb")
+(setq org-files-db-config-file "~/org/org-files-db.toml")
+#+end_src
+
+Run ~M-x org-files-db-check-setup~ to inspect the resolved executable, configuration file, version, and read-only database access.
+
+* Query
+
+~org-files-db-query~ accepts a Query Model v0 expression as Emacs Lisp data:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (not (done)))
+ '((todo-keyword :width (fixed 8))
+   (priority :width auto)
+   (outline-path :width (max 80))
+   (file-name :width (max 30))))
+#+end_src
+
+The result list uses standard Emacs completion and therefore works with the default UI, Vertico, Icomplete, and Fido.  The selected result is opened at its stored UTF-8 byte location by default.
+
+Supported column widths are:
+
+- ~auto~: use the widest value in the current result set
+- ~(max N)~: calculate automatically, capped at ~N~ columns
+- ~(fixed N)~: always use ~N~ columns
+
+Default columns can be customized separately for headings, files, links, and search results.
+
+* Search
+
+Perform one FTS5 search:
+
+#+begin_src emacs-lisp
+(org-files-db-search "title:sqlite AND body:index*" nil nil 'all)
+#+end_src
+
+Start Consult-powered live search with ~M-x org-files-db-search-live~.  Search starts after ~org-files-db-search-min-input~ characters, debounces changing input, and discards obsolete processes.
+
+* Predefined views
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("open-tasks"
+         :command query
+         :query (headings (not (done)))
+         :columns ((todo-keyword :width (fixed 8))
+                   (outline-path :width (max 80))))
+        ("project-search"
+         :command search
+         :expression "org-files-db"
+         :scope title)))
+#+end_src
+
+Use ~M-x org-files-db-query-view~ or ~M-x org-files-db-search-view~.  From Lisp, pass the view name directly.
+
+* Embark export
+
+Query and search candidates use the ~org-files-db-result~ completion category.  With Embark installed, ~embark-export~ creates an Org buffer containing exactly the candidates matching the current minibuffer filter.
+
+Customize:
+
+- ~org-files-db-export-layout~ to ~flat~ or ~outline~
+- ~org-files-db-export-linked-heading-style~ to ~preserve~ or ~resolve~
+
+~preserve~ keeps authored links embedded in heading titles.  ~resolve~ follows those links and displays the effective target title.
+
+* Result actions
+
+The optional action argument of ~org-files-db-query~ and ~org-files-db-search~ receives the selected original JSON result.
+
+Built-in actions and wrappers include:
+
+- ~org-files-db-open-result~
+- ~org-files-db-follow-heading-link~
+- ~org-files-db-insert-file-link~
+- ~org-files-db-insert-heading-link~
+- ~org-files-db-query-insert-file-link~
+- ~org-files-db-query-insert-heading-link~
+- ~org-files-db-rename-file-result~
+
+File links support normal ~file:~, ~id:~, and file-plus-~CUSTOM_ID~ styles.  Heading links support ~id:~, file-plus-~CUSTOM_ID~, and title-based file search links.  Missing IDs are created with Org APIs and saved before the link is inserted.
+
+~org-files-db-rename-file~ updates resolved path-based links before renaming the target.  It preserves descriptions and heading or custom-ID search options, but the multi-file operation is not globally atomic.  Version control is strongly recommended.
+
+* Backlinks
+
+~M-x org-files-db-backlinks~ is a convenience wrapper around a normal link query for the current file or heading.  The returned objects are the source links, so selecting one jumps to the original link location.
+
+* Org dynamic blocks
+
+The package registers these block types:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :layout flat
+,#+END:
+
+,#+BEGIN: org-files-db-query :view "open-tasks" :layout outline
+,#+END:
+
+,#+BEGIN: org-files-db-search :expression "sqlite AND index*" :scope all :layout flat
+,#+END:
+
+,#+BEGIN: org-files-db-backlinks :scope heading :layout flat
+,#+END:
+#+end_src
+
+Update a block with ~org-update-dblock~ or all blocks with ~org-update-all-dblocks~.  Generated entries link back to their indexed source locations.
+
+* Repository structure
 
 #+begin_src text
-  lisp/org-files-db.el       Package entry point
-  tests/org-files-db-test.el Buttercup tests
-  Eask                       Package and development dependencies
-  Makefile                   Local development commands
+lisp/org-files-db.el          Package entry point
+lisp/org-files-db-core.el     Configuration, CLI, results, columns, completion
+lisp/org-files-db-query.el    Query Model v0 command
+lisp/org-files-db-search.el   One-shot and live FTS5 search
+lisp/org-files-db-export.el   Org rendering and Embark exporter
+lisp/org-files-db-actions.el  Link, follow, rename, and backlink actions
+lisp/org-files-db-views.el    Named query and search views
+lisp/org-files-db-dblock.el   Org dynamic blocks
+tests/                        Buttercup tests
 #+end_src
 
-The project-specific AI instructions are stored in
-[[./.project/agents/AGENTS.md][.project/agents/AGENTS.md]].
-
-** Development
-
-Install development dependencies:
+* Development
 
 #+begin_src shell
-  make setup
+make setup
+make ci
 #+end_src
 
-Run the same checks as continuous integration:
+The checks include byte-compilation, package linting, source linting, and Buttercup tests.
 
-#+begin_src shell
-  make ci
-#+end_src
+* Contributing
 
-The checks include byte-compilation, package linting, source linting, and
-Buttercup tests.
+See [[file:CONTRIBUTING.org][CONTRIBUTING.org]].
 
-Other useful commands:
+* Licence
 
-#+begin_src shell
-  make test
-  make lint
-  make compile
-  make package
-  make clean
-  make emacs
-#+end_src
-
-** Contributing
-
-See [[./CONTRIBUTING.md][CONTRIBUTING.md]].
-
-** Licence
-
-This project is licensed under the GNU General Public License version 3 only.
-See [[./LICENSE][LICENSE]].
+This project is licensed under the GNU General Public License version 3 only.  See [[file:LICENSE][LICENSE]].

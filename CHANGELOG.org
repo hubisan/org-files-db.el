@@ -2,4 +2,11 @@
 
 * Unreleased
 
-- =ADDED= Added the initial package, test, lint, and CI skeleton.
+- =ADDED= Added shared ~orgfdb~ configuration, synchronous and asynchronous process execution, JSON handling, and setup diagnostics.
+- =ADDED= Added Query Model v0 completion with configurable columns, widths, result actions, and UTF-8 byte-offset navigation.
+- =ADDED= Added one-shot and Consult-powered live FTS5 search.
+- =ADDED= Added named query and search views.
+- =ADDED= Added Embark export to flat or outline Org buffers.
+- =ADDED= Added file and heading link insertion actions, linked-heading navigation, backlinks, and file rename with path-link maintenance.
+- =ADDED= Added query, search, view, and backlink Org dynamic blocks.
+- =ADDED= Added Buttercup coverage for the CLI layer, formatting, views, export, actions, dynamic blocks, and asynchronous processes.
