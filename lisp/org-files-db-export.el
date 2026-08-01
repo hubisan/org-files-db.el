@@ -50,7 +50,7 @@
    result
    (lambda ()
      (let* ((title (org-get-heading t t t t))
-            (tree (org-element-parse-secondary-string title nil))
+            (tree (org-element-parse-secondary-string title '(link)))
             (link (org-element-map tree 'link #'identity nil t)))
        (when (and link
                   (member (org-element-property :type link) '("file" "id")))
@@ -150,8 +150,8 @@ Return a result-like alist for the target."
                         (byte_start . nil)))))))
     (_ (user-error "Unsupported heading link type"))))
 
-(defun org-files-db--preserved-linked-heading (result info)
-  "Return RESULT's linked heading text using INFO."
+(defun org-files-db--preserved-linked-heading (info)
+  "Return linked heading text using INFO."
   (when-let* ((link (org-files-db--rebased-heading-link info)))
     (concat (or (plist-get info :prefix) "")
             link
@@ -174,9 +174,9 @@ Return a result-like alist for the target."
             (condition-case nil
                 (pcase org-files-db-export-linked-heading-style
                   ('resolve (org-files-db--resolved-linked-heading info))
-                  (_ (org-files-db--preserved-linked-heading result info)))
+                  (_ (org-files-db--preserved-linked-heading info)))
               (error
-               (or (org-files-db--preserved-linked-heading result info)
+               (or (org-files-db--preserved-linked-heading info)
                    (org-files-db--result-org-link result))))
           (org-files-db--result-org-link result))
       (org-files-db--result-org-link result))))
@@ -327,8 +327,17 @@ Return a result-like alist for the target."
                    embark-exporters-alist)
         #'org-files-db-embark-export-org))
 
-(with-eval-after-load 'embark
-  (org-files-db--register-embark-exporter))
+(defun org-files-db--register-embark-exporter-after-load (_file)
+  "Register the Embark exporter once Embark has loaded."
+  (when (featurep 'embark)
+    (org-files-db--register-embark-exporter)
+    (remove-hook 'after-load-functions
+                 #'org-files-db--register-embark-exporter-after-load)))
+
+(if (featurep 'embark)
+    (org-files-db--register-embark-exporter)
+  (add-hook 'after-load-functions
+            #'org-files-db--register-embark-exporter-after-load))
 
 (provide 'org-files-db-export)
 

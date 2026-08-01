@@ -116,6 +116,14 @@ process."
       (when (and process (not done))
         (org-files-db--cancel-process process)))))
 
+(defun org-files-db--consult-dynamic-collection (function &rest arguments)
+  "Create a Consult dynamic collection from FUNCTION and ARGUMENTS."
+  (apply #'consult--dynamic-collection function arguments))
+
+(defun org-files-db--consult-read (collection &rest arguments)
+  "Read one candidate from COLLECTION using Consult ARGUMENTS."
+  (apply #'consult--read collection arguments))
+
 ;;;###autoload
 (defun org-files-db-search-live (&optional columns action scope)
   "Search orgfdb interactively while input changes.
@@ -127,12 +135,12 @@ SCOPE is one of `all', `title', or `body'.  This command requires Consult."
   (let* ((scope (org-files-db--validate-search-scope scope))
          (columns (or columns org-files-db-search-columns))
          (collection
-          (consult--dynamic-collection
-              (lambda (input)
-                (org-files-db--live-search-candidates input columns scope))
-            :min-input org-files-db-search-min-input))
+          (org-files-db--consult-dynamic-collection
+           (lambda (input)
+             (org-files-db--live-search-candidates input columns scope))
+           :min-input org-files-db-search-min-input))
          (result
-          (consult--read
+          (org-files-db--consult-read
            collection
            :prompt "FTS5 search: "
            :category org-files-db--completion-category

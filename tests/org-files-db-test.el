@@ -31,6 +31,8 @@
 
 (before-each
   (setq org-files-db-test--directory (make-temp-file "org-files-db-test-" t))
+  (setq org-persist-directory
+        (expand-file-name "org-persist/" org-files-db-test--directory))
   (setq org-files-db-test--executable
         (org-files-db-test--write-file
          "orgfdb"
@@ -97,9 +99,9 @@
             :to-equal nil))
 
   (it "distinguishes command and usage failures"
-    (expect (lambda () (org-files-db--call "fail" nil))
+    (expect (org-files-db--call "fail" nil)
             :to-throw 'org-files-db-cli-error)
-    (expect (lambda () (org-files-db--call "usage" nil))
+    (expect (org-files-db--call "usage" nil)
             :to-throw 'org-files-db-cli-usage-error))
 
   (it "adds the configured file as separate arguments"
@@ -121,7 +123,7 @@
   (it "disables read-time evaluation for interactive query input"
     (cl-letf (((symbol-function 'read-from-minibuffer)
                (lambda (&rest _) "#.(error \"unsafe\")")))
-      (expect (lambda () (org-files-db--read-sexp "Query: "))
+      (expect (org-files-db--read-sexp "Query: ")
               :to-throw 'user-error)))
 
   (it "includes path context in queries"
@@ -208,7 +210,7 @@
     (setq org-files-db-views
           '(("same" :command query :query (headings))
             ("same" :command search :expression "x")))
-    (expect (lambda () (org-files-db--validate-views))
+    (expect (org-files-db--validate-views)
             :to-throw 'user-error))
 
   (it "delegates a query view to the generic query command"
@@ -263,7 +265,7 @@
                                   (byte_start . 9)))))
            (text (org-files-db--render-org-results (list result) 'outline 0)))
       (expect text :to-match "^\\* Parent")
-      (expect text :to-match "\\n\\*\\* \\[\\[org-files-db:")))
+      (expect text :to-match "\\*\\* \\[\\[org-files-db:")))
 
   (it "preserves an authored file link in a linked heading"
     (let* ((target (org-files-db-test--write-file "target.org" "#+TITLE: Target\n"))
@@ -382,22 +384,22 @@
         (expect (buffer-string) :to-match "Dynamic"))))
 
   (it "rejects conflicting query block parameters"
-    (expect
-     (lambda ()
-       (org-files-db--dblock-query-definition
-        '(:query "(headings)" :view "open")))
+    (expect (org-files-db--dblock-query-definition
+             '(:query "(headings)" :view "open"))
      :to-throw 'user-error)))
 
 (describe "live search integration"
   (it "passes the minimum input as a Consult keyword option"
     (let (dynamic-arguments)
-      (cl-letf (((symbol-function 'consult--dynamic-collection)
+      (cl-letf (((symbol-function 'org-files-db--consult-dynamic-collection)
                  (lambda (&rest arguments)
                    (setq dynamic-arguments arguments)
                    'collection))
-                ((symbol-function 'consult--read)
+                ((symbol-function 'org-files-db--consult-read)
                  (lambda (&rest _) nil)))
-        (expect (lambda () (org-files-db-search-live)) :to-throw 'user-error))
+        (condition-case nil
+            (org-files-db-search-live)
+          (user-error nil)))
       (expect (plist-get (cdr dynamic-arguments) :min-input)
               :to-equal org-files-db-search-min-input))))
 

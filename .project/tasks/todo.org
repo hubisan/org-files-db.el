@@ -9,7 +9,13 @@ This file is the active task index.
 - Project context and architecture decisions: [[./project-context.org][project-context.org]]
 - For later phases and backlog, see [[./roadmap.org]].
   
-* TODO Define package configuration and CLI foundation
+* DONE Fix local CI failures
+
+[[./archive/2026-08-02--fix-local-ci-failures.org][Task details]]
+
+Goal: Correct project-owned failures reported by ~make ci~ and record environment-only blockers.
+
+* REVIEW Define package configuration and CLI foundation
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -119,7 +125,7 @@ The diagnostic command must not rebuild or modify the database.
 - ~org-files-db-check-setup~ detects common configuration problems.
 - Tests cover executable resolution, configuration arguments, JSON parsing, stderr, exit codes, missing files, and process cancellation.
   
-* TODO Define query command
+* REVIEW Define query command
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -288,7 +294,7 @@ Embark is used only for exporting the currently filtered candidate set. Consult 
 - Exported objects link to their original locations.
 - Flat and outline Org-buffer layouts are supported.
   
-* TODO Define query actions for inserting links
+* REVIEW Define query actions for inserting links
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -439,7 +445,7 @@ Keep description generation separate from link-target generation so it can be ma
 - Duplicate heading titles do not affect ~id~ or ~custom-id~ links.
 - Tests cover every link style, identifier creation, existing identifiers, insertion position, invalid result kinds, save failures, and non-ASCII targets.
   
-* TODO Define file rename with link updates
+* REVIEW Define file rename with link updates
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -579,7 +585,7 @@ Stale index locations must produce an actionable error asking the user to reinde
 - Invalid result kinds, stale locations, conflicts, and partial failures are reported clearly.
 - Tests cover relative and absolute links, heading and custom-ID search options, multiple source directories, multiple links per file, unchanged ID links, stale index data, destination conflicts, and unsaved buffers.
   
-* TODO Define predefined views
+* REVIEW Define predefined views
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -721,7 +727,7 @@ The query and search wrappers must reject views of the wrong command type with a
 - Unknown, malformed, duplicate, or incorrectly typed views produce clear errors.
 - Tests cover lookup, completion filtering, delegation, overrides, defaults, and invalid views.
   
-* TODO Define Org dynamic blocks
+* REVIEW Define Org dynamic blocks
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -889,7 +895,7 @@ The error should identify the affected dynamic block.
 - Dynamic blocks reuse the existing query, search, view, and rendering code.
 - Tests cover insertion, updating, empty results, layouts, relative levels, links, invalid parameters, and stubbed CLI failures.
   
-* TODO Define backlinks command
+* REVIEW Define backlinks command
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -950,7 +956,7 @@ Because the command uses the normal query completion category, the currently fil
 - Standard completion and Embark export remain available.
 - Missing identifiers, unindexed targets, and non-Org buffers produce clear errors.
   
-* TODO Define linked-heading actions and export representations
+* REVIEW Define linked-heading actions and export representations
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -1074,7 +1080,7 @@ The surrounding hierarchy still comes from the query results, while the linked e
 - Unresolvable targets fall back safely without producing nested or broken links.
 - Tests cover both representations, relative links, IDs, custom IDs, heading search options, trailing text, missing links, and unresolved targets.
   
-* TODO Define live search command
+* REVIEW Define live search command
 :PROPERTIES:
 :VISIBILITY: folded
 :END:

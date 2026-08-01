@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =FIXED= Preserved file and ID links in exported heading titles with current Org versions.
 - =ADDED= Added shared ~orgfdb~ configuration, synchronous and asynchronous process execution, JSON handling, and setup diagnostics.
 - =ADDED= Added Query Model v0 completion with configurable columns, widths, result actions, and UTF-8 byte-offset navigation.
 - =ADDED= Added one-shot and Consult-powered live FTS5 search.

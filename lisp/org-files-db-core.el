@@ -31,6 +31,8 @@
 (require 'seq)
 (require 'subr-x)
 
+(defvar read-eval)
+
 (defgroup org-files-db nil
   "Emacs interface for org-files-db."
   :group 'org
@@ -156,7 +158,7 @@ OBJECT may be an alist or hash table, and its keys may be symbols or strings."
   "Return the absolute path to `org-files-db-executable'."
   (unless (and (stringp org-files-db-executable)
                (not (string-empty-p org-files-db-executable)))
-    (user-error "org-files-db-executable must be a non-empty string"))
+    (user-error "Org-files-db-executable must be a non-empty string"))
   (let ((path
          (if (file-name-directory org-files-db-executable)
              (expand-file-name org-files-db-executable)
@@ -165,17 +167,17 @@ OBJECT may be an alist or hash table, and its keys may be symbols or strings."
       (user-error "Cannot find orgfdb executable `%s'"
                   org-files-db-executable))
     (unless (file-executable-p path)
-      (user-error "orgfdb executable is not executable: %s" path))
+      (user-error "Orgfdb executable is not executable: %s" path))
     path))
 
 (defun org-files-db--validated-config-file ()
   "Return the expanded configured file name, or nil."
   (when org-files-db-config-file
     (unless (stringp org-files-db-config-file)
-      (user-error "org-files-db-config-file must be a file name or nil"))
+      (user-error "Org-files-db-config-file must be a file name or nil"))
     (let ((file (expand-file-name org-files-db-config-file)))
       (unless (file-readable-p file)
-        (user-error "orgfdb configuration file is not readable: %s" file))
+        (user-error "Orgfdb configuration file is not readable: %s" file))
       file)))
 
 (defun org-files-db--config-arguments ()
@@ -729,7 +731,7 @@ Synthetic file/root nodes are omitted from the displayed heading path."
     (get-text-property 0 'org-files-db-result candidate)))
 
 (defun org-files-db--read-result (results columns &optional prompt)
-  "Read one result from RESULTS displayed with COLUMNS."
+  "Read one result from RESULTS displayed with COLUMNS using PROMPT."
   (unless results
     (user-error "The query returned no results"))
   (let* ((candidates (org-files-db--make-candidates results columns))
@@ -756,7 +758,7 @@ Synthetic file/root nodes are omitted from the displayed heading path."
        (_ org-files-db-heading-columns)))))
 
 (defun org-files-db--present-results (results columns action &optional prompt)
-  "Present RESULTS and apply ACTION to the selected result."
+  "Present RESULTS in COLUMNS, then apply ACTION using PROMPT."
   (let ((result (org-files-db--read-result results columns prompt)))
     (funcall (or action org-files-db-query-action) result)
     result))

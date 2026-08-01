@@ -6,7 +6,7 @@
 
 (package "org-files-db"
          "0.1.0"
-         "Interface for the org-files-db command-line tool")
+         "Emacs interface for org-files-db")
 
 (website-url "https://github.com/hubisan/org-files-db.el")
 (keywords "outlines" "tools" "convenience")

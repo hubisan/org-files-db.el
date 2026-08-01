@@ -25,6 +25,8 @@
 
 (require 'org-files-db-core)
 
+(defvar read-eval)
+
 (defun org-files-db--query-target (query)
   "Infer the Query Model target from QUERY."
   (let* ((form (if (stringp query)

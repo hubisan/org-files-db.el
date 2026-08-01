@@ -124,7 +124,7 @@
   (interactive
    (list (prin1-to-string (org-files-db--read-sexp "Query: "))))
   (unless (derived-mode-p 'org-mode)
-    (user-error "org-files-db dynamic blocks require Org mode"))
+    (user-error "Org-files-db dynamic blocks require Org mode"))
   (org-create-dblock
    (list :name "org-files-db-query" :query query :layout 'flat))
   (org-update-dblock))
@@ -145,7 +145,7 @@
   "Insert and update an org-files-db search dynamic block for EXPRESSION."
   (interactive (list (read-string "FTS5 search: ")))
   (unless (derived-mode-p 'org-mode)
-    (user-error "org-files-db dynamic blocks require Org mode"))
+    (user-error "Org-files-db dynamic blocks require Org mode"))
   (org-create-dblock
    (list :name "org-files-db-search"
          :expression expression
@@ -173,7 +173,7 @@
           (completing-read "Backlink scope: " '("heading" "file")
                            nil t nil nil "heading"))))
   (unless (derived-mode-p 'org-mode)
-    (user-error "org-files-db dynamic blocks require Org mode"))
+    (user-error "Org-files-db dynamic blocks require Org mode"))
   (org-create-dblock
    (list :name "org-files-db-backlinks"
          :scope (or scope 'heading)

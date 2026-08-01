@@ -324,7 +324,8 @@ renamed source location."
          (file-writable-p directory))))
 
 (defun org-files-db--validate-rename (old-path new-path link-results)
-  "Validate rename from OLD-PATH to NEW-PATH and return link edit records."
+  "Validate rename from OLD-PATH to NEW-PATH using LINK-RESULTS.
+Return link edit records."
   (unless (file-readable-p old-path)
     (user-error "Source file is missing or unreadable: %s" old-path))
   (when (file-exists-p new-path)
