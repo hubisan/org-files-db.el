@@ -5,4 +5,11 @@ This file contains stable project context, goals, architecture decisions, and no
 
 * Project Goal
 
-* Archivecture Decisions
+Provide an Emacs interface for querying ~org-files-db~ through the ~orgfdb~ CLI.
+
+* Architecture Decisions
+
+- Use the CLI and structured JSON output.
+- Keep indexing and database access in the Rust project.
+- Keep Emacs-specific presentation and interaction in this package.
+- Do not access SQLite directly from Emacs Lisp.

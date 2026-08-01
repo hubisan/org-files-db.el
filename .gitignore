@@ -5,10 +5,29 @@
 .#*
 \#*\#
 auto-save-list/
+/.emacs.desktop
+/.emacs.desktop.lock
+tramp
 
 # Eask
 .eask/
 dist/
+
+# packaging
+*-autoloads.el
+*-pkg.el
+
+# Eldev
+/.eldev/
+
+# Flycheck
+flycheck_*.el
+
+# Flymake
+*_flymake.*
+
+# Projectiles
+.projectile
 
 # Package artifacts
 *.tar

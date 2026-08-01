@@ -9,4 +9,113 @@ This file is the active task index.
 - Project context and architecture decisions: [[./project-context.org][project-context.org]]
 - For later phases and backlog, see [[./roadmap.org]].
 
-* TODO Task
+* Phase 1: Initial Emacs integration
+
+Goal of this phase: Make the ~orgfdb~ CLI usable from Emacs.
+
+General rules:
+
+- Keep the integration thin and use the CLI with structured JSON output.
+- Results must include file paths and byte offsets for editor jumps.
+- UTF-8 byte-offset behaviour must be documented and tested.
+
+** TODO Define the MVP features
+
+- Die Views von hier waren noch cool: [[file:../../../../../memento/notes/projects/coding/otd/natural-planning.org::#ac038265-015d-49b1-b3fc-635baf2c5801][Enable Views]]
+- completion with consult or whatever
+  default nutzen
+  Spalten sind konfigurierbar
+  > ist eigentlich immer das gleiche, für links, headings, files.
+  > Formatierung wie ich es aktuell habe mit otd? ist dies einfach möglich? Ist schon cool, sollte möglich sein
+
+- Linked Heading Results as Org Buffer, Flat or Outline
+  Dies kann man auch für Files und Links machen.
+  Outline kann so sein:
+  #+BEGIN_SRC org
+    ,* Headings 1
+    ,** Headings 2
+    ,*** Matched Heading
+  #+END_SRC
+  oder so mit breadcrumbs
+  #+BEGIN_SRC org
+    ,* Heading 1 » Heading 2
+    ,** Matched Heading
+  #+END_SRC
+  
+- imenu oder so. Wie ein ibuffer darstellen
+  Spalten sind konfigurierbar
+  bei Denote
+
+- Dynamic Blocks? Finde ich nicht so gut, aber einmal schauen. Hat es bei org-ql und denote.
+  [[https://protesilaos.com/emacs/denote-org][Denote Org (denote-org.el) | Protesilaos]]
+  oh, dies ist noch praktisch für die Backlinks eigentlich
+
+- Insert link to file command
+  normal, id or custom_id
+- Insert link to heading command (with custom id or with id or without (brittle))
+  This needs to create id or custom_id of course
+
+- Rename file > this also renames the links if needed
+
+- Backlinks
+  Irgendwie geht dies schon zu weit, kann man selbst kreieren oder nicht?
+
+- Frontend für Search, Resultate werden instant aktualisiert. Sollte genug schnell sein.
+
+*Dies hat ChatGPT draus gemacht:*
+
+- Consult-based completion and result selection
+- Configurable result columns for headings, files, and links
+- Flat and outline-style Org result buffers
+- Search interface with dynamically updated results
+- Insert links to files and headings
+- Backlink views
+- Evaluate Org dynamic blocks for persistent query results
+
+** TODO Write Elisp wrapper for CLI communication
+
+Acceptance criteria:
+
+- Emacs can call ~orgfdb query --json~.
+- Emacs can call ~orgfdb search --json~ when FTS5 is enabled.
+- JSON results are decoded in Elisp.
+- Results can be displayed as a list.
+- Result entries include ~file_path~ and ~byte_start~.
+- Disabled FTS5 is handled gracefully.
+
+** TODO Implement jump to result
+
+Acceptance criteria:
+
+- Emacs opens the result file.
+- Emacs jumps to ~byte_start~.
+- UTF-8 byte offsets are handled correctly.
+- A fallback using ~line_number~ is documented.
+- Tests cover non-ASCII text.
+
+** TODO Choose the initial interactive commands
+
+Possible commands:
+
+- search heading titles
+- full-text search
+- search by TODO state or type
+- search by tag
+- search by property
+- show broken links
+- jump to ancestor or descendant results
+
+Acceptance criteria:
+
+- The MVP command set is chosen.
+- Commands map directly to CLI calls.
+- Unsupported query features fail clearly.
+
+** TODO Evaluate an Emacs module wrapper
+
+Only evaluate this after the CLI interface is stable.
+
+Acceptance criteria:
+
+- The decision is documented.
+- Additional complexity is justified by measurable performance or UX benefits.
