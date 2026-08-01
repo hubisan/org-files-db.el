@@ -1,0 +1,30 @@
+#+TITLE: <Short Task Title>
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED:
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+* Planning
+
+** Problem summary
+** Goals
+** Non-goals
+** Architecture
+** Execution plan
+** Risks & assumptions
+** Open questions
+** Proposed checks
+
+* Results
+
+** Approach
+** Changed files
+** Checks performed
+** Test results
+** Blockers
+** Follow-ups

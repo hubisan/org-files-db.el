@@ -1,0 +1,8 @@
+#+TITLE: Project Context
+#+STARTUP: showall
+
+This file contains stable project context, goals, architecture decisions, and non-goals. Active tasks live in [[./todo.org]]. Later phases and backlog live in [[./roadmap.org]].
+
+* Project Goal
+
+* Archivecture Decisions

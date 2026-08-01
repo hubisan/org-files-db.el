@@ -1,0 +1,10 @@
+#+TITLE: Repository-specific AI Instructions
+#+STARTUP: showall
+
+* Preferred checks
+
+* Project structure
+
+* Coding style
+
+* Folders/Files to ignore

@@ -1,0 +1,5 @@
+#+TITLE: Roadmap
+
+This file contains later phases, backlog items, and long-term project direction.
+
+Do not work directly from this file. Active tasks are tracked in [[./todo.org]]. 

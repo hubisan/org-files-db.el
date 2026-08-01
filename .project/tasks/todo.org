@@ -1,0 +1,12 @@
+#+TITLE: TODO
+#+TODO: TODO(t) NEXT(n) PLAN(p) BUILD(b) WAIT(w) REVIEW(r) CONTINUE(C) | DONE(d) CANCEL(c)
+#+STARTUP: showall
+
+This file is the active task index.
+
+- For workflow rules, see [[../agents/AGENTS.md]].
+- For repository-specific rules, see [[../agents/repository.org]].
+- Project context and architecture decisions: [[./project-context.org][project-context.org]]
+- For later phases and backlog, see [[./roadmap.org]].
+
+* TODO Task
