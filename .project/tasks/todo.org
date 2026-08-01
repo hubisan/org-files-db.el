@@ -8,114 +8,1196 @@ This file is the active task index.
 - For repository-specific rules, see [[../agents/repository.org]].
 - Project context and architecture decisions: [[./project-context.org][project-context.org]]
 - For later phases and backlog, see [[./roadmap.org]].
-
-* Phase 1: Initial Emacs integration
-
-Goal of this phase: Make the ~orgfdb~ CLI usable from Emacs.
-
-General rules:
-
-- Keep the integration thin and use the CLI with structured JSON output.
-- Results must include file paths and byte offsets for editor jumps.
-- UTF-8 byte-offset behaviour must be documented and tested.
-
-** TODO Define the MVP features
-
-- Die Views von hier waren noch cool: [[file:../../../../../memento/notes/projects/coding/otd/natural-planning.org::#ac038265-015d-49b1-b3fc-635baf2c5801][Enable Views]]
-- completion with consult or whatever
-  default nutzen
-  Spalten sind konfigurierbar
-  > ist eigentlich immer das gleiche, für links, headings, files.
-  > Formatierung wie ich es aktuell habe mit otd? ist dies einfach möglich? Ist schon cool, sollte möglich sein
-
-- Linked Heading Results as Org Buffer, Flat or Outline
-  Dies kann man auch für Files und Links machen.
-  Outline kann so sein:
-  #+BEGIN_SRC org
-    ,* Headings 1
-    ,** Headings 2
-    ,*** Matched Heading
-  #+END_SRC
-  oder so mit breadcrumbs
-  #+BEGIN_SRC org
-    ,* Heading 1 » Heading 2
-    ,** Matched Heading
-  #+END_SRC
   
-- imenu oder so. Wie ein ibuffer darstellen
-  Spalten sind konfigurierbar
-  bei Denote
+* TODO Define package configuration and CLI foundation
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-- Dynamic Blocks? Finde ich nicht so gut, aber einmal schauen. Hat es bei org-ql und denote.
-  [[https://protesilaos.com/emacs/denote-org][Denote Org (denote-org.el) | Protesilaos]]
-  oh, dies ist noch praktisch für die Backlinks eigentlich
+Goal: Provide the shared configuration and process layer used by query, search, views, actions, and dynamic blocks.
 
-- Insert link to file command
-  normal, id or custom_id
-- Insert link to heading command (with custom id or with id or without (brittle))
-  This needs to create id or custom_id of course
+** User options
 
-- Rename file > this also renames the links if needed
+Define a customization group:
 
-- Backlinks
-  Irgendwie geht dies schon zu weit, kann man selbst kreieren oder nicht?
+#+begin_src emacs-lisp
+(defgroup org-files-db nil
+  "Emacs interface for org-files-db."
+  :group 'org)
+#+end_src
 
-- Frontend für Search, Resultate werden instant aktualisiert. Sollte genug schnell sein.
+Provide the executable:
 
-*Dies hat ChatGPT draus gemacht:*
+#+begin_src emacs-lisp
+(defcustom org-files-db-executable "orgfdb"
+  "Path or command name of the orgfdb executable."
+  :type 'string)
+#+end_src
 
-- Consult-based completion and result selection
-- Configurable result columns for headings, files, and links
-- Flat and outline-style Org result buffers
-- Search interface with dynamically updated results
-- Insert links to files and headings
-- Backlink views
-- Evaluate Org dynamic blocks for persistent query results
+A command name is resolved through ~executable-find~. An absolute or relative path must identify an executable file.
 
-** TODO Write Elisp wrapper for CLI communication
+Provide an optional configuration file:
 
-Acceptance criteria:
+#+begin_src emacs-lisp
+(defcustom org-files-db-config-file nil
+  "Configuration file passed to orgfdb.
 
-- Emacs can call ~orgfdb query --json~.
-- Emacs can call ~orgfdb search --json~ when FTS5 is enabled.
-- JSON results are decoded in Elisp.
-- Results can be displayed as a list.
-- Result entries include ~file_path~ and ~byte_start~.
-- Disabled FTS5 is handled gracefully.
+When nil, do not pass the --config option."
+  :type '(choice
+          (const :tag "No explicit configuration" nil)
+          file))
+#+end_src
 
-** TODO Implement jump to result
+Provide default columns for each result type:
 
-Acceptance criteria:
+#+begin_src emacs-lisp
+(defcustom org-files-db-heading-columns ...)
+(defcustom org-files-db-file-columns ...)
+(defcustom org-files-db-link-columns ...)
+(defcustom org-files-db-search-columns ...)
+#+end_src
 
-- Emacs opens the result file.
-- Emacs jumps to ~byte_start~.
-- UTF-8 byte offsets are handled correctly.
-- A fallback using ~line_number~ is documented.
-- Tests cover non-ASCII text.
+Explicit columns supplied to query, search, or view functions override these defaults.
 
-** TODO Choose the initial interactive commands
+** Shared CLI execution
 
-Possible commands:
+Implement one internal process layer used by all commands.
 
-- search heading titles
-- full-text search
-- search by TODO state or type
-- search by tag
-- search by property
-- show broken links
-- jump to ancestor or descendant results
+It must:
 
-Acceptance criteria:
+- invoke ~orgfdb~ directly without a shell
+- add ~--config~ when ~org-files-db-config-file~ is non-nil
+- capture stdout and stderr separately
+- decode UTF-8 output
+- parse successful JSON responses
+- distinguish exit codes ~1~ and ~2~
+- include useful stderr output in errors
+- support synchronous calls for query and asynchronous calls for live search
+- allow obsolete asynchronous processes to be cancelled safely
 
-- The MVP command set is chosen.
-- Commands map directly to CLI calls.
-- Unsupported query features fail clearly.
+Conceptual interface:
 
-** TODO Evaluate an Emacs module wrapper
+#+begin_src emacs-lisp
+(org-files-db--call COMMAND ARGUMENTS)
+(org-files-db--start-process COMMAND ARGUMENTS CALLBACK)
+#+end_src
 
-Only evaluate this after the CLI interface is stable.
+Public features must not invoke ~process-file~ or ~make-process~ independently.
 
-Acceptance criteria:
+** Validation
 
-- The decision is documented.
-- Additional complexity is justified by measurable performance or UX benefits.
+Before execution:
+
+- verify that the executable exists and is executable
+- verify that an explicit configuration file exists and is readable
+- reject malformed local option values clearly
+
+Provide an interactive diagnostic command:
+
+#+begin_src emacs-lisp
+(org-files-db-check-setup)
+#+end_src
+
+It reports:
+
+- resolved executable path
+- configured configuration file
+- executable version
+- whether a basic read-only CLI call succeeds
+
+The diagnostic command must not rebuild or modify the database.
+
+** Acceptance criteria
+
+- The executable and optional configuration file are customizable.
+- Command names and explicit executable paths are supported.
+- Default columns are configurable per result type.
+- All features share one CLI process layer.
+- No command invokes a shell.
+- JSON, stderr, and exit codes are handled consistently.
+- Synchronous and asynchronous execution are supported.
+- ~org-files-db-check-setup~ detects common configuration problems.
+- Tests cover executable resolution, configuration arguments, JSON parsing, stderr, exit codes, missing files, and process cancellation.
+  
+* TODO Define query command
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Execute a Query Model v0 expression, present matched objects through standard Emacs completion, and export the currently filtered results to an Org buffer through Embark.
+
+** Public interface
+
+Provide one generic command:
+
+#+begin_src emacs-lisp
+(org-files-db-query QUERY COLUMNS &optional ACTION)
+#+end_src
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (not (done)))
+ '((todo-keyword :width (fixed 8))
+   (priority :width auto)
+   (outline-path :width (max 80))
+   (file-name :width (max 30))))
+#+end_src
+
+~QUERY~ is a Query Model v0 expression represented as Emacs Lisp data:
+
+#+begin_src emacs-lisp
+'(headings (not (done)))
+'(links (status "broken"))
+'(files (tags "project"))
+#+end_src
+
+The query is serialized to the textual syntax expected by ~orgfdb query~ without invoking a shell.
+
+Interactive use reads and parses one Query Model v0 expression from the minibuffer.
+
+** Columns
+
+~COLUMNS~ defines the displayed columns and their widths.
+
+Supported width forms:
+
+- ~:width auto~ calculates the width from all values in the result set.
+  Auto is the default, if not set auto will be used.
+- ~:width (max N)~ calculates the width automatically but limits it to ~N~ characters.
+- ~:width (fixed N)~ always uses exactly ~N~ characters.
+
+Example:
+
+#+begin_src emacs-lisp
+'((todo-keyword :width (fixed 8))
+  (priority :width (fixed 3))
+  (outline-path :width (max 80))
+  (file-name :width auto))
+#+end_src
+
+For each result set:
+
+- Use one shared width per column for all candidates.
+- Truncate values exceeding the final width.
+- Display one matched heading, link, or file per line.
+- Keep the original result object separate from its displayed text.
+
+The outline-path column uses the form:
+
+#+begin_example
+Heading 1 » Heading 2 » Heading 3 » Matched heading
+#+end_example
+
+Suitable Org faces may be reused, but face attributes affecting typography or dimensions must be ignored, including height, weight, and slant.
+
+** Completion
+
+- Use standard Emacs completion.
+- Work with Vertico, Icomplete, Fido, and the default completion interface.
+- Do not require Consult.
+- Make all displayed column values searchable.
+- Assign a dedicated completion category to query results.
+- Selecting one candidate calls the configured result action.
+
+** Result action
+
+After a candidate is selected, call an action function with the original result object:
+
+#+begin_src emacs-lisp
+(funcall ACTION RESULT)
+#+end_src
+
+Provide a configurable default:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-query-action
+  #'org-files-db-open-result
+  "Function called with the selected query result."
+  :type 'function)
+#+end_src
+
+The optional ~ACTION~ argument overrides ~org-files-db-query-action~ for one invocation:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (todo "NEXT"))
+ '((outline-path :width (max 80)))
+ #'my-org-files-db-action)
+#+end_src
+
+The default action opens the result file and jumps to its stored location.
+
+** Embark export
+
+Provide an Embark exporter for the query-result completion category.
+
+~embark-export~ exports all candidates matching the current minibuffer filter to an Org buffer. Unmatched query results are not included.
+
+The exporter supports headings, files, and links.
+
+Each exported matched object is rendered as an Org link that opens its original file and location.
+
+Supported layouts:
+
+- ~flat~ displays one matched object per top-level entry.
+- ~outline~ reproduces the outline hierarchy around matched objects.
+- ~breadcrumbs~ may be added later as an optional compact layout.
+
+Flat example:
+
+#+begin_src org
+,* [[org-files-db:heading:123][Matched Heading]]
+,* [[org-files-db:heading:456][Another Heading]]
+#+end_src
+
+Outline example:
+
+#+begin_src org
+,* Heading 1
+,** Heading 2
+,*** [[org-files-db:heading:123][Matched Heading]]
+#+end_src
+
+A future breadcrumbs layout may use:
+
+#+begin_src org
+,* Heading 1 » Heading 2
+,** [[org-files-db:heading:123][Matched Heading]]
+#+end_src
+
+The query result objects must retain the path and location information required for exporting and opening results.
+
+Embark is used only for exporting the currently filtered candidate set. Consult is not required.
+
+** Acceptance criteria
+
+- Queries are passed as Query Model v0 Lisp forms.
+- Headings, links, and files are supported.
+- Columns are supplied to ~org-files-db-query~.
+- Column widths support ~auto~, ~(max N)~, and ~(fixed N)~.
+- Results use standard Emacs completion without requiring Consult.
+- One matched object is displayed per candidate.
+- Displayed column values are searchable.
+- The selected candidate retains its original result data.
+- A configurable default action is called after selecting one result.
+- A per-call action can override the default action.
+- Query results use a dedicated completion category.
+- ~embark-export~ exports all currently filtered candidates to an Org buffer.
+- Exported objects link to their original locations.
+- Flat and outline Org-buffer layouts are supported.
+  
+* TODO Define query actions for inserting links
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Select files or headings through ~org-files-db-query~ and insert Org links at the original buffer position.
+
+** Commands
+
+Provide separate convenience commands for files and headings:
+
+#+begin_src emacs-lisp
+(org-files-db-query-insert-file-link QUERY COLUMNS &optional STYLE)
+(org-files-db-query-insert-heading-link QUERY COLUMNS &optional STYLE)
+#+end_src
+
+These commands are thin wrappers around ~org-files-db-query~. They only:
+
+- choose the appropriate link-insertion action
+- bind the requested link style
+- preserve the original insertion position
+- delegate query execution, completion, and result selection to ~org-files-db-query~
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ QUERY
+ COLUMNS
+ (lambda (result)
+   (org-files-db-insert-file-link result style)))
+#+end_src
+
+and:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ QUERY
+ COLUMNS
+ (lambda (result)
+   (org-files-db-insert-heading-link result style)))
+#+end_src
+
+Provide the reusable result actions:
+
+#+begin_src emacs-lisp
+(org-files-db-insert-file-link RESULT &optional STYLE)
+(org-files-db-insert-heading-link RESULT &optional STYLE)
+#+end_src
+
+The action functions operate on one already selected result. They do not execute queries or invoke completion themselves.
+
+The insertion position must be preserved while completion and possible target-file modifications take place.
+
+** File links
+
+Supported styles:
+
+- ~file~ inserts a normal link to the file.
+- ~id~ inserts a global link to the file-level ~ID~.
+- ~custom-id~ inserts a file link to the file-level ~CUSTOM_ID~.
+
+Examples:
+
+#+begin_src org
+,[[file:/path/to/notes.org][Notes]]
+,[[id:550e8400-e29b-41d4-a716-446655440000][Notes]]
+,[[file:/path/to/notes.org::#notes][Notes]]
+#+end_src
+
+Provide a default:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-file-link-style 'file
+  "Default link style for file query results."
+  :type '(choice
+          (const file)
+          (const id)
+          (const custom-id)))
+#+end_src
+
+** Heading links
+
+Supported styles:
+
+- ~id~ inserts a global link to the heading's ~ID~.
+- ~custom-id~ inserts a file link to the heading's ~CUSTOM_ID~.
+- ~heading~ inserts a file link using the heading title.
+
+Examples:
+
+#+begin_src org
+,[[id:550e8400-e29b-41d4-a716-446655440000][Matched heading]]
+,[[file:/path/to/notes.org::#matched-heading][Matched heading]]
+,[[file:/path/to/notes.org::*Matched heading][Matched heading]]
+#+end_src
+
+The ~heading~ style does not modify the target file, but is brittle when headings are renamed or duplicated.
+
+Provide a default:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-heading-link-style 'id
+  "Default link style for heading query results."
+  :type '(choice
+          (const id)
+          (const custom-id)
+          (const heading)))
+#+end_src
+
+** Creating stable identifiers
+
+When the selected style requires an identifier that does not exist:
+
+- Open the exact target using its stored file path and location.
+- Create an ~ID~ or ~CUSTOM_ID~ at the selected file or heading.
+- Preserve existing identifiers.
+- Ensure a generated ~CUSTOM_ID~ is unique within its file.
+- Save the modified target buffer before inserting the link.
+- Report clearly when the target cannot be modified or saved.
+
+Creating identifiers must use Org APIs rather than editing property drawers as plain text.
+
+The index may temporarily contain the previous state until the watcher or a later rebuild processes the modified file.
+
+** Link descriptions
+
+Use the file title or heading title as the default link description.
+
+Keep description generation separate from link-target generation so it can be made configurable later.
+
+** Result validation
+
+- The file-link command accepts only file results.
+- The heading-link command accepts only real heading results.
+- Synthetic root results may be treated as files.
+- Link results are rejected with a clear error.
+- Missing or stale target locations produce an actionable error.
+
+** Acceptance criteria
+
+- Files and headings can be selected through the normal query completion interface.
+- File links support ~file~, ~id~, and ~custom-id~ styles.
+- Heading links support ~id~, ~custom-id~, and ~heading~ styles.
+- Missing identifiers are created and saved when required.
+- Existing identifiers are never replaced.
+- The selected style can override the configured default per call.
+- Links are inserted at the original buffer position.
+- Duplicate heading titles do not affect ~id~ or ~custom-id~ links.
+- Tests cover every link style, identifier creation, existing identifiers, insertion position, invalid result kinds, save failures, and non-ASCII targets.
+  
+* TODO Define file rename with link updates
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Rename an indexed Org file and update all indexed file links that depend on its path.
+
+** Public interface
+
+Provide a standalone command:
+
+#+begin_src emacs-lisp
+(org-files-db-rename-file FILE NEW-PATH)
+#+end_src
+
+Interactive use:
+
+- Uses the current indexed Org file by default.
+- Prompts for the new file name or path.
+- Shows how many links and source files will be changed.
+- Requires confirmation before modifying files.
+
+The command always updates affected links. For a normal rename without link maintenance, users can use standard Emacs file commands.
+
+** Query action
+
+Provide an action for file query results:
+
+#+begin_src emacs-lisp
+#'org-files-db-rename-file-result
+#+end_src
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(files (tags "project"))
+ '((file-title :width (max 50))
+   (file-path :width (max 80)))
+ #'org-files-db-rename-file-result)
+#+end_src
+
+The action accepts file results and synthetic root results. Heading and link results are rejected clearly.
+
+The query action delegates to ~org-files-db-rename-file~ and must not implement a separate rename path.
+
+** Link discovery
+
+Before changing files, retrieve all indexed links whose resolved ~target_file_id~ matches the file being renamed.
+
+Update only links whose target depends on the file path.
+
+Do not modify:
+
+- ~id:~ links
+- links resolved through a heading ~ID~
+- external links
+- unresolved or ambiguous links without a confirmed target
+- links whose text merely contains the old file name
+
+The implementation must use resolved link identity rather than textual search and replacement.
+
+** Link rewriting
+
+Recalculate every file-link path relative to its source file.
+
+Preserve:
+
+- absolute versus relative link style where possible
+- link descriptions
+- heading search options such as ~::*Heading~
+- custom-ID search options such as ~::#custom-id~
+- bracket, angle, and plain link syntax where safely supported
+
+Examples:
+
+#+begin_src org
+,[[file:../old-name.org][Description]]
+,[[file:../old-name.org::*Heading][Description]]
+,[[file:../old-name.org::#custom-id][Description]]
+#+end_src
+
+After renaming:
+
+#+begin_src org
+,[[file:../new-name.org][Description]]
+,[[file:../new-name.org::*Heading][Description]]
+,[[file:../new-name.org::#custom-id][Description]]
+#+end_src
+
+When several links occur in one source file, process them from the highest source position to the lowest so earlier replacements do not invalidate later positions.
+
+Use Org parsing and stored link locations. Do not perform unrestricted text replacement.
+
+** Rename operation
+
+Before modifying anything:
+
+- Verify that the source file exists.
+- Verify that the destination does not already exist.
+- Verify that all affected source files are writable.
+- Detect modified visiting buffers and ask before overwriting or saving them.
+- Verify that every stored link location still identifies the expected link.
+
+After validation:
+
+- Update affected links.
+- Rename the target file.
+- Update visiting buffers to the new file name.
+- Save all modified buffers.
+- Trigger or wait for normal watcher reindexing.
+
+The destination should remain within the configured indexing scope. Updating the Rust configuration for explicitly configured files is outside the initial scope.
+
+** Failure handling
+
+Validation failures must abort before any file is modified.
+
+If an unexpected failure occurs after modifications begin:
+
+- Stop further changes.
+- Report the renamed file and every modified source file.
+- Do not claim that the operation was globally atomic.
+- Preserve enough information for the user to review or revert the changes with version control.
+
+Stale index locations must produce an actionable error asking the user to reindex and retry.
+
+** Acceptance criteria
+
+- An indexed file can be renamed directly or through a file-query action.
+- All resolved path-based links to the file are updated.
+- Relative paths are recalculated from each source file.
+- Link descriptions and search options are preserved.
+- ~id:~ links and unrelated textual matches remain unchanged.
+- Multiple links in one file are updated safely.
+- Modified visiting buffers are handled explicitly.
+- The target and all affected source files are saved.
+- Invalid result kinds, stale locations, conflicts, and partial failures are reported clearly.
+- Tests cover relative and absolute links, heading and custom-ID search options, multiple source directories, multiple links per file, unchanged ID links, stale index data, destination conflicts, and unsaved buffers.
+  
+* TODO Define predefined views
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Allow users to define reusable named query and search views that can be selected interactively or called directly from Emacs Lisp.
+
+** Configuration
+
+Provide one user option:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-views nil
+  "Named predefined query and search views."
+  :type ...)
+#+end_src
+
+Each view has:
+
+- a unique name
+- a ~:command~ value of ~query~ or ~search~
+- a query expression or search expression
+- a column definition
+- an optional result action
+- optional command-specific settings
+
+Example:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("open-tasks"
+         :command query
+         :query (headings (not (done)))
+         :columns
+         ((todo-keyword :width (fixed 8))
+          (priority :width auto)
+          (outline-path :width (max 80))
+          (file-name :width (max 30))))
+
+        ("broken-links"
+         :command query
+         :query (links (status "broken"))
+         :columns
+         ((link-type :width (max 12))
+          (link-target :width (max 60))
+          (file-name :width (max 30))))
+
+        ("project-search"
+         :command search
+         :expression "org-files-db"
+         :scope title
+         :columns
+         ((outline-path :width (max 80))
+          (file-name :width (max 30))))))
+#+end_src
+
+Query views use Query Model v0 expressions without introducing separate Emacs-only query syntax.
+
+Search views use the expression and options supported by ~orgfdb search~.
+
+The result type is inferred from the command:
+
+- Query views return headings, links, or files according to their Query Model target.
+- Search views return heading or root results.
+
+** Query view wrapper
+
+Provide a command for query views:
+
+#+begin_src emacs-lisp
+(org-files-db-query-view)
+(org-files-db-query-view "open-tasks")
+#+end_src
+
+Interactive use offers only views with ~:command query~ through standard completion.
+
+The wrapper resolves the selected view and delegates to:
+
+#+begin_src emacs-lisp
+(org-files-db-query QUERY COLUMNS ACTION)
+#+end_src
+
+It must not implement a separate query execution or presentation path.
+
+** Search view wrapper
+
+Provide a separate command for search views:
+
+#+begin_src emacs-lisp
+(org-files-db-search-view)
+(org-files-db-search-view "project-search")
+#+end_src
+
+Interactive use offers only views with ~:command search~ through standard completion.
+
+The wrapper resolves the selected view and delegates to the generic search command:
+
+#+begin_src emacs-lisp
+(org-files-db-search EXPRESSION COLUMNS ACTION OPTIONS)
+#+end_src
+
+Command-specific settings such as ~:scope title~ or ~:scope body~ are passed through as search options.
+
+The wrapper must not implement a separate search execution or presentation path.
+
+** View lookup
+
+Provide a lower-level lookup function:
+
+#+begin_src emacs-lisp
+(org-files-db-get-view "open-tasks")
+#+end_src
+
+The function returns the configured view without modifying it.
+
+The query and search wrappers must reject views of the wrong command type with a clear error.
+
+** Behaviour
+
+- View names must be unique strings.
+- Configuration order determines completion order.
+- Standard Emacs completion is used; Consult is not required.
+- View-specific columns and actions override global defaults.
+- Missing optional values inherit the corresponding package defaults.
+- Invalid definitions produce an actionable error naming the view.
+- Embark export remains available because views delegate to the normal query or search completion interface.
+
+** Acceptance criteria
+
+- Views are defined through ~org-files-db-views~.
+- Query views store Query Model v0 expressions.
+- Search views store FTS5 search expressions and optional scope settings.
+- ~org-files-db-query-view~ offers and executes only query views.
+- ~org-files-db-search-view~ offers and executes only search views.
+- Both commands support interactive selection and direct calls by name.
+- Query views delegate to ~org-files-db-query~.
+- Search views delegate to ~org-files-db-search~.
+- Columns and result actions can be configured per view.
+- Global defaults are used when a view omits optional settings.
+- Unknown, malformed, duplicate, or incorrectly typed views produce clear errors.
+- Tests cover lookup, completion filtering, delegation, overrides, defaults, and invalid views.
+  
+* TODO Define Org dynamic blocks
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Persist query, search, view, and backlink results inside Org files and refresh them through Org's standard dynamic-block commands.
+
+Dynamic blocks are reproducible snapshots. They are refreshed explicitly with ~org-update-dblock~ or ~org-update-all-dblocks~.
+
+** Architecture
+
+Use Org's standard dynamic-block mechanism:
+
+- Interactive insertion commands create blocks with ~org-create-dblock~.
+- Newly created blocks are updated immediately with ~org-update-dblock~.
+- Writer functions follow the ~org-dblock-write:NAME~ convention.
+- Block types are registered with ~org-dynamic-block-define~.
+- Writers reuse the package's existing query, search, view, and Org-rendering functions.
+- Do not introduce a separate query syntax or execution path for dynamic blocks.
+
+** Query blocks
+
+Support a direct Query Model v0 expression:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :layout flat
+,#+END:
+#+end_src
+
+Alternatively, use a predefined query view:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :view "open-tasks" :layout outline
+,#+END:
+#+end_src
+
+Exactly one of ~:query~ or ~:view~ is required.
+
+Provide an insertion command:
+
+#+begin_src emacs-lisp
+(org-files-db-dblock-insert-query)
+#+end_src
+
+** Search blocks
+
+Support a direct FTS5 search expression:
+
+#+begin_src org
+,#+BEGIN: org-files-db-search :expression "sqlite AND index*" :scope body :layout flat
+,#+END:
+#+end_src
+
+Alternatively, use a predefined search view:
+
+#+begin_src org
+,#+BEGIN: org-files-db-search :view "project-search" :layout flat
+,#+END:
+#+end_src
+
+Exactly one of ~:expression~ or ~:view~ is required.
+
+Supported scopes are:
+
+- ~all~
+- ~title~
+- ~body~
+
+Provide an insertion command:
+
+#+begin_src emacs-lisp
+(org-files-db-dblock-insert-search)
+#+end_src
+
+** Backlink blocks
+
+Provide a convenience block for backlinks to the surrounding file or heading:
+
+#+begin_src org
+,#+BEGIN: org-files-db-backlinks :scope heading :layout outline
+,#+END:
+#+end_src
+
+Supported scopes are:
+
+- ~heading~ for backlinks to the surrounding Org heading
+- ~file~ for backlinks to the current file
+
+Provide an insertion command:
+
+#+begin_src emacs-lisp
+(org-files-db-dblock-insert-backlinks)
+#+end_src
+
+Each backlink entry links to its original source location.
+
+Heading targets must be identified through indexed location or stable identity. Do not rely on the heading title alone.
+
+Updating the block reads persisted results from ~orgfdb~. Emacs must not scan all Org files itself.
+
+** Layouts
+
+Support:
+
+- ~flat~ displays every matched object at the same relative heading level.
+- ~outline~ reproduces file and outline hierarchy around matched objects.
+
+Breadcrumb layout may be added later.
+
+Flat example:
+
+#+begin_src org
+,* [[org-files-db:result-1][Matched heading]]
+,* [[org-files-db:result-2][Another heading]]
+#+end_src
+
+Outline example:
+
+#+begin_src org
+,* [[org-files-db:result-1][Heading 1]]
+,** [[org-files-db:result-2][Heading 2]]
+,*** [[org-files-db:result-3][Matched heading]]
+#+end_src
+
+The first generated heading level is one level below the heading containing the dynamic block. At file level, generated output starts at level 1.
+
+** Rendering
+
+- Headings, files, and links are rendered as clickable Org links.
+- Clicking an entry opens its original file and stored location.
+- Link results open their source location.
+- Generated ancestor context may also link to its original location.
+- Empty results must not leave stale content from an earlier update.
+- Updating a block replaces only its generated body and preserves its parameters.
+
+Generated entries are presentation only:
+
+- Do not create active TODO states in the containing document.
+- Do not copy properties, planning timestamps, or tags in a way that changes the containing document's semantics.
+- TODO keywords and other metadata may appear inside the link description.
+
+** Error handling
+
+Report actionable errors for:
+
+- malformed queries or search expressions
+- unknown or incorrectly typed views
+- conflicting block parameters
+- unsupported layouts or scopes
+- missing files or headings
+- targets not present in the index
+- unavailable or invalid ~orgfdb~ output
+
+The error should identify the affected dynamic block.
+
+** Acceptance criteria
+
+- Query blocks support direct Query Model v0 expressions and query views.
+- Search blocks support direct FTS5 expressions and search views.
+- Backlink blocks support the surrounding file and heading.
+- Blocks refresh through standard Org dynamic-block commands.
+- Flat and outline layouts are supported.
+- Generated entries link to their original locations.
+- Output levels are relative to the block's surrounding heading.
+- Updating a block removes stale results.
+- Dynamic blocks reuse the existing query, search, view, and rendering code.
+- Tests cover insertion, updating, empty results, layouts, relative levels, links, invalid parameters, and stubbed CLI failures.
+  
+* TODO Define backlinks command
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Show indexed links pointing to the current file or Org heading.
+
+Provide a convenience command:
+
+#+begin_src emacs-lisp
+(org-files-db-backlinks)
+#+end_src
+
+The command determines the target at point:
+
+- On an Org heading, show links targeting that heading.
+- Outside a heading, show links targeting the current file.
+- An optional prefix argument may allow choosing between file and heading scope.
+
+The command builds a normal Query Model v0 query and delegates execution and presentation to the existing query interface. It must not implement a separate query, completion, or rendering path.
+
+For a heading target:
+
+- Prefer an existing ~ID~.
+- Otherwise use an existing ~CUSTOM_ID~ together with the file identity.
+- Optionally offer to create an ~ID~ when no stable identifier exists.
+- Do not silently identify a heading by title alone.
+
+The generated query should return the actual link results so their source locations and link metadata remain available.
+
+Example conceptually:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(links
+   (target
+    (headings
+     (property "ID" "TARGET-ID" :inherit nil))))
+ COLUMNS)
+#+end_src
+
+The default columns may include:
+
+- source outline path
+- link description
+- source file
+- line number
+
+Selecting a result opens the source link.
+
+Because the command uses the normal query completion category, the currently filtered backlinks can also be exported through ~embark-export~.
+
+** Acceptance criteria
+
+- Backlinks can be shown for the current file or heading.
+- The command delegates to ~org-files-db-query~.
+- Heading targets use a stable identifier.
+- Selecting a backlink opens its source location.
+- Standard completion and Embark export remain available.
+- Missing identifiers, unindexed targets, and non-Org buffers produce clear errors.
+  
+* TODO Define linked-heading actions and export representations
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Follow links embedded in individual heading titles and support two representations of linked headings in Embark Org exports.
+
+** Follow linked heading action
+
+Provide a reusable result action:
+
+#+begin_src emacs-lisp
+(org-files-db-follow-heading-link RESULT)
+#+end_src
+
+It can be passed directly to ~org-files-db-query~:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (tags "application"))
+ COLUMNS
+ #'org-files-db-follow-heading-link)
+#+end_src
+
+The action:
+
+- accepts one real heading result
+- opens the source heading at its indexed location
+- parses the heading title with Org APIs
+- follows the first supported link in the title
+- resolves relative file links from the source file
+- supports links to files, headings, custom IDs, and IDs
+- allows trailing text after the link
+
+Example:
+
+#+begin_src org
+,* [[file:../applications/scrcpy.org][Scrcpy]] (Control the Device on Linux)
+#+end_src
+
+The action follows the link to ~scrcpy.org~.
+
+If the heading contains no supported link, report a clear error. It must not execute another query or invoke completion.
+
+** Embark Org export
+
+The Embark exporter supports two representations for headings containing links:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-export-linked-heading-style 'preserve
+  "How linked heading titles are represented in Org exports."
+  :type '(choice
+          (const preserve)
+          (const resolve)))
+#+end_src
+
+*** Preserve source heading
+
+~preserve~ keeps the hierarchy and link text defined by the source heading.
+
+Source:
+
+#+begin_src org
+,*** [[file:emacs.org::#editor][Emacs]]
+#+end_src
+
+Export:
+
+#+begin_src org
+,* [[file:/absolute/path/emacs.org::#editor][Emacs]]
+#+end_src
+
+This representation preserves deliberately constructed hierarchy files such as application or topic trees.
+
+*** Resolve target
+
+~resolve~ follows the embedded link and displays the canonical title and location of the target file or heading.
+
+Source:
+
+#+begin_src org
+,*** [[file:emacs.org::#editor][Emacs]]
+#+end_src
+
+Resolved target:
+
+#+begin_src org
+,* GNU Emacs Editor
+#+end_src
+
+Export:
+
+#+begin_src org
+,* [[file:/absolute/path/emacs.org::#editor][GNU Emacs Editor]]
+#+end_src
+
+The surrounding hierarchy still comes from the query results, while the linked entry itself represents the effective target.
+
+** Export behaviour
+
+- Parse heading links with Org APIs, not regular expressions.
+- Do not create nested Org links.
+- Rebase relative file links so they remain valid in the export buffer.
+- Use absolute paths when the export buffer does not visit a file.
+- Support file, heading, custom-ID, and ID links.
+- Preserve trailing text with ~preserve~.
+- Use canonical indexed target titles with ~resolve~.
+- Fall back to ~preserve~ when a target cannot be resolved safely.
+- Headings without embedded links use the normal link to the indexed heading.
+- Apply the same policy to matched headings and generated outline context headings.
+
+** Acceptance criteria
+
+- A linked heading can be followed through a normal query result action.
+- Relative links resolve from the source heading's file.
+- File, heading, custom-ID, and ID targets are supported.
+- Trailing heading text does not prevent following the link.
+- Embark export supports ~preserve~ and ~resolve~.
+- ~preserve~ retains the authored hierarchy label and link.
+- ~resolve~ displays the canonical target title and location.
+- Headings without links retain the normal result-link behaviour.
+- Unresolvable targets fall back safely without producing nested or broken links.
+- Tests cover both representations, relative links, IDs, custom IDs, heading search options, trailing text, missing links, and unresolved targets.
+  
+* TODO Define live search command
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Search the FTS5 index interactively and update completion candidates while the user types.
+
+The search expression uses the raw FTS5 syntax accepted by ~orgfdb search~. It is not a Query Model v0 expression.
+
+** Public interface
+
+Provide a generic one-shot search function:
+
+#+begin_src emacs-lisp
+(org-files-db-search EXPRESSION COLUMNS &optional ACTION SCOPE)
+#+end_src
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-search
+ "title:sqlite AND body:index*"
+ '((title :width (max 60))
+   (outline-path :width (max 80))
+   (file-name :width (max 30)))
+ nil
+ 'all)
+#+end_src
+
+Supported scopes:
+
+- ~all~ searches title and body.
+- ~title~ passes ~--title~.
+- ~body~ passes ~--body~.
+
+The function executes one ~orgfdb search~ call and presents the returned results through the normal result completion interface.
+
+Provide a live interactive frontend:
+
+#+begin_src emacs-lisp
+(org-files-db-search-live COLUMNS &optional ACTION SCOPE)
+#+end_src
+
+The live command delegates search execution, candidate formatting, result actions, and Embark metadata to the same underlying functions as ~org-files-db-search~.
+
+** Live search behaviour
+
+The live frontend uses Consult asynchronous completion.
+
+- Do not start a search before the configured minimum input length is reached.
+- Wait briefly after the last input before starting a process.
+- Cancel an obsolete running process when the expression changes.
+- Replace previous candidates with results from the newest completed search.
+- Ignore output from processes belonging to older input.
+- Do not accumulate results from different expressions.
+- Keep minibuffer interaction responsive while ~orgfdb~ is running.
+
+Provide a minimum-input option:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-search-min-input 3
+  "Minimum number of characters required before live search starts."
+  :type 'natnum)
+#+end_src
+
+Use Consult's asynchronous debounce, throttle, and refresh behaviour rather than implementing a separate timer system.
+
+** Process execution
+
+For every eligible expression, run:
+
+#+begin_src sh
+orgfdb search --format json EXPRESSION
+#+end_src
+
+Add ~--title~ or ~--body~ according to the selected scope.
+
+- Invoke ~orgfdb~ directly without a shell.
+- Parse JSON only after the process exits successfully.
+- Preserve each original search result separately from its displayed candidate.
+- Search results contain heading or synthetic-root objects together with their rank and source location.
+
+** Columns and actions
+
+~COLUMNS~ uses the same column definition and width rules as ~org-files-db-query~:
+
+- ~:width auto~
+- ~:width (max N)~
+- ~:width (fixed N)~
+
+One heading or root result is displayed per candidate.
+
+The optional ~ACTION~ is called with the selected original result object. When omitted, use the configured default result action.
+
+Selecting a candidate opens its file and jumps to its stored location.
+
+** Completion and Embark
+
+- Use the existing result completion category.
+- Work with Vertico and other completion frontends supported by Consult.
+- Make displayed columns searchable locally.
+- Support ~embark-export~ for the currently matching search results.
+- Reuse the existing Org exporter for heading and root results.
+- Consult is required only for the live frontend; one-shot programmatic search must remain independent of Consult.
+
+** Error handling
+
+Errors expected while entering an incomplete FTS5 expression must not interrupt minibuffer input.
+
+- Show malformed intermediate expressions as a temporary search status.
+- Do not open an error debugger or repeatedly display intrusive messages.
+- Clear or retain candidates consistently until the expression becomes valid.
+- Report disabled FTS5, stale search metadata, missing databases, and failed processes clearly.
+- Preserve the final stderr output for an actionable error message.
+
+** Acceptance criteria
+
+- ~(org-files-db-search EXPRESSION ...)~ performs one search.
+- ~org-files-db-search-live~ updates results while the user types.
+- Search starts only after ~org-files-db-search-min-input~ characters.
+- Obsolete processes are cancelled and cannot replace newer results.
+- Results are replaced rather than accumulated.
+- ~all~, ~title~, and ~body~ scopes are supported.
+- Search uses the same columns, result objects, actions, and Embark export as query results.
+- Incomplete FTS5 expressions do not interrupt live input.
+- FTS5 and database failures produce actionable errors.
+- Tests cover minimum input, debounce, process cancellation, stale output, scopes, JSON parsing, selection, Embark metadata, and CLI failures.
