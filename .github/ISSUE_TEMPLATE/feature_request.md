@@ -1,15 +1,13 @@
 ---
-name: Feature Request
-about: Request new features and improvements.
+name: Feature request
+about: Suggest a feature or improvement
 title: ''
 labels: enhancement
 assignees: ''
-
 ---
 
-<!-- Check if there is no similar feature request. -->
-<!-- Check that the issue is not part of an active pull request. -->
+## Problem
 
-### Description
+## Proposed behaviour
 
-### Proposed Implementation (if any)
+## Additional context

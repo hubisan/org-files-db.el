@@ -1,0 +1,33 @@
+* Contributing
+
+Thank you for contributing to ~org-files-db.el~.
+
+** Before making changes
+
+Read the repository instructions in [[file:.project/agents/AGENTS.md][.project/agents/AGENTS.md]].
+
+Install Eask and the development dependencies:
+
+#+begin_src sh
+make setup
+#+end_src
+
+** Project layout
+
+- Package files belong in ~lisp/~.
+- Buttercup tests belong in ~tests/~.
+- User-visible changes belong in ~CHANGELOG.org~.
+
+** Checks
+
+Run the complete local check before opening a pull request:
+
+#+begin_src sh
+make ci
+#+end_src
+
+Add or update tests for behaviour changes. Keep commits focused and avoid unrelated formatting changes.
+
+** Pull requests
+
+Describe the purpose of the change, note any user-visible effects, and mention how it was tested. Update ~README.org~ and ~CHANGELOG.org~ when required.

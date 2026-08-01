@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Emacs ${{ matrix.emacs-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - emacs-version: "29.4"
+            experimental: false
+          - emacs-version: "30.2"
+            experimental: false
+          - emacs-version: snapshot
+            experimental: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Emacs
+        uses: jcs090218/setup-emacs@v3
+        with:
+          version: ${{ matrix.emacs-version }}
+
+      - name: Set up Eask
+        uses: emacs-eask/setup-eask@v3
+        with:
+          version: "0.12.9"
+
+      - name: Run checks
+        run: make ci

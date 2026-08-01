@@ -1,55 +1,67 @@
+#+TITLE: org-files-db.el
 #+STARTUP: showall
-* <Title of Package>
 
-[[https://www.gnu.org/licenses/gpl-3.0][https://img.shields.io/badge/License-GPL%20v3-blue.svg]] [[https://github.com/user/repo-name/actions/workflows/tests.yml]]
+* org-files-db.el
 
-** AI Agent Instructions
+[[https://www.gnu.org/licenses/gpl-3.0][https://img.shields.io/badge/License-GPL%20v3-blue.svg]]
+[[https://github.com/hubisan/org-files-db.el/actions/workflows/ci.yml][https://github.com/hubisan/org-files-db.el/actions/workflows/ci.yml/badge.svg]]
 
-This repository contains AI-specific development instructions in
-[[./.project/agents/AGENTS.md][.project/agents/AGENTS.md]]. AI agents must read =.project/agents/AGENTS.md= before
-making changes.
+Emacs interface for [[https://github.com/hubisan/org-files-db][org-files-db]].
 
-** Features
+The package is at an early stage.  The repository currently contains the
+package, test, lint, and continuous-integration skeleton but no public commands.
 
------
+** Requirements
 
-** Contents
+- Emacs 29.4 or newer
+- [[https://github.com/hubisan/org-files-db][orgfdb]] available in =PATH=, once command integration is implemented
+- [[https://emacs-eask.github.io/][Eask]] for development
 
-- [[#installation][Installation]]
-- [[#usage][Usage]]
-- [[#customization][Customization]]
-- [[#key-bindings][Key Bindings]]
-- [[#changelog][Changelog]]
-- [[#contributing][Contributing]]
+** Repository structure
 
-** Installation
-:PROPERTIES:
-:CUSTOM_ID: installation
-:END:
+#+begin_src text
+  lisp/org-files-db.el       Package entry point
+  tests/org-files-db-test.el Buttercup tests
+  Eask                       Package and development dependencies
+  Makefile                   Local development commands
+#+end_src
 
-** Usage
-:PROPERTIES:
-:CUSTOM_ID: usage
-:END:
+The project-specific AI instructions are stored in
+[[./.project/agents/AGENTS.md][.project/agents/AGENTS.md]].
 
-** Customization
-:PROPERTIES:
-:CUSTOM_ID: customization
-:END:
+** Development
 
-** Key Bindings
-:PROPERTIES:
-:CUSTOM_ID: key-bindings
-:END:
+Install development dependencies:
 
-** Changelog
-:PROPERTIES:
-:CUSTOM_ID: changelog
-:END:
+#+begin_src shell
+  make setup
+#+end_src
+
+Run the same checks as continuous integration:
+
+#+begin_src shell
+  make ci
+#+end_src
+
+The checks include byte-compilation, package linting, source linting, and
+Buttercup tests.
+
+Other useful commands:
+
+#+begin_src shell
+  make test
+  make lint
+  make compile
+  make package
+  make clean
+  make emacs
+#+end_src
 
 ** Contributing
-:PROPERTIES:
-:CUSTOM_ID: contributing
-:END:
+
+See [[./CONTRIBUTING.md][CONTRIBUTING.md]].
 
 ** Licence
+
+This project is licensed under the GNU General Public License version 3 only.
+See [[./LICENSE][LICENSE]].

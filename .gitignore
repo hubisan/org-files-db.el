@@ -1,41 +1,23 @@
-# OS / Editor
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
+# Emacs
+*.elc
+*.eln
 *~
-.vscode/
-.idea/
+.#*
+\#*\#
+auto-save-list/
 
-# Logs
-*.log
-logs/
-
-# Environment / Secrets
-.env
-.env.*
-!.env.example
-
-# Dependencies
-node_modules/
-vendor/
-.pnp/
-.pnp.js
-
-# Build / Cache
+# Eask
+.eask/
 dist/
-build/
-.cache/
-.tmp/
-tmp/
-temp/
-coverage/
 
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
+# Package artifacts
+*.tar
+*.tar.gz
 
-# Project update temp folder
+# OS and editor metadata
+.DS_Store
+.idea/
+.vscode/
+
+# Project update temporary files
 .project-update-tmp/
