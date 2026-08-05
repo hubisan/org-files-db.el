@@ -2,6 +2,11 @@
 
 * Unreleased
 
+- =ADDED= Added per-command and per-view configuration files for query, one-shot search, live search, actions, the setup diagnostic, and Org dynamic blocks.
+  - Omitted command options inherit ~org-files-db-config-file~, paths override it, and explicit ~nil~ disables ~--config~ for Lisp entry points.
+  - Dynamic blocks accept ~:config-file PATH~ and ~:config-file none~; view-backed blocks use the selected view's configuration.
+  - Query and search results retain their effective configuration for indexed follow-up operations such as ID resolution and file rename link discovery.
+  - Retained compatibility with the former positional search scope argument.
 - =CHANGED= Aligned function names with module ownership while retaining ~org-files-db-query~, ~org-files-db-search~, and ~org-files-db-search-live~ as the concise central operations.
   - Renamed ~org-files-db-open-result~ to ~org-files-db-actions-open-result~.
   - Renamed ~org-files-db-insert-file-link~ and ~org-files-db-insert-heading-link~ to ~org-files-db-actions-insert-file-link~ and ~org-files-db-actions-insert-heading-link~.

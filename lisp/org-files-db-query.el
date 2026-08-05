@@ -23,6 +23,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'org-files-db-core)
 (require 'org-files-db-actions)
 
@@ -40,14 +41,24 @@
     (if (memq head '(headings links files)) head 'headings)))
 
 ;;;###autoload
-(defun org-files-db-query (query &optional columns action)
+(cl-defun org-files-db-query
+    (query &optional columns action
+           &key (config-file nil config-file-supplied-p))
   "Execute QUERY and select a result displayed with COLUMNS.
 QUERY is a Query Model v0 Lisp form or its textual representation.
-ACTION receives the selected original result.  When omitted, use
-`org-files-db-query-action'."
+ACTION receives the selected result object.  When omitted, use
+`org-files-db-query-action'.  When CONFIG-FILE is omitted, inherit
+`org-files-db-config-file'; an explicit nil disables --config for this call."
   (interactive (list (org-files-db--read-sexp "Query: ") nil nil))
-  (let* ((response (org-files-db--execute-query query))
-         (results (org-files-db--normalize-results response))
+  (let* ((effective-config-file
+          (org-files-db--resolve-config-file
+           config-file config-file-supplied-p "Query"))
+         (response (org-files-db--execute-query
+                    query effective-config-file "Query"))
+         (results
+          (org-files-db--results-with-config
+           (org-files-db--normalize-results response)
+           effective-config-file))
          (target (or (org-files-db--response-target response)
                      (org-files-db-query--target query)))
          (columns (or columns

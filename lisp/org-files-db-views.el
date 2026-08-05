@@ -29,7 +29,8 @@
 (defcustom org-files-db-views nil
   "Named predefined query and search views.
 Each entry has the form (NAME :command COMMAND ...), where COMMAND is
-`query' or `search'."
+`query' or `search'.  An optional :config-file overrides
+`org-files-db-config-file'; an explicit nil disables --config for that view."
   :type '(repeat sexp)
   :group 'org-files-db)
 
@@ -94,6 +95,14 @@ Each entry has the form (NAME :command COMMAND ...), where COMMAND is
       (user-error "View `%s' has invalid :action %S" (car view) action))
     action))
 
+(defun org-files-db-views--config-file (view)
+  "Return VIEW's effective validated configuration file."
+  (let ((properties (cdr view)))
+    (org-files-db--resolve-config-file
+     (plist-get properties :config-file)
+     (not (null (plist-member properties :config-file)))
+     (format "View `%s'" (car view)))))
+
 ;;;###autoload
 (defun org-files-db-views-query (&optional name)
   "Execute predefined query view NAME.
@@ -105,10 +114,12 @@ Interactively, offer only query views through standard completion."
       (user-error "View `%s' is not a query view" name))
     (let ((query (plist-get (cdr view) :query))
           (columns (plist-get (cdr view) :columns))
-          (action (org-files-db-views--action view)))
+          (action (org-files-db-views--action view))
+          (config-file (org-files-db-views--config-file view)))
       (unless query
         (user-error "Query view `%s' has no :query" name))
-      (org-files-db-query query columns action))))
+      (org-files-db-query
+       query columns action :config-file config-file))))
 
 ;;;###autoload
 (defun org-files-db-views-search (&optional name)
@@ -122,11 +133,15 @@ Interactively, offer only search views through standard completion."
     (let ((expression (plist-get (cdr view) :expression))
           (columns (plist-get (cdr view) :columns))
           (action (org-files-db-views--action view))
-          (scope (or (plist-get (cdr view) :scope) 'all)))
+          (scope (or (plist-get (cdr view) :scope) 'all))
+          (config-file (org-files-db-views--config-file view)))
       (unless (and (stringp expression)
                    (not (string-empty-p expression)))
         (user-error "Search view `%s' has no valid :expression" name))
-      (org-files-db-search expression columns action scope))))
+      (org-files-db-search
+       expression columns action
+       :scope scope
+       :config-file config-file))))
 
 (provide 'org-files-db-views)
 

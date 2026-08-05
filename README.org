@@ -25,6 +25,24 @@ Consult and Embark are optional at runtime.  Ordinary queries, one-shot search, 
 
 Run ~M-x org-files-db-check-setup~ to inspect the resolved executable, configuration file, version, and read-only database access.
 
+The global file is the default for every operation.  Query, search, live-search, action, setup-diagnostic, view, and dynamic-block entry points may override it for one invocation.  Omitting ~:config-file~ inherits the global value, a path selects another configuration, and an explicit ~nil~ invokes ~orgfdb~ without ~--config~.
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (not (done)))
+ nil
+ nil
+ :config-file "~/org/private/org-files-db.toml")
+
+(org-files-db-query
+ '(headings (tags "public"))
+ nil
+ nil
+ :config-file nil)
+#+end_src
+
+Configuration paths are expanded and must identify readable files.  Relative paths are resolved against ~default-directory~ at invocation time.
+
 * Query
 
 ~org-files-db-query~ accepts a Query Model v0 expression as Emacs Lisp data:
@@ -53,10 +71,25 @@ Default columns can be customized separately for headings, files, links, and sea
 Perform one FTS5 search:
 
 #+begin_src emacs-lisp
-(org-files-db-search "title:sqlite AND body:index*" nil nil 'all)
+(org-files-db-search
+ "title:sqlite AND body:index*"
+ nil
+ nil
+ :scope 'all
+ :config-file "~/work/org-files-db.toml")
 #+end_src
 
 Start Consult-powered live search with ~M-x org-files-db-search-live~.  Search starts after ~org-files-db-search-min-input~ characters, debounces changing input, and discards obsolete processes.
+
+#+begin_src emacs-lisp
+(org-files-db-search-live
+ nil
+ nil
+ :scope 'title
+ :config-file "~/work/org-files-db.toml")
+#+end_src
+
+The former leading positional search scope remains accepted for compatibility, including before ~:config-file~, but keyword arguments are preferred.
 
 * Predefined views
 
@@ -64,16 +97,23 @@ Start Consult-powered live search with ~M-x org-files-db-search-live~.  Search s
 (setq org-files-db-views
       '(("open-tasks"
          :command query
+         :config-file "~/org/private/org-files-db.toml"
          :query (headings (not (done)))
          :columns ((todo-keyword :width (fixed 8))
                    (outline-path :width (max 80))))
         ("project-search"
          :command search
          :expression "org-files-db"
-         :scope title)))
+         :scope title)
+        ("public-tasks"
+         :command query
+         :config-file nil
+         :query (headings (tags "public")))))
 #+end_src
 
 Use ~M-x org-files-db-views-query~ or ~M-x org-files-db-views-search~.  From Lisp, pass the view name directly.
+
+A view without ~:config-file~ inherits ~org-files-db-config-file~.  A path selects that configuration for the delegated query or search, while an explicit ~nil~ disables ~--config~ for the view.
 
 * Embark export
 
@@ -88,7 +128,7 @@ Customize:
 
 * Result actions
 
-The optional action argument of ~org-files-db-query~ and ~org-files-db-search~ receives the selected original JSON result.
+The optional action argument of ~org-files-db-query~ and ~org-files-db-search~ receives the selected result object.  Package-owned execution metadata may be attached for follow-up operations.
 
 Built-in actions and wrappers include:
 
@@ -103,6 +143,8 @@ Built-in actions and wrappers include:
 File links support normal ~file:~, ~id:~, and file-plus-~CUSTOM_ID~ styles.  Heading links support ~id:~, file-plus-~CUSTOM_ID~, and title-based file search links.  Missing IDs are created with Org APIs and saved before the link is inserted.
 
 ~org-files-db-actions-rename-file~ updates resolved path-based links before renaming the target.  It preserves descriptions and heading or custom-ID search options, but the multi-file operation is not globally atomic.  Version control is strongly recommended.
+
+Query and search results retain the effective configuration that produced them.  Follow-up CLI operations, such as indexed ID resolution or link discovery during rename, continue to use that configuration even if the global option changes later.
 
 * Backlinks
 
@@ -122,11 +164,19 @@ The package registers these block types:
 ,#+BEGIN: org-files-db-search :expression "sqlite AND index*" :scope all :layout flat
 ,#+END:
 
+,#+BEGIN: org-files-db-query :query "(headings (tags \"private\"))" :config-file "~/org/private/org-files-db.toml" :layout flat
+,#+END:
+
+,#+BEGIN: org-files-db-search :expression "public report" :config-file none :layout flat
+,#+END:
+
 ,#+BEGIN: org-files-db-backlinks :scope heading :layout flat
 ,#+END:
 #+end_src
 
 Update a block with ~org-update-dblock~ or all blocks with ~org-update-all-dblocks~.  Generated entries link back to their indexed source locations.
+
+Direct blocks inherit the global configuration when ~:config-file~ is absent.  A path overrides it, and the dedicated value ~none~ disables ~--config~.  Blocks using ~:view~ inherit the selected view's configuration and must not also specify ~:config-file~.
 
 * API naming
 

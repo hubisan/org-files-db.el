@@ -175,7 +175,7 @@
           (insert-file-contents source)
           (goto-char (point-min))
           (while (re-search-forward
-                  "^(defun \\([^[:space:]()]+\\)"
+                  "^(\\(?:cl-\\)?defun \\([^[:space:]()]+\\)"
                   nil t)
             (let ((name (match-string 1)))
               (expect (or (string-prefix-p prefix name)
@@ -232,10 +232,56 @@
       (expect (org-files-db--config-arguments)
               :to-equal (list "--config" config))))
 
+  (it "resolves inherited, overridden, and explicitly disabled configurations"
+    (let ((global (org-files-db-test--write-file
+                   "global.toml" "db_path='global'\n"))
+          (override (org-files-db-test--write-file
+                     "override.toml" "db_path='override'\n")))
+      (setq org-files-db-config-file global)
+      (expect (org-files-db--resolve-config-file nil nil "Test")
+              :to-equal global)
+      (expect (org-files-db--resolve-config-file override t "Test")
+              :to-equal override)
+      (expect (org-files-db--resolve-config-file nil t "Test")
+              :to-equal nil)
+      (expect (org-files-db--config-arguments nil)
+              :to-equal nil)))
+
+  (it "expands relative configuration paths against default-directory"
+    (let ((default-directory org-files-db-test--directory))
+      (org-files-db-test--write-file "relative.toml" "db_path='x'\n")
+      (expect (org-files-db--resolve-config-file "relative.toml" t "Test")
+              :to-equal
+              (expand-file-name "relative.toml" org-files-db-test--directory))))
+
+  (it "identifies the command when configuration validation fails"
+    (let (message)
+      (condition-case err
+          (org-files-db--resolve-config-file
+           "missing.toml" t "Private query")
+        (user-error (setq message (error-message-string err))))
+      (expect message :to-match "Private query configuration file")
+      (expect message :to-match "does not exist")))
+
   (it "runs the setup diagnostic without mutating the database"
     (let ((report (org-files-db-check-setup)))
       (expect (alist-get 'version report) :to-equal "orgfdb 0.1.0")
-      (expect (alist-get 'read-check report) :to-equal "ok"))))
+      (expect (alist-get 'read-check report) :to-equal "ok")))
+
+  (it "lets the setup diagnostic override or disable the global configuration"
+    (let ((global (org-files-db-test--write-file
+                   "setup-global.toml" "db_path='global'\n"))
+          (override (org-files-db-test--write-file
+                     "setup-override.toml" "db_path='override'\n")))
+      (setq org-files-db-config-file global)
+      (expect (alist-get 'config
+                         (org-files-db-check-setup
+                          :config-file override))
+              :to-equal override)
+      (expect (alist-get 'config
+                         (org-files-db-check-setup
+                          :config-file nil))
+              :to-equal nil))))
 
 (describe "query and search arguments"
   (it "serializes Query Model forms"
@@ -268,6 +314,101 @@
       (expect (org-files-db--response-target response) :to-equal 'headings)
       (expect (length (org-files-db--normalize-results response)) :to-equal 1))))
 
+(describe "per-command configuration"
+  (it "lets query calls inherit, override, and disable the global configuration"
+    (let* ((global (org-files-db-test--write-file
+                    "query-global.toml" "db_path='global'\n"))
+           (override (org-files-db-test--write-file
+                      "query-override.toml" "db_path='override'\n"))
+           (result '((kind . "heading") (title . "Configured")))
+           seen-config selected)
+      (setq org-files-db-config-file global)
+      (cl-letf (((symbol-function 'org-files-db--execute-query)
+                 (lambda (_query &optional config-file _origin)
+                   (setq seen-config config-file)
+                   `((target . "headings") (results . (,result)))))
+                ((symbol-function 'org-files-db--present-results)
+                 (lambda (results &rest _)
+                   (setq selected (car results)))))
+        (org-files-db-query '(headings) nil)
+        (expect seen-config :to-equal global)
+        (expect (org-files-db--result-config-file selected) :to-equal global)
+        (org-files-db-query
+         '(headings) nil nil :config-file override)
+        (expect seen-config :to-equal override)
+        (expect (org-files-db--result-config-file selected) :to-equal override)
+        (org-files-db-query
+         '(headings) nil nil :config-file nil)
+        (expect seen-config :to-equal nil)
+        (expect (org-files-db--result-config-file selected) :to-equal nil))))
+
+  (it "lets search calls inherit, override, disable, and use legacy scope"
+    (let* ((global (org-files-db-test--write-file
+                    "search-global.toml" "db_path='global'\n"))
+           (override (org-files-db-test--write-file
+                      "search-override.toml" "db_path='override'\n"))
+           (result '((kind . "heading") (title . "Found")))
+           seen-config seen-scope selected)
+      (setq org-files-db-config-file global)
+      (cl-letf (((symbol-function 'org-files-db--execute-search)
+                 (lambda (_expression &optional scope config-file _origin)
+                   (setq seen-scope scope
+                         seen-config config-file)
+                   `((results . (,result)))))
+                ((symbol-function 'org-files-db--present-results)
+                 (lambda (results &rest _)
+                   (setq selected (car results)))))
+        (org-files-db-search "report" nil nil)
+        (expect seen-scope :to-equal 'all)
+        (expect seen-config :to-equal global)
+        (org-files-db-search
+         "report" nil nil :scope 'title :config-file override)
+        (expect seen-scope :to-equal 'title)
+        (expect seen-config :to-equal override)
+        (expect (org-files-db--result-config-file selected) :to-equal override)
+        (org-files-db-search
+         "report" nil nil :scope 'body :config-file nil)
+        (expect seen-scope :to-equal 'body)
+        (expect seen-config :to-equal nil)
+        (expect (org-files-db--result-config-file selected) :to-equal nil)
+        (org-files-db-search "report" nil nil 'title)
+        (expect seen-scope :to-equal 'title)
+        (expect seen-config :to-equal global)
+        (org-files-db-search
+         "report" nil nil 'body :config-file override)
+        (expect seen-scope :to-equal 'body)
+        (expect seen-config :to-equal override))))
+
+  (it "retains explicit no-config result context after the global changes"
+    (let* ((global (org-files-db-test--write-file
+                    "later-global.toml" "db_path='later'\n"))
+           (result
+            (org-files-db--result-with-config
+             '((kind . "heading") (title . "Public"))
+             nil)))
+      (setq org-files-db-config-file global)
+      (expect (org-files-db--result-config-file result)
+              :to-equal nil)))
+
+  (it "honours a dynamically bound global unless an explicit option wins"
+    (let* ((global (org-files-db-test--write-file
+                    "dynamic.toml" "db_path='dynamic'\n"))
+           (override (org-files-db-test--write-file
+                      "explicit.toml" "db_path='explicit'\n"))
+           seen-config)
+      (cl-letf (((symbol-function 'org-files-db--execute-query)
+                 (lambda (_query &optional config-file _origin)
+                   (setq seen-config config-file)
+                   '((target . "headings") (results . nil))))
+                ((symbol-function 'org-files-db--present-results)
+                 (lambda (&rest _) nil)))
+        (let ((org-files-db-config-file global))
+          (org-files-db-query '(headings) nil)
+          (expect seen-config :to-equal global)
+          (org-files-db-query
+           '(headings) nil nil :config-file override)
+          (expect seen-config :to-equal override))))))
+
 (describe "columns and completion candidates"
   (it "supports auto, maximum, and fixed widths"
     (let* ((results '(((title . "One")) ((title . "A long title"))))
@@ -294,6 +435,21 @@
               :to-equal result)
       (expect (get-text-property 0 'consult--candidate candidate)
               :to-equal result)))
+
+  (it "does not display internal configuration metadata by default"
+    (let* ((config (org-files-db-test--write-file
+                    "candidate.toml" "db_path='candidate'\n"))
+           (result
+            (org-files-db--result-with-config
+             '((kind . "heading") (title . "Visible title"))
+             config))
+           (candidate
+            (car (org-files-db--make-candidates
+                  (list result) '((title :width auto))))))
+      (expect (substring-no-properties candidate) :to-match "Visible title")
+      (expect (string-match-p (regexp-quote config)
+                              (substring-no-properties candidate))
+              :to-equal nil)))
 
   (it "uses one shared width for every row"
     (let* ((results '(((title . "A")) ((title . "Long"))))
@@ -340,7 +496,8 @@
       (cl-letf (((symbol-function 'org-files-db-query)
                  (lambda (&rest args) (setq arguments args))))
         (org-files-db-views-query "open"))
-      (expect (car arguments) :to-equal '(headings (not (done))))))
+      (expect (car arguments) :to-equal '(headings (not (done))))
+      (expect (plist-get (nthcdr 3 arguments) :config-file) :to-equal nil)))
 
   (it "delegates a search view to the generic search command"
     (let (arguments)
@@ -348,7 +505,50 @@
                  (lambda (&rest args) (setq arguments args))))
         (org-files-db-views-search "fts"))
       (expect (car arguments) :to-equal "sqlite")
-      (expect (car (last arguments)) :to-equal 'title))))
+      (expect (plist-get (nthcdr 3 arguments) :scope) :to-equal 'title)
+      (expect (plist-get (nthcdr 3 arguments) :config-file) :to-equal nil)))
+
+  (it "passes an inherited global configuration explicitly"
+    (let ((config (org-files-db-test--write-file
+                   "view-global.toml" "db_path='global'\n"))
+          arguments)
+      (setq org-files-db-config-file config)
+      (cl-letf (((symbol-function 'org-files-db-query)
+                 (lambda (&rest args) (setq arguments args))))
+        (org-files-db-views-query "open"))
+      (expect (plist-get (nthcdr 3 arguments) :config-file)
+              :to-equal config)))
+
+  (it "lets a view override or explicitly disable the global configuration"
+    (let ((global (org-files-db-test--write-file
+                   "view-default.toml" "db_path='global'\n"))
+          (override (org-files-db-test--write-file
+                     "view-private.toml" "db_path='private'\n"))
+          query-arguments search-arguments)
+      (setq org-files-db-config-file global
+            org-files-db-views
+            `(("private"
+               :command query
+               :config-file ,override
+               :query (headings))
+              ("without"
+               :command search
+               :config-file nil
+               :expression "public")))
+      (cl-letf (((symbol-function 'org-files-db-query)
+                 (lambda (&rest args) (setq query-arguments args)))
+                ((symbol-function 'org-files-db-search)
+                 (lambda (&rest args) (setq search-arguments args))))
+        (org-files-db-views-query "private")
+        (org-files-db-views-search "without"))
+      (expect (plist-get (nthcdr 3 query-arguments) :config-file)
+              :to-equal override)
+      (expect (not (null
+                    (plist-member (nthcdr 3 search-arguments)
+                                  :config-file)))
+              :to-equal t)
+      (expect (plist-get (nthcdr 3 search-arguments) :config-file)
+              :to-equal nil))))
 
 (describe "Org rendering and Embark export"
   (it "renders flat results as linked headings"
@@ -448,6 +648,34 @@
         (expect (file-truename buffer-file-name)
                 :to-equal (file-truename target)))))
 
+  (it "uses the producing result configuration for an indexed ID follow-up"
+    (let* ((source-config (org-files-db-test--write-file
+                           "source-db.toml" "db_path='source'\n"))
+           (other-config (org-files-db-test--write-file
+                          "other-db.toml" "db_path='other'\n"))
+           (source-result
+            (org-files-db--result-with-config
+             '((kind . "heading") (title . "Alias"))
+             source-config))
+           seen-config returned)
+      (setq org-files-db-config-file other-config)
+      (cl-letf (((symbol-function 'org-files-db--execute-query)
+                 (lambda (_query &optional config-file _origin)
+                   (setq seen-config config-file)
+                   '((target . "headings")
+                     (results . (((kind . "heading")
+                                  (title . "Target")))))))
+                ((symbol-function 'org-files-db--visit-result)
+                 (lambda (_) nil)))
+        (setq returned
+              (org-files-db--goto-linked-target
+               (list :type "id"
+                     :path "target-id"
+                     :source-result source-result))))
+      (expect seen-config :to-equal source-config)
+      (expect (org-files-db--result-config-file returned)
+              :to-equal source-config)))
+
   (it "rewrites relative file links while preserving search options"
     (let* ((source (expand-file-name "a/source.org" org-files-db-test--directory))
            (new (expand-file-name "b/new.org" org-files-db-test--directory))
@@ -473,7 +701,7 @@
   (it "queries only path-based file links during rename"
     (let (query)
       (cl-letf (((symbol-function 'org-files-db--execute-query)
-                 (lambda (value) (setq query value) nil)))
+                 (lambda (value &rest _) (setq query value) nil)))
         (org-files-db-actions--incoming-file-link-results "/tmp/old.org"))
       (expect query :to-equal
               '(links
@@ -481,6 +709,25 @@
                  (link-type "file")
                  (target
                   (files (file-path "/tmp/old.org" :exact t))))))))
+
+  (it "propagates result configuration to the rename follow-up query"
+    (let* ((config (org-files-db-test--write-file
+                    "rename.toml" "db_path='rename'\n"))
+           (file (org-files-db-test--write-file "rename.org" "#+TITLE: Rename\n"))
+           (result
+            (org-files-db--result-with-config
+             (org-files-db-test--result "file" "Rename" file)
+             config))
+           arguments)
+      (cl-letf (((symbol-function 'read-file-name)
+                 (lambda (&rest _)
+                   (expand-file-name "renamed.org"
+                                     org-files-db-test--directory)))
+                ((symbol-function 'org-files-db-actions-rename-file)
+                 (lambda (&rest args) (setq arguments args))))
+        (org-files-db-actions-rename-file-result result))
+      (expect (plist-get (nthcdr 3 arguments) :config-file)
+              :to-equal config)))
 
   (it "accepts a destination below a writable existing ancestor"
     (let ((destination
@@ -491,19 +738,107 @@
 
 (describe "dynamic blocks"
   (it "renders direct query blocks through the shared query executor"
-    (let ((result '((kind . "heading")
+    (let ((config (org-files-db-test--write-file
+                   "block-query.toml" "db_path='query'\n"))
+          (result '((kind . "heading")
                     (title . "Dynamic")
                     (location . ((file_path . "/tmp/dynamic.org")
                                  (line . 1)
-                                 (byte_start . 0))))))
+                                 (byte_start . 0)))))
+          seen-config)
       (with-temp-buffer
         (org-mode)
         (cl-letf (((symbol-function 'org-files-db--execute-query)
-                   (lambda (_) `((target . "headings")
-                                 (results . (,result))))))
+                   (lambda (_query &optional config-file _origin)
+                     (setq seen-config config-file)
+                     `((target . "headings")
+                       (results . (,result))))))
           (org-dblock-write:org-files-db-query
-           '(:query "(headings)" :layout flat)))
-        (expect (buffer-string) :to-match "Dynamic"))))
+           `(:query "(headings)" :config-file ,config :layout flat)))
+        (expect (buffer-string) :to-match "Dynamic"))
+      (expect seen-config :to-equal config)))
+
+  (it "lets direct dynamic blocks inherit or disable configuration"
+    (let ((global (org-files-db-test--write-file
+                   "block-global.toml" "db_path='global'\n"))
+          seen-configs)
+      (setq org-files-db-config-file global)
+      (with-temp-buffer
+        (org-mode)
+        (cl-letf (((symbol-function 'org-files-db--execute-query)
+                   (lambda (_query &optional config-file _origin)
+                     (push config-file seen-configs)
+                     '((target . "headings") (results . nil)))))
+          (org-dblock-write:org-files-db-query
+           '(:query "(headings)" :layout flat))
+          (org-dblock-write:org-files-db-query
+           '(:query "(headings)" :config-file none :layout flat))))
+      (expect (nreverse seen-configs) :to-equal (list global nil))))
+
+  (it "uses a predefined view configuration in dynamic blocks"
+    (let ((config (org-files-db-test--write-file
+                   "block-view.toml" "db_path='view'\n"))
+          seen-config)
+      (setq org-files-db-views
+            `(("private"
+               :command query
+               :config-file ,config
+               :query (headings))))
+      (with-temp-buffer
+        (org-mode)
+        (cl-letf (((symbol-function 'org-files-db--execute-query)
+                   (lambda (_query &optional config-file _origin)
+                     (setq seen-config config-file)
+                     '((target . "headings") (results . nil)))))
+          (org-dblock-write:org-files-db-query
+           '(:view "private" :layout flat))))
+      (expect seen-config :to-equal config)))
+
+  (it "lets view-backed dynamic blocks inherit or disable configuration"
+    (let ((global (org-files-db-test--write-file
+                   "block-view-global.toml" "db_path='global'\n"))
+          seen-configs)
+      (setq org-files-db-config-file global
+            org-files-db-views
+            '(("inherited" :command query :query (headings))
+              ("without" :command query :config-file nil
+               :query (headings))))
+      (with-temp-buffer
+        (org-mode)
+        (cl-letf (((symbol-function 'org-files-db--execute-query)
+                   (lambda (_query &optional config-file _origin)
+                     (push config-file seen-configs)
+                     '((target . "headings") (results . nil)))))
+          (org-dblock-write:org-files-db-query
+           '(:view "inherited" :layout flat))
+          (org-dblock-write:org-files-db-query
+           '(:view "without" :layout flat))))
+      (expect (nreverse seen-configs) :to-equal (list global nil))))
+
+  (it "passes direct search block configuration to the shared executor"
+    (let ((config (org-files-db-test--write-file
+                   "block-search.toml" "db_path='search'\n"))
+          seen-config seen-scope)
+      (with-temp-buffer
+        (org-mode)
+        (cl-letf (((symbol-function 'org-files-db--execute-search)
+                   (lambda (_expression &optional scope config-file _origin)
+                     (setq seen-scope scope
+                           seen-config config-file)
+                     '((results . nil)))))
+          (org-dblock-write:org-files-db-search
+           `(:expression "report"
+             :scope title
+             :config-file ,config
+             :layout flat))))
+      (expect seen-scope :to-equal 'title)
+      (expect seen-config :to-equal config)))
+
+  (it "does not interpret nil text as a configuration path"
+    (expect (org-files-db-dblock--config-file
+             '(:query "(headings)" :config-file "nil")
+             'query)
+            :to-throw 'user-error))
 
   (it "rejects conflicting query block parameters"
     (expect (org-files-db-dblock--query-definition
@@ -512,7 +847,8 @@
 
 (describe "live search integration"
   (it "passes the minimum input as a Consult keyword option"
-    (let (dynamic-arguments)
+    (let ((features (cons 'consult features))
+          dynamic-arguments)
       (cl-letf (((symbol-function 'org-files-db-search--consult-dynamic-collection)
                  (lambda (&rest arguments)
                    (setq dynamic-arguments arguments)
@@ -523,7 +859,58 @@
             (org-files-db-search-live)
           (user-error nil)))
       (expect (plist-get (cdr dynamic-arguments) :min-input)
-              :to-equal org-files-db-search-min-input))))
+              :to-equal org-files-db-search-min-input)))
+
+  (it "passes override and explicit nil configuration to live searches"
+    (let* ((features (cons 'consult features))
+           (global (org-files-db-test--write-file
+                    "live-global.toml" "db_path='global'\n"))
+           (override (org-files-db-test--write-file
+                      "live-override.toml" "db_path='override'\n"))
+           (result '((kind . "heading") (title . "Live")))
+           seen-config seen-scope)
+      (setq org-files-db-config-file global)
+      (cl-letf (((symbol-function 'org-files-db-search--consult-dynamic-collection)
+                 (lambda (function &rest _) function))
+                ((symbol-function 'org-files-db-search--live-candidates)
+                 (lambda (_input _columns scope config-file)
+                   (setq seen-scope scope
+                         seen-config config-file)
+                   nil))
+                ((symbol-function 'org-files-db-search--consult-read)
+                 (lambda (collection &rest _)
+                   (funcall collection "report")
+                   result)))
+        (org-files-db-search-live nil #'ignore)
+        (expect seen-scope :to-equal 'all)
+        (expect seen-config :to-equal global)
+        (org-files-db-search-live
+         nil #'ignore :scope 'title :config-file override)
+        (expect seen-scope :to-equal 'title)
+        (expect seen-config :to-equal override)
+        (org-files-db-search-live
+         nil #'ignore :config-file nil)
+        (expect seen-scope :to-equal 'all)
+        (expect seen-config :to-equal nil))))
+
+  (it "retains live-search configuration on generated candidates"
+    (let* ((config (org-files-db-test--write-file
+                    "live-result.toml" "db_path='live'\n"))
+           (result '((kind . "heading") (title . "Live result")))
+           arguments candidates candidate-result)
+      (cl-letf (((symbol-function 'org-files-db--start-process)
+                 (lambda (_command args callback)
+                   (setq arguments args)
+                   (funcall callback `((results . (,result))) nil)
+                   'fake-process)))
+        (setq candidates
+              (org-files-db-search--live-candidates
+               "report" '((title :width auto)) 'all config)))
+      (setq candidate-result
+            (get-text-property 0 'org-files-db-result (car candidates)))
+      (expect (not (null (member config arguments))) :to-equal t)
+      (expect (org-files-db--result-config-file candidate-result)
+              :to-equal config))))
 
 (describe "asynchronous process support"
   (it "delivers parsed JSON to its callback"

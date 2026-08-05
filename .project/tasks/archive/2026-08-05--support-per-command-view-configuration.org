@@ -1,0 +1,401 @@
+#+TITLE: Support per-command and per-view configuration files
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-05 Wednesday 22:32]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Implement the ~Support per-command and per-view configuration files~ task from [[./todo.org]], including inherited, overridden, and explicitly disabled configuration files for commands, views, results, and dynamic blocks.
+
+** BUILD Support per-command and per-view configuration files
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+[[./2026-08-05--support-per-command-view-configuration.org][Task details]]
+
+Goal: Allow individual query, search, view, and related CLI operations to override the global ~org-files-db-config-file~ without introducing separate execution paths.
+
+*** Configuration semantics
+
+Every command that starts ~orgfdb~ has an effective configuration file.
+
+The effective value is determined as follows:
+
+- If no command-specific configuration is supplied, inherit ~org-files-db-config-file~.
+- If a command-specific path is supplied, use that configuration file.
+- If ~nil~ is supplied explicitly, invoke ~orgfdb~ without ~--config~.
+
+The implementation must distinguish an omitted value from an explicitly supplied ~nil~.
+
+*** Public command interface
+
+Allow direct query and search calls to specify a configuration file through keyword arguments.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(cl-defun org-files-db-query
+    (query columns &optional action
+           &key
+           (config-file nil config-file-supplied-p))
+  ...)
+#+end_src
+
+Examples:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (not (done)))
+ nil)
+
+(org-files-db-query
+ '(headings (not (done)))
+ nil
+ nil
+ :config-file "~/org/private/Config.toml")
+
+(org-files-db-query
+ '(headings (not (done)))
+ nil
+ nil
+ :config-file nil)
+#+end_src
+
+The first call inherits ~org-files-db-config-file~.
+
+The second call uses the specified configuration file.
+
+The third call explicitly disables the configured global file for this invocation.
+
+Apply the same mechanism to search:
+
+#+begin_src emacs-lisp
+(cl-defun org-files-db-search
+    (expression columns &optional action
+                &key
+                (scope 'all)
+                (config-file nil config-file-supplied-p))
+  ...)
+#+end_src
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-search
+ "quarterly report"
+ nil
+ nil
+ :scope 'title
+ :config-file "~/work/org/Config.toml")
+#+end_src
+
+Apply the same configuration option to the live-search frontend:
+
+#+begin_src emacs-lisp
+(org-files-db-search-live
+ nil
+ nil
+ :scope 'all
+ :config-file "~/work/org/Config.toml")
+#+end_src
+
+Public wrapper commands that start additional ~orgfdb~ operations must provide or propagate the same execution configuration.
+
+*** Shared option resolution
+
+Provide one internal function for resolving the effective configuration:
+
+#+begin_src emacs-lisp
+(org-files-db--resolve-config-file CONFIG-FILE SUPPLIED-P)
+#+end_src
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(if supplied-p
+    config-file
+  org-files-db-config-file)
+#+end_src
+
+All CLI calls must continue to use the shared process layer.
+
+Do not add query-, search-, view-, or action-specific process execution implementations.
+
+*** View configuration
+
+Support an optional ~:config-file~ property in predefined views:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("private-tasks"
+         :command query
+         :config-file "~/org/private/Config.toml"
+         :query (headings (not (done))))
+
+        ("work-search"
+         :command search
+         :config-file "~/work/org/Config.toml"
+         :expression "quarterly report"
+         :scope title)
+
+        ("default-query"
+         :command query
+         :query (headings (todo "NEXT")))
+
+        ("without-config"
+         :command query
+         :config-file nil
+         :query (headings (tags "public")))))
+#+end_src
+
+The effective view configuration is determined as follows:
+
+- If ~:config-file~ is absent, inherit ~org-files-db-config-file~.
+- If ~:config-file~ contains a path, pass it to the delegated command.
+- If ~:config-file~ is explicitly ~nil~, disable ~--config~ for that view.
+
+Use ~plist-member~ to distinguish an absent property from an explicit ~nil~.
+
+*** View delegation
+
+Query views continue to delegate to ~org-files-db-query~:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ query
+ columns
+ action
+ :config-file effective-config-file)
+#+end_src
+
+Search views continue to delegate to ~org-files-db-search~:
+
+#+begin_src emacs-lisp
+(org-files-db-search
+ expression
+ columns
+ action
+ :scope scope
+ :config-file effective-config-file)
+#+end_src
+
+The view wrappers must not dynamically modify the global value permanently.
+
+They must not implement separate query, search, completion, or process paths.
+
+*** Result execution context
+
+Query and search results must retain the effective configuration context that produced them.
+
+This is required when a result action performs another CLI operation, for example:
+
+- retrieving links before renaming a file
+- resolving additional indexed targets
+- executing another query based on a selected result
+- exporting data that requires additional indexed information
+
+The configuration context is metadata of the result and must not be displayed as a completion column unless explicitly requested.
+
+Actions that do not execute ~orgfdb~, such as opening a stored file location, do not need to use it.
+
+A follow-up CLI call originating from a result must use the result's configuration context rather than silently reverting to the current global configuration.
+
+*** Dynamic blocks
+
+Dynamic blocks using a predefined view automatically use the view's effective configuration file:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :view "private-tasks" :layout outline
+,#+END:
+#+end_src
+
+Direct query and search blocks may also accept ~:config-file~:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :config-file "~/org/private/Config.toml" :layout flat
+,#+END:
+#+end_src
+
+#+begin_src org
+,#+BEGIN: org-files-db-search :expression "quarterly report" :config-file "~/work/org/Config.toml" :layout flat
+,#+END:
+#+end_src
+
+For direct blocks:
+
+- an absent ~:config-file~ inherits the global configuration
+- a path overrides the global configuration
+
+An explicit no-config representation for dynamic blocks may use a dedicated value such as:
+
+#+begin_src org
+:config-file none
+#+end_src
+
+The value ~none~ means that ~orgfdb~ is invoked without ~--config~.
+
+Do not interpret the string ~"nil"~ as a file path or as Lisp.
+
+*** Dynamic binding
+
+Users may still temporarily bind the global option for ad-hoc Lisp code:
+
+#+begin_src emacs-lisp
+(let ((org-files-db-config-file
+       "~/org/private/Config.toml"))
+  (org-files-db-query
+   '(headings (not (done)))
+   nil))
+#+end_src
+
+This remains supported because ~org-files-db-config-file~ is dynamically bindable.
+
+Dynamic binding is a convenience mechanism, not the required implementation for views or public wrappers.
+
+Explicit command parameters take precedence over a dynamically bound global value.
+
+*** Path handling and validation
+
+For every effective non-nil configuration file:
+
+- expand ~~~ with ~expand-file-name~
+- resolve relative paths consistently
+- verify that the file exists
+- verify that the file is readable
+- pass the expanded path to ~orgfdb~
+- include the originating command or view name in validation errors where available
+
+An explicitly supplied ~nil~ must not be validated as a path and must not add ~--config~.
+
+Do not modify the global value of ~org-files-db-config-file~ permanently.
+
+*** Backwards compatibility
+
+Calls that do not provide keyword arguments must continue to work.
+
+Existing calls such as:
+
+#+begin_src emacs-lisp
+(org-files-db-query QUERY COLUMNS ACTION)
+#+end_src
+
+continue to inherit ~org-files-db-config-file~.
+
+Existing search callers using a positional ~SCOPE~ argument may either:
+
+- remain supported temporarily through a compatibility wrapper
+- or be migrated consistently to the new ~:scope~ keyword interface
+
+Do not retain two independent search implementations.
+
+*** Acceptance criteria
+
+- Direct query calls can inherit, override, or disable the global configuration.
+- Direct search calls can inherit, override, or disable the global configuration.
+- Live search supports the same configuration behaviour.
+- Query and search views support ~:config-file~.
+- Views without ~:config-file~ inherit the global configuration.
+- An explicit view value of ~nil~ disables ~--config~.
+- View wrappers pass configuration explicitly to query or search.
+- Dynamic blocks using views inherit the view configuration.
+- Direct dynamic blocks can override the configuration.
+- Results retain the configuration context required by follow-up CLI actions.
+- Follow-up operations do not silently switch to another database.
+- Explicit command options override dynamically bound global values.
+- All execution continues through the shared CLI process layer.
+- Tests cover global inheritance, direct overrides, explicit ~nil~, per-view paths, view inheritance, dynamic binding, dynamic blocks, result context propagation, invalid files, query calls, one-shot search, and live search.
+
+*** Build
+
+- Added shared effective configuration resolution, path validation, and CLI argument construction in core.
+- Added keyword configuration support to query, search, live search, actions, the setup diagnostic, and dynamic-block insertion commands while retaining positional search scope compatibility.
+- Added per-view and dynamic-block configuration handling, including explicit no-config semantics.
+- Attached the effective configuration to results and reused it for indexed ID and rename follow-up operations.
+- Added Buttercup coverage for inheritance, overrides, explicit ~nil~, dynamic binding, views, dynamic blocks, result propagation, validation, one-shot search, and live search.
+  
+* Planning
+
+** Problem summary
+
+The package only has one global configuration value.  Commands, predefined views, and follow-up operations cannot select another orgfdb configuration without dynamically rebinding global state, and result actions can accidentally switch databases.
+
+** Goals
+
+- Resolve one effective configuration file for every database-backed CLI operation.
+- Distinguish an omitted override from an explicitly supplied ~nil~.
+- Support query, one-shot search, live search, relevant actions, setup diagnostics, views, and dynamic blocks.
+- Preserve the producing configuration as internal result metadata for follow-up CLI operations.
+- Retain compatibility with the former positional search scope argument.
+
+** Non-goals
+
+- Add a second process or query implementation.
+- Mutate ~org-files-db-config-file~ permanently.
+- Change the orgfdb CLI or database format.
+
+** Architecture
+
+- Keep resolution, path validation, CLI argument construction, and result-context helpers in core.
+- Let specialised modules resolve or propagate the effective value while continuing to use the shared core execution layer.
+- Store configuration context under a private result key that is not part of default completion columns.
+
+** Execution plan
+
+- Add shared configuration resolution and validation in core.
+- Extend query, search, live search, wrappers, and setup diagnostics.
+- Add per-view delegation and dynamic-block parsing, including ~none~.
+- Propagate result context through indexed ID and rename follow-up operations.
+- Add Buttercup coverage and update user documentation and the changelog.
+
+** Risks & assumptions
+
+- Existing result values are alists or hash tables and can be copied before private metadata is attached.
+- Search compatibility preserves a leading positional scope, including before new keyword options.
+- Relative configuration paths resolve against ~default-directory~ at invocation time.
+
+** Proposed checks
+
+- ~make ci~
+- ~git diff --check~
+- Static checks for balanced Lisp, local dependency cycles, private namespace boundaries, and unresolved internal calls.
+
+* Results
+
+** Approach
+
+- Added one core resolver that applies omitted, path, and explicit-no-config semantics and validates non-nil paths.
+- Passed effective configuration values through all existing shared query, search, and process paths.
+- Attached internal configuration metadata to query and search results and reused it for indexed ID and rename follow-up operations.
+- Added view and dynamic-block configuration handling without rebinding the global option.
+- Preserved the legacy positional search scope through one options parser and one search implementation.
+
+** Changed files
+
+- Core, query, search, actions, views, and dynamic-block Lisp modules.
+- Buttercup tests.
+- README, changelog, and task tracking.
+
+** Checks performed
+
+- ~make ci~ attempted.
+- ~git diff --check~.
+- Static Lisp structure, dependency, namespace, and call-target checks.
+
+** Test results
+
+- Full Buttercup, byte-compilation, and lint execution is blocked in this environment because Emacs and Eask are unavailable.
+- Static repository checks pass.
+
+** Blockers
+
+- ~make ci~ stops at ~eask clean all~ with ~eask: No such file or directory~.
+
+** Follow-ups
+
+- Run ~make ci~ in the normal development environment.
+- Suggested commit: ~feat: support per-command configuration files~.

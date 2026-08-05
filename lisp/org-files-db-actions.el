@@ -24,12 +24,13 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'org-element)
 (require 'org-files-db-core)
 
 (declare-function org-files-db-query
                   "org-files-db-query"
-                  (query &optional columns action))
+                  (query &optional columns action &rest options))
 
 (autoload 'org-files-db-query "org-files-db-query" nil t)
 
@@ -197,8 +198,10 @@ RESULT may be an original result object or a propertized completion candidate."
     (org-files-db-actions--insert-at-point link)
     link))
 
-(defun org-files-db-actions--query-with-insertion-action (query columns action)
-  "Execute QUERY with COLUMNS and insertion ACTION at the original point."
+(defun org-files-db-actions--query-with-insertion-action
+    (query columns action config-file)
+  "Execute QUERY with COLUMNS and insertion ACTION at the original point.
+CONFIG-FILE is the effective orgfdb configuration file."
   (let ((origin (copy-marker (point) t)))
     (unwind-protect
         (org-files-db-query
@@ -208,12 +211,16 @@ RESULT may be an original result object or a propertized completion candidate."
              (user-error "The original insertion buffer no longer exists"))
            (with-current-buffer (marker-buffer origin)
              (goto-char origin)
-             (funcall action result))))
+             (funcall action result)))
+         :config-file config-file)
       (set-marker origin nil))))
 
 ;;;###autoload
-(defun org-files-db-actions-query-insert-file-link (query columns &optional style)
-  "Select a file using QUERY and COLUMNS, then insert a link using STYLE."
+(cl-defun org-files-db-actions-query-insert-file-link
+    (query columns &optional style
+           &key (config-file nil config-file-supplied-p))
+  "Select a file using QUERY and COLUMNS, then insert a link using STYLE.
+CONFIG-FILE overrides `org-files-db-config-file'; an explicit nil disables it."
   (interactive
    (list (org-files-db--read-sexp "File query: ")
          org-files-db-file-columns
@@ -221,11 +228,16 @@ RESULT may be an original result object or a propertized completion candidate."
   (org-files-db-actions--query-with-insertion-action
    query columns
    (lambda (result)
-     (org-files-db-actions-insert-file-link result style))))
+     (org-files-db-actions-insert-file-link result style))
+   (org-files-db--resolve-config-file
+    config-file config-file-supplied-p "File-link query")))
 
 ;;;###autoload
-(defun org-files-db-actions-query-insert-heading-link (query columns &optional style)
-  "Select a heading using QUERY and COLUMNS, then insert a link using STYLE."
+(cl-defun org-files-db-actions-query-insert-heading-link
+    (query columns &optional style
+           &key (config-file nil config-file-supplied-p))
+  "Select a heading using QUERY and COLUMNS, then insert a link using STYLE.
+CONFIG-FILE overrides `org-files-db-config-file'; an explicit nil disables it."
   (interactive
    (list (org-files-db--read-sexp "Heading query: ")
          org-files-db-heading-columns
@@ -233,7 +245,9 @@ RESULT may be an original result object or a propertized completion candidate."
   (org-files-db-actions--query-with-insertion-action
    query columns
    (lambda (result)
-     (org-files-db-actions-insert-heading-link result style))))
+     (org-files-db-actions-insert-heading-link result style))
+   (org-files-db--resolve-config-file
+    config-file config-file-supplied-p "Heading-link query")))
 
 (defun org-files-db-actions-follow-heading-link (result)
   "Follow the first supported Org link embedded in heading RESULT."
@@ -313,15 +327,25 @@ renamed source location."
       ("angle" (format "<%s>" target))
       (_ (org-link-make-string target description)))))
 
-(defun org-files-db-actions--incoming-file-link-results (old-path)
-  "Return resolved path-based links targeting OLD-PATH."
-  (org-files-db--normalize-results
-   (org-files-db--execute-query
-    `(links
-      (and
-       (link-type "file")
-       (target
-        (files (file-path ,(expand-file-name old-path) :exact t))))))))
+(cl-defun org-files-db-actions--incoming-file-link-results
+    (old-path &optional (config-file nil config-file-supplied-p))
+  "Return resolved path-based links targeting OLD-PATH.
+CONFIG-FILE selects the effective orgfdb configuration."
+  (let* ((effective-config-file
+          (org-files-db--resolve-config-file
+           config-file config-file-supplied-p "Rename action"))
+         (response
+          (org-files-db--execute-query
+           `(links
+             (and
+              (link-type "file")
+              (target
+               (files (file-path ,(expand-file-name old-path) :exact t)))))
+           effective-config-file
+           "Rename action")))
+    (org-files-db--results-with-config
+     (org-files-db--normalize-results response)
+     effective-config-file)))
 
 (defun org-files-db-actions--writable-parent-directory-p (path)
   "Return non-nil when PATH has a writable existing parent directory."
@@ -401,18 +425,26 @@ Return link edit records."
     (rename-file old-path new-path)))
 
 ;;;###autoload
-(defun org-files-db-actions-rename-file (file new-path &optional confirm)
+(cl-defun org-files-db-actions-rename-file
+    (file new-path &optional confirm
+          &key (config-file nil config-file-supplied-p))
   "Rename indexed FILE to NEW-PATH and update resolved file links.
-When CONFIRM is non-nil, ask before modifying files."
+When CONFIRM is non-nil, ask before modifying files.  CONFIG-FILE overrides
+`org-files-db-config-file'; an explicit nil disables it."
   (interactive
    (let* ((file (or buffer-file-name
                     (read-file-name "Indexed Org file: ")))
           (new (read-file-name "Rename to: "
                                (file-name-directory file))))
      (list file new)))
-  (let* ((old-path (expand-file-name file))
+  (let* ((effective-config-file
+          (org-files-db--resolve-config-file
+           config-file config-file-supplied-p "Rename action"))
+         (old-path (expand-file-name file))
          (new-path (expand-file-name new-path))
-         (link-results (org-files-db-actions--incoming-file-link-results old-path))
+         (link-results
+          (org-files-db-actions--incoming-file-link-results
+           old-path effective-config-file))
          (edits (org-files-db-actions--validate-rename
                  old-path new-path link-results))
          (modified (org-files-db-actions--modified-rename-buffers edits old-path)))
@@ -459,15 +491,25 @@ When CONFIRM is non-nil, ask before modifying files."
                                    (file-name-directory file)
                                    nil nil
                                    (file-name-nondirectory file))))
-    (org-files-db-actions-rename-file file new-path t)))
+    (org-files-db-actions-rename-file
+     file new-path t
+     :config-file
+     (org-files-db--result-config-file result "Rename result action"))))
 
 ;;;###autoload
-(defun org-files-db-actions-backlinks ()
-  "Show indexed links pointing to the file or heading at point."
+(cl-defun org-files-db-actions-backlinks
+    (&key (config-file nil config-file-supplied-p))
+  "Show indexed links pointing to the file or heading at point.
+CONFIG-FILE overrides `org-files-db-config-file'; an explicit nil disables it."
   (interactive)
-  (org-files-db-query
-   (org-files-db--backlinks-query-at-point)
-   org-files-db-link-columns))
+  (let ((effective-config-file
+         (org-files-db--resolve-config-file
+          config-file config-file-supplied-p "Backlinks")))
+    (org-files-db-query
+     (org-files-db--backlinks-query-at-point)
+     org-files-db-link-columns
+     nil
+     :config-file effective-config-file)))
 
 (provide 'org-files-db-actions)
 

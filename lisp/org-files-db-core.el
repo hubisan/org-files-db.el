@@ -49,8 +49,9 @@
   :group 'org-files-db)
 
 (defcustom org-files-db-config-file nil
-  "Configuration file passed to orgfdb.
-When nil, do not pass the --config option."
+  "Default configuration file passed to orgfdb.
+Commands and views may override this value for one invocation.  When nil,
+do not pass the --config option unless a command-specific path is supplied."
   :type '(choice
           (const :tag "No explicit configuration" nil)
           file)
@@ -110,6 +111,9 @@ When nil, do not pass the --config option."
               "Invalid orgfdb command usage" 'org-files-db-cli-error)
 
 (defconst org-files-db--completion-category 'org-files-db-result)
+
+(defconst org-files-db--result-config-key 'org-files-db--config-file
+  "Internal result key containing the effective orgfdb configuration file.")
 
 (defvar org-files-db-query-history nil
   "Minibuffer history for Query Model expressions.")
@@ -175,19 +179,38 @@ OBJECT may be an alist or hash table, and its keys may be symbols or strings."
       (user-error "Orgfdb executable is not executable: %s" path))
     path))
 
-(defun org-files-db--validated-config-file ()
-  "Return the expanded configured file name, or nil."
-  (when org-files-db-config-file
-    (unless (stringp org-files-db-config-file)
-      (user-error "Org-files-db-config-file must be a file name or nil"))
-    (let ((file (expand-file-name org-files-db-config-file)))
-      (unless (file-readable-p file)
-        (user-error "Orgfdb configuration file is not readable: %s" file))
-      file)))
+(defun org-files-db--config-description (origin)
+  "Return a configuration description for optional ORIGIN."
+  (if origin
+      (format "%s configuration file" origin)
+    "Orgfdb configuration file"))
 
-(defun org-files-db--config-arguments ()
-  "Return command arguments for the configured orgfdb file."
-  (when-let* ((file (org-files-db--validated-config-file)))
+(defun org-files-db--resolve-config-file (config-file supplied-p &optional origin)
+  "Return the effective expanded configuration file for CONFIG-FILE.
+When SUPPLIED-P is non-nil, CONFIG-FILE overrides
+`org-files-db-config-file', including when it is nil.  Otherwise inherit the
+global value.  ORIGIN identifies the command or view in validation errors."
+  (let* ((value (if supplied-p config-file org-files-db-config-file))
+         (description (org-files-db--config-description origin)))
+    (when value
+      (unless (and (stringp value) (not (string-empty-p value)))
+        (user-error "%s must be a non-empty file name or nil" description))
+      (let ((file (expand-file-name value)))
+        (unless (file-exists-p file)
+          (user-error "%s does not exist: %s" description file))
+        (unless (file-regular-p file)
+          (user-error "%s is not a regular file: %s" description file))
+        (unless (file-readable-p file)
+          (user-error "%s is not readable: %s" description file))
+        file))))
+
+(cl-defun org-files-db--config-arguments
+    (&optional (config-file nil config-file-supplied-p) origin)
+  "Return orgfdb arguments for the effective CONFIG-FILE.
+An omitted CONFIG-FILE inherits `org-files-db-config-file'; an explicitly
+supplied nil disables --config.  ORIGIN identifies validation errors."
+  (when-let* ((file (org-files-db--resolve-config-file
+                     config-file config-file-supplied-p origin)))
     (list "--config" file)))
 
 (defun org-files-db--buffer-string (buffer)
@@ -373,15 +396,29 @@ success.  ERROR is a plist containing :status and :stderr on failure."
    ((consp query) (prin1-to-string query))
    (t (user-error "Query must be a Query Model v0 list or string"))))
 
-(defun org-files-db--query-arguments (query)
-  "Return command arguments for Query Model v0 QUERY."
-  (append '("--format" "json" "--output" "flat" "--include" "path")
-          (org-files-db--config-arguments)
-          (list (org-files-db--query-string query))))
+(cl-defun org-files-db--query-arguments
+    (query &optional (config-file nil config-file-supplied-p) origin)
+  "Return command arguments for Query Model v0 QUERY.
+An omitted CONFIG-FILE inherits `org-files-db-config-file'; an explicitly
+supplied nil disables --config.  ORIGIN identifies validation errors."
+  (let ((effective-config-file
+         (org-files-db--resolve-config-file
+          config-file config-file-supplied-p origin)))
+    (append '("--format" "json" "--output" "flat" "--include" "path")
+            (org-files-db--config-arguments effective-config-file origin)
+            (list (org-files-db--query-string query)))))
 
-(defun org-files-db--execute-query (query)
-  "Execute Query Model v0 QUERY and return the response envelope."
-  (org-files-db--call "query" (org-files-db--query-arguments query)))
+(cl-defun org-files-db--execute-query
+    (query &optional (config-file nil config-file-supplied-p) origin)
+  "Execute Query Model v0 QUERY and return the response envelope.
+An omitted CONFIG-FILE inherits `org-files-db-config-file'; an explicitly
+supplied nil disables --config.  ORIGIN identifies validation errors."
+  (let ((effective-config-file
+         (org-files-db--resolve-config-file
+          config-file config-file-supplied-p origin)))
+    (org-files-db--call
+     "query"
+     (org-files-db--query-arguments query effective-config-file origin))))
 
 (defun org-files-db--validate-search-scope (scope)
   "Return validated search SCOPE."
@@ -390,25 +427,38 @@ success.  ERROR is a plist containing :status and :stderr on failure."
       (user-error "Unsupported orgfdb search scope: %S" scope))
     scope))
 
-(defun org-files-db--search-arguments (expression &optional scope)
-  "Return orgfdb arguments for EXPRESSION and SCOPE."
+(cl-defun org-files-db--search-arguments
+    (expression &optional scope (config-file nil config-file-supplied-p) origin)
+  "Return orgfdb arguments for EXPRESSION and SCOPE.
+An omitted CONFIG-FILE inherits `org-files-db-config-file'; an explicitly
+supplied nil disables --config.  ORIGIN identifies validation errors."
   (unless (and (stringp expression)
                (not (string-empty-p (string-trim expression))))
     (user-error "Search expression must be a non-empty string"))
-  (let ((scope (org-files-db--validate-search-scope scope)))
+  (let ((scope (org-files-db--validate-search-scope scope))
+        (effective-config-file
+         (org-files-db--resolve-config-file
+          config-file config-file-supplied-p origin)))
     (append '("--format" "json")
             (pcase scope
               ('title '("--title"))
               ('body '("--body"))
               (_ nil))
-            (org-files-db--config-arguments)
+            (org-files-db--config-arguments effective-config-file origin)
             (list expression))))
 
-(defun org-files-db--execute-search (expression &optional scope)
-  "Execute one FTS5 search for EXPRESSION in SCOPE."
-  (org-files-db--call
-   "search"
-   (org-files-db--search-arguments expression scope)))
+(cl-defun org-files-db--execute-search
+    (expression &optional scope (config-file nil config-file-supplied-p) origin)
+  "Execute one FTS5 search for EXPRESSION in SCOPE.
+An omitted CONFIG-FILE inherits `org-files-db-config-file'; an explicitly
+supplied nil disables --config.  ORIGIN identifies validation errors."
+  (let ((effective-config-file
+         (org-files-db--resolve-config-file
+          config-file config-file-supplied-p origin)))
+    (org-files-db--call
+     "search"
+     (org-files-db--search-arguments
+      expression scope effective-config-file origin))))
 
 (defun org-files-db--normalize-results (response)
   "Return a result list from orgfdb RESPONSE."
@@ -422,6 +472,39 @@ success.  ERROR is a plist containing :status and :stderr on failure."
    (t
     (signal 'org-files-db-error
             (list "Unexpected orgfdb JSON response shape")))))
+
+(defun org-files-db--result-with-config (result config-file)
+  "Return a copy of RESULT carrying effective CONFIG-FILE metadata."
+  (cond
+   ((hash-table-p result)
+    (let ((copy (copy-hash-table result)))
+      (puthash org-files-db--result-config-key config-file copy)
+      copy))
+   ((listp result)
+    (cons (cons org-files-db--result-config-key config-file)
+          (assq-delete-all org-files-db--result-config-key
+                           (copy-tree result))))
+   (t
+    (signal 'org-files-db-error
+            (list "Cannot attach configuration context to malformed result")))))
+
+(defun org-files-db--results-with-config (results config-file)
+  "Return copies of RESULTS carrying effective CONFIG-FILE metadata."
+  (mapcar (lambda (result)
+            (org-files-db--result-with-config result config-file))
+          results))
+
+(defun org-files-db--result-config-file (result &optional origin)
+  "Return RESULT's effective configuration file.
+For results created before configuration metadata was added, inherit the
+current global value.  ORIGIN identifies the follow-up operation in errors."
+  (let ((supplied-p
+         (org-files-db--has-key-p result org-files-db--result-config-key)))
+    (org-files-db--resolve-config-file
+     (and supplied-p
+          (org-files-db--get result org-files-db--result-config-key))
+     supplied-p
+     origin)))
 
 (defun org-files-db--response-target (response)
   "Return RESPONSE target as a symbol, when present."
@@ -574,6 +657,7 @@ When NO-CREATE is non-nil, never offer to create a missing heading ID."
                  (when-let* ((contents (org-element-contents link)))
                    (org-element-interpret-data contents))))
            (list :title title
+                 :source-result result
                  :source-file buffer-file-name
                  :type (org-element-property :type link)
                  :path (org-element-property :path link)
@@ -608,10 +692,19 @@ Return a result-like alist for the target."
   (pcase (plist-get info :type)
     ("id"
      (let* ((id (plist-get info :path))
+            (config-file
+             (org-files-db--result-config-file
+              (plist-get info :source-result)
+              "Follow-heading action"))
             (response
              (org-files-db--execute-query
-              `(headings (property "ID" ,id :inherit nil))))
-            (results (org-files-db--normalize-results response)))
+              `(headings (property "ID" ,id :inherit nil))
+              config-file
+              "Follow-heading action"))
+            (results
+             (org-files-db--results-with-config
+              (org-files-db--normalize-results response)
+              config-file)))
        (pcase (length results)
          (0 (user-error "Cannot resolve indexed Org ID %s" id))
          (1
@@ -933,11 +1026,15 @@ Synthetic file/root nodes are omitted from the displayed heading path."
     result))
 
 ;;;###autoload
-(defun org-files-db-check-setup ()
-  "Check the orgfdb executable, configuration, and read-only database access."
+(cl-defun org-files-db-check-setup
+    (&key (config-file nil config-file-supplied-p))
+  "Check the orgfdb executable, configuration, and read-only database access.
+When CONFIG-FILE is omitted, inherit `org-files-db-config-file'; an explicit
+nil disables --config for the read-only database check."
   (interactive)
   (let* ((executable (org-files-db--resolve-executable))
-         (config (org-files-db--validated-config-file))
+         (config (org-files-db--resolve-config-file
+                  config-file config-file-supplied-p "Setup check"))
          (version (string-trim
                    (org-files-db--call-raw '("--version"))))
          (read-check
@@ -946,7 +1043,8 @@ Synthetic file/root nodes are omitted from the displayed heading path."
                 (org-files-db--call
                  "headings"
                  (append '("--format" "json" "--no-root")
-                         (org-files-db--config-arguments)))
+                         (org-files-db--config-arguments
+                          config "Setup check")))
                 "ok")
             (error (error-message-string err))))
          (report
