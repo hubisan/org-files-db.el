@@ -25,8 +25,13 @@
 ;;; Code:
 
 (require 'org-element)
-(require 'org-files-db-export)
-(require 'org-files-db-query)
+(require 'org-files-db-core)
+
+(declare-function org-files-db-query
+                  "org-files-db-query"
+                  (query &optional columns action))
+
+(autoload 'org-files-db-query "org-files-db-query" nil t)
 
 (defcustom org-files-db-file-link-style 'file
   "Default link style for file query results."
@@ -38,7 +43,16 @@
   :type '(choice (const id) (const custom-id) (const heading))
   :group 'org-files-db)
 
-(defun org-files-db--require-result-kind (result kinds)
+(defun org-files-db-actions-open-result (result)
+  "Open RESULT and jump to its stored source location.
+RESULT may be an original result object or a propertized completion candidate."
+  (interactive
+   (list (get-text-property (point) 'org-files-db-result)))
+  (when (stringp result)
+    (setq result (get-text-property 0 'org-files-db-result result)))
+  (org-files-db--visit-result result))
+
+(defun org-files-db-actions--require-result-kind (result kinds)
   "Require RESULT to have one of KINDS and return its kind."
   (let ((kind (org-files-db--kind result)))
     (unless (memq kind kinds)
@@ -47,7 +61,7 @@
                   (or kind "unknown")))
     kind))
 
-(defun org-files-db--at-result (result function)
+(defun org-files-db-actions--at-result (result function)
   "Call FUNCTION in RESULT's Org buffer at its stored location."
   (let ((file (org-files-db--result-file result)))
     (unless (and file (file-readable-p file))
@@ -60,7 +74,7 @@
           (org-back-to-heading t))
         (funcall function)))))
 
-(defun org-files-db--custom-id-base (title)
+(defun org-files-db-actions--custom-id-base (title)
   "Return a readable CUSTOM_ID base derived from TITLE."
   (let* ((plain (downcase (org-link-display-format (or title "entry"))))
          (slug (replace-regexp-in-string "[^[:alnum:]]+" "-" plain))
@@ -69,7 +83,7 @@
         (substring (org-id-new) 0 8)
       slug)))
 
-(defun org-files-db--custom-id-used-p (custom-id)
+(defun org-files-db-actions--custom-id-used-p (custom-id)
   "Return non-nil when CUSTOM-ID already occurs in the current Org file."
   (let ((found
          (save-excursion
@@ -83,20 +97,20 @@
        nil 'file))
     found))
 
-(defun org-files-db--new-custom-id (title)
+(defun org-files-db-actions--new-custom-id (title)
   "Return a CUSTOM_ID unique in the current file for TITLE."
-  (let ((base (org-files-db--custom-id-base title))
+  (let ((base (org-files-db-actions--custom-id-base title))
         (candidate nil)
         (counter 1))
     (setq candidate base)
-    (while (org-files-db--custom-id-used-p candidate)
+    (while (org-files-db-actions--custom-id-used-p candidate)
       (setq candidate (format "%s-%d" base counter)
             counter (1+ counter)))
     candidate))
 
-(defun org-files-db--ensure-result-property (result property)
+(defun org-files-db-actions--ensure-result-property (result property)
   "Return RESULT's PROPERTY, creating and saving it when absent."
-  (org-files-db--at-result
+  (org-files-db-actions--at-result
    result
    (lambda ()
      (let ((value (org-entry-get nil property)))
@@ -106,7 +120,7 @@
                  ("ID" (org-id-get-create))
                  ("CUSTOM_ID"
                   (let ((custom-id
-                         (org-files-db--new-custom-id
+                         (org-files-db-actions--new-custom-id
                           (org-files-db--result-title result))))
                     (org-entry-put nil "CUSTOM_ID" custom-id)
                     custom-id))
@@ -115,7 +129,7 @@
          (save-buffer))
        value))))
 
-(defun org-files-db--link-file-path (file origin-file)
+(defun org-files-db-actions--link-file-path (file origin-file)
   "Return FILE in the link style appropriate for ORIGIN-FILE."
   (let ((file (expand-file-name file)))
     (if (and origin-file
@@ -123,47 +137,45 @@
         (file-relative-name file (file-name-directory origin-file))
       file)))
 
-(defun org-files-db--make-file-link (file description &optional search)
+(defun org-files-db-actions--make-file-link (file description &optional search)
   "Return an Org file link to FILE using DESCRIPTION and SEARCH."
   (let* ((origin buffer-file-name)
-         (path (org-files-db--link-file-path file origin))
+         (path (org-files-db-actions--link-file-path file origin))
          (target (concat "file:" (org-link-escape path)
                          (when search (concat "::" search)))))
     (org-link-make-string target description)))
 
-(defun org-files-db--insert-at-point (text)
+(defun org-files-db-actions--insert-at-point (text)
   "Insert TEXT at point, replacing the active region when appropriate."
   (when (use-region-p)
     (delete-region (region-beginning) (region-end)))
   (insert text))
 
-;;;###autoload
-(defun org-files-db-insert-file-link (result &optional style)
+(defun org-files-db-actions-insert-file-link (result &optional style)
   "Insert a link to file RESULT using STYLE at point."
-  (org-files-db--require-result-kind result '(file root))
+  (org-files-db-actions--require-result-kind result '(file root))
   (let* ((style (or style org-files-db-file-link-style))
          (file (org-files-db--result-file result))
          (description (org-files-db--result-title result))
          (link
           (pcase style
-            ('file (org-files-db--make-file-link file description))
+            ('file (org-files-db-actions--make-file-link file description))
             ('id
              (org-link-make-string
-              (concat "id:" (org-files-db--ensure-result-property result "ID"))
+              (concat "id:" (org-files-db-actions--ensure-result-property result "ID"))
               description))
             ('custom-id
-             (org-files-db--make-file-link
+             (org-files-db-actions--make-file-link
               file description
-              (concat "#" (org-files-db--ensure-result-property
+              (concat "#" (org-files-db-actions--ensure-result-property
                            result "CUSTOM_ID"))))
             (_ (user-error "Unsupported file link style: %S" style)))))
-    (org-files-db--insert-at-point link)
+    (org-files-db-actions--insert-at-point link)
     link))
 
-;;;###autoload
-(defun org-files-db-insert-heading-link (result &optional style)
+(defun org-files-db-actions-insert-heading-link (result &optional style)
   "Insert a link to heading RESULT using STYLE at point."
-  (org-files-db--require-result-kind result '(heading))
+  (org-files-db-actions--require-result-kind result '(heading))
   (let* ((style (or style org-files-db-heading-link-style))
          (file (org-files-db--result-file result))
          (description (org-files-db--result-title result))
@@ -171,21 +183,21 @@
           (pcase style
             ('id
              (org-link-make-string
-              (concat "id:" (org-files-db--ensure-result-property result "ID"))
+              (concat "id:" (org-files-db-actions--ensure-result-property result "ID"))
               description))
             ('custom-id
-             (org-files-db--make-file-link
+             (org-files-db-actions--make-file-link
               file description
-              (concat "#" (org-files-db--ensure-result-property
+              (concat "#" (org-files-db-actions--ensure-result-property
                            result "CUSTOM_ID"))))
             ('heading
-             (org-files-db--make-file-link
+             (org-files-db-actions--make-file-link
               file description (concat "*" description)))
             (_ (user-error "Unsupported heading link style: %S" style)))))
-    (org-files-db--insert-at-point link)
+    (org-files-db-actions--insert-at-point link)
     link))
 
-(defun org-files-db--query-with-insertion-action (query columns action)
+(defun org-files-db-actions--query-with-insertion-action (query columns action)
   "Execute QUERY with COLUMNS and insertion ACTION at the original point."
   (let ((origin (copy-marker (point) t)))
     (unwind-protect
@@ -200,41 +212,40 @@
       (set-marker origin nil))))
 
 ;;;###autoload
-(defun org-files-db-query-insert-file-link (query columns &optional style)
+(defun org-files-db-actions-query-insert-file-link (query columns &optional style)
   "Select a file using QUERY and COLUMNS, then insert a link using STYLE."
   (interactive
    (list (org-files-db--read-sexp "File query: ")
          org-files-db-file-columns
          org-files-db-file-link-style))
-  (org-files-db--query-with-insertion-action
+  (org-files-db-actions--query-with-insertion-action
    query columns
    (lambda (result)
-     (org-files-db-insert-file-link result style))))
+     (org-files-db-actions-insert-file-link result style))))
 
 ;;;###autoload
-(defun org-files-db-query-insert-heading-link (query columns &optional style)
+(defun org-files-db-actions-query-insert-heading-link (query columns &optional style)
   "Select a heading using QUERY and COLUMNS, then insert a link using STYLE."
   (interactive
    (list (org-files-db--read-sexp "Heading query: ")
          org-files-db-heading-columns
          org-files-db-heading-link-style))
-  (org-files-db--query-with-insertion-action
+  (org-files-db-actions--query-with-insertion-action
    query columns
    (lambda (result)
-     (org-files-db-insert-heading-link result style))))
+     (org-files-db-actions-insert-heading-link result style))))
 
-;;;###autoload
-(defun org-files-db-follow-heading-link (result)
+(defun org-files-db-actions-follow-heading-link (result)
   "Follow the first supported Org link embedded in heading RESULT."
-  (org-files-db--require-result-kind result '(heading))
+  (org-files-db-actions--require-result-kind result '(heading))
   (let ((info (org-files-db--heading-link-info result)))
     (unless info
       (user-error "The selected heading contains no supported file or ID link"))
     (org-files-db--goto-linked-target info)))
 
-(defun org-files-db--link-result-info (result)
+(defun org-files-db-actions--link-result-info (result)
   "Return parsed source-link information for link RESULT."
-  (org-files-db--at-result
+  (org-files-db-actions--at-result
    result
    (lambda ()
      (let ((element (org-element-context)))
@@ -259,7 +270,7 @@
                  :description description
                  :format format)))))))
 
-(defun org-files-db--link-target-file (info)
+(defun org-files-db-actions--link-target-file (info)
   "Return the absolute linked file represented by INFO."
   (pcase-let* ((`(,path . ,_search)
                 (org-files-db--split-file-link-path
@@ -268,7 +279,7 @@
                (path (org-link-unescape path)))
     (expand-file-name path (file-name-directory (plist-get info :file)))))
 
-(defun org-files-db--rewritten-link-path (info new-path &optional old-path)
+(defun org-files-db-actions--rewritten-link-path (info new-path &optional old-path)
   "Return NEW-PATH in the original path style of link INFO.
 When INFO belongs to OLD-PATH itself, calculate a relative path from the
 renamed source location."
@@ -288,10 +299,10 @@ renamed source location."
       (file-relative-name (expand-file-name new-path)
                           (file-name-directory source-after-rename)))))
 
-(defun org-files-db--format-rewritten-link (info new-path &optional old-path)
+(defun org-files-db-actions--format-rewritten-link (info new-path &optional old-path)
   "Return source link INFO rewritten from OLD-PATH to NEW-PATH."
   (let* ((path (org-link-escape
-                (org-files-db--rewritten-link-path info new-path old-path)))
+                (org-files-db-actions--rewritten-link-path info new-path old-path)))
          (search (or (plist-get info :search)
                      (cdr (org-files-db--split-file-link-path
                            (plist-get info :path) nil))))
@@ -302,7 +313,7 @@ renamed source location."
       ("angle" (format "<%s>" target))
       (_ (org-link-make-string target description)))))
 
-(defun org-files-db--incoming-file-link-results (old-path)
+(defun org-files-db-actions--incoming-file-link-results (old-path)
   "Return resolved path-based links targeting OLD-PATH."
   (org-files-db--normalize-results
    (org-files-db--execute-query
@@ -312,7 +323,7 @@ renamed source location."
        (target
         (files (file-path ,(expand-file-name old-path) :exact t))))))))
 
-(defun org-files-db--writable-parent-directory-p (path)
+(defun org-files-db-actions--writable-parent-directory-p (path)
   "Return non-nil when PATH has a writable existing parent directory."
   (let ((directory (file-name-directory (expand-file-name path)))
         parent)
@@ -323,7 +334,7 @@ renamed source location."
          (file-directory-p directory)
          (file-writable-p directory))))
 
-(defun org-files-db--validate-rename (old-path new-path link-results)
+(defun org-files-db-actions--validate-rename (old-path new-path link-results)
   "Validate rename from OLD-PATH to NEW-PATH using LINK-RESULTS.
 Return link edit records."
   (unless (file-readable-p old-path)
@@ -333,24 +344,24 @@ Return link edit records."
   (unless (file-writable-p (file-name-directory old-path))
     (user-error "Source directory is not writable: %s"
                 (file-name-directory old-path)))
-  (unless (org-files-db--writable-parent-directory-p new-path)
+  (unless (org-files-db-actions--writable-parent-directory-p new-path)
     (user-error "Rename destination has no writable parent: %s" new-path))
   (let (edits)
     (dolist (result link-results)
       (let ((source (org-files-db--result-file result)))
         (unless (and source (file-writable-p source))
           (user-error "Link source file is not writable: %s" (or source "<none>")))
-        (let ((info (org-files-db--link-result-info result)))
-          (unless (file-equal-p (org-files-db--link-target-file info) old-path)
+        (let ((info (org-files-db-actions--link-result-info result)))
+          (unless (file-equal-p (org-files-db-actions--link-target-file info) old-path)
             (user-error "Stored link target is stale in %s; rebuild and retry"
                         source))
           (push (plist-put info :replacement
-                           (org-files-db--format-rewritten-link
+                           (org-files-db-actions--format-rewritten-link
                             info new-path old-path))
                 edits))))
     edits))
 
-(defun org-files-db--modified-rename-buffers (edits old-path)
+(defun org-files-db-actions--modified-rename-buffers (edits old-path)
   "Return modified visiting buffers affected by EDITS or OLD-PATH."
   (let ((buffers (mapcar (lambda (edit) (plist-get edit :buffer)) edits)))
     (when-let* ((target (get-file-buffer old-path)))
@@ -361,7 +372,7 @@ Return link edit records."
                         (buffer-modified-p buffer)))
                  buffers))))
 
-(defun org-files-db--apply-link-edits (edits)
+(defun org-files-db-actions--apply-link-edits (edits)
   "Apply and save validated link EDITS."
   (let ((buffers
          (seq-uniq (mapcar (lambda (edit) (plist-get edit :buffer)) edits))))
@@ -381,7 +392,7 @@ Return link edit records."
               (insert (plist-get edit :replacement))))
           (save-buffer))))))
 
-(defun org-files-db--rename-visited-file (old-path new-path)
+(defun org-files-db-actions--rename-visited-file (old-path new-path)
   "Rename OLD-PATH to NEW-PATH and update its visiting buffer."
   (if-let* ((buffer (get-file-buffer old-path)))
       (with-current-buffer buffer
@@ -390,7 +401,7 @@ Return link edit records."
     (rename-file old-path new-path)))
 
 ;;;###autoload
-(defun org-files-db-rename-file (file new-path &optional confirm)
+(defun org-files-db-actions-rename-file (file new-path &optional confirm)
   "Rename indexed FILE to NEW-PATH and update resolved file links.
 When CONFIRM is non-nil, ask before modifying files."
   (interactive
@@ -401,10 +412,10 @@ When CONFIRM is non-nil, ask before modifying files."
      (list file new)))
   (let* ((old-path (expand-file-name file))
          (new-path (expand-file-name new-path))
-         (link-results (org-files-db--incoming-file-link-results old-path))
-         (edits (org-files-db--validate-rename
+         (link-results (org-files-db-actions--incoming-file-link-results old-path))
+         (edits (org-files-db-actions--validate-rename
                  old-path new-path link-results))
-         (modified (org-files-db--modified-rename-buffers edits old-path)))
+         (modified (org-files-db-actions--modified-rename-buffers edits old-path)))
     (when (and modified
                (not (yes-or-no-p
                      (format (concat "%d affected buffer(s) have unsaved changes; "
@@ -427,8 +438,8 @@ When CONFIRM is non-nil, ask before modifying files."
             (with-current-buffer buffer
               (save-buffer)))
           (make-directory (file-name-directory new-path) t)
-          (org-files-db--apply-link-edits edits)
-          (org-files-db--rename-visited-file old-path new-path)
+          (org-files-db-actions--apply-link-edits edits)
+          (org-files-db-actions--rename-visited-file old-path new-path)
           (message "Renamed %s and updated %d link(s)"
                    old-path (length edits))
           new-path)
@@ -440,50 +451,18 @@ When CONFIRM is non-nil, ask before modifying files."
                          "Review %s and affected source files with version control")
                  (error-message-string err) old-path)))))))
 
-;;;###autoload
-(defun org-files-db-rename-file-result (result)
+(defun org-files-db-actions-rename-file-result (result)
   "Prompt to rename file RESULT and update path-based links."
-  (org-files-db--require-result-kind result '(file root))
+  (org-files-db-actions--require-result-kind result '(file root))
   (let* ((file (org-files-db--result-file result))
          (new-path (read-file-name "Rename to: "
                                    (file-name-directory file)
                                    nil nil
                                    (file-name-nondirectory file))))
-    (org-files-db-rename-file file new-path t)))
-
-(defun org-files-db--backlinks-query-at-point (&optional no-create)
-  "Return a backlink query for the current Org location.
-When NO-CREATE is non-nil, never offer to create a missing heading ID."
-  (unless (and buffer-file-name (derived-mode-p 'org-mode))
-    (user-error "Backlinks require a file-visiting Org buffer"))
-  (let ((file (expand-file-name buffer-file-name)))
-    (if (org-before-first-heading-p)
-        `(links (target (files (file-path ,file :exact t))))
-      (org-back-to-heading t)
-      (let ((id (org-entry-get nil "ID"))
-            (custom-id (org-entry-get nil "CUSTOM_ID")))
-        (cond
-         (id
-          `(links
-            (target
-             (headings (property "ID" ,id :inherit nil)))))
-         (custom-id
-          `(links
-            (target
-             (headings
-              (and (file-path ,file :exact t)
-                   (property "CUSTOM_ID" ,custom-id :inherit nil))))))
-         ((and (not no-create)
-               (yes-or-no-p "Heading has no stable identifier; create an ID? "))
-          (setq id (org-id-get-create))
-          (save-buffer)
-          `(links
-            (target
-             (headings (property "ID" ,id :inherit nil)))))
-         (t (user-error "A stable heading identifier is required")))))))
+    (org-files-db-actions-rename-file file new-path t)))
 
 ;;;###autoload
-(defun org-files-db-backlinks ()
+(defun org-files-db-actions-backlinks ()
   "Show indexed links pointing to the file or heading at point."
   (interactive)
   (org-files-db-query

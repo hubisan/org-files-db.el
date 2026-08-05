@@ -24,72 +24,12 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'org-element)
-(require 'org-files-db-query)
+(require 'org-files-db-core)
 
 (declare-function embark-export "embark")
 (defvar embark-exporters-alist)
 
-(defun org-files-db--heading-at-result (result function)
-  "Call FUNCTION at RESULT's heading and return its value."
-  (let ((file (org-files-db--result-file result)))
-    (when (and file (file-readable-p file))
-      (with-current-buffer (find-file-noselect file)
-        (save-excursion
-          (org-files-db--goto-result-location result)
-          (when (derived-mode-p 'org-mode)
-            (condition-case nil
-                (progn
-                  (org-back-to-heading t)
-                  (funcall function))
-              (error nil))))))))
-
-(defun org-files-db--heading-link-info (result)
-  "Return information about the first Org link in RESULT's title."
-  (org-files-db--heading-at-result
-   result
-   (lambda ()
-     (let* ((title (org-get-heading t t t t))
-            (tree (org-element-parse-secondary-string title '(link)))
-            (link (org-element-map tree 'link #'identity nil t)))
-       (when (and link
-                  (member (org-element-property :type link) '("file" "id")))
-         (let* ((rendered (org-element-interpret-data link))
-                (begin (string-search rendered title))
-                (end (and begin (+ begin (length rendered))))
-                (description
-                 (when-let* ((contents (org-element-contents link)))
-                   (org-element-interpret-data contents))))
-           (list :title title
-                 :source-file buffer-file-name
-                 :type (org-element-property :type link)
-                 :path (org-element-property :path link)
-                 :search-option (org-element-property :search-option link)
-                 :description description
-                 :rendered rendered
-                 :prefix (and begin (substring title 0 begin))
-                 :suffix (and end (substring title end)))))))))
-
-(defun org-files-db--split-file-link-path (path search-option)
-  "Return a pair of file PATH and SEARCH-OPTION.
-The fallback split is used for Org versions which leave the search option in
-PATH."
-  (if search-option
-      (cons path search-option)
-    (if (string-match "\\`\\(.*\\)::\\(.*\\)\\'" path)
-        (cons (match-string 1 path) (match-string 2 path))
-      (cons path nil))))
-
-(defun org-files-db--absolute-linked-file (info)
-  "Return the absolute file target described by INFO."
-  (pcase-let* ((`(,path . ,_) (org-files-db--split-file-link-path
-                               (plist-get info :path)
-                               (plist-get info :search-option)))
-               (path (org-link-unescape path)))
-    (expand-file-name path
-                      (file-name-directory (plist-get info :source-file)))))
-
-(defun org-files-db--rebased-heading-link (info)
+(defun org-files-db-export--rebased-heading-link (info)
   "Return INFO's link with an absolute file target when needed."
   (let* ((type (plist-get info :type))
          (description (plist-get info :description))
@@ -108,56 +48,14 @@ PATH."
     (when target
       (org-link-make-string target description))))
 
-(defun org-files-db--goto-linked-target (info)
-  "Open and visit the link target described by INFO.
-Return a result-like alist for the target."
-  (pcase (plist-get info :type)
-    ("id"
-     (let* ((id (plist-get info :path))
-            (response
-             (org-files-db--execute-query
-              `(headings (property "ID" ,id :inherit nil))))
-            (results (org-files-db--normalize-results response)))
-       (pcase (length results)
-         (0 (user-error "Cannot resolve indexed Org ID %s" id))
-         (1
-          (let ((result (car results)))
-            (org-files-db-open-result result)
-            result))
-         (_ (user-error "Org ID %s resolves to multiple indexed headings" id)))))
-    ("file"
-     (pcase-let* ((`(,_ . ,search)
-                   (org-files-db--split-file-link-path
-                    (plist-get info :path)
-                    (plist-get info :search-option)))
-                  (file (org-files-db--absolute-linked-file info)))
-       (unless (file-readable-p file)
-         (user-error "Linked file is missing: %s" file))
-       (find-file file)
-       (goto-char (point-min))
-       (when search
-         (org-link-search search))
-       (let ((title (if (org-at-heading-p)
-                        (org-get-heading t t t t)
-                      (or (cadr (assoc "TITLE" (org-collect-keywords '("TITLE"))))
-                          (file-name-base file)))))
-         (when (listp title)
-           (setq title (car title)))
-         `((kind . ,(if (org-at-heading-p) "heading" "file"))
-           (title . ,title)
-           (location . ((file_path . ,file)
-                        (line . ,(line-number-at-pos))
-                        (byte_start . nil)))))))
-    (_ (user-error "Unsupported heading link type"))))
-
-(defun org-files-db--preserved-linked-heading (info)
+(defun org-files-db-export--preserved-linked-heading (info)
   "Return linked heading text using INFO."
-  (when-let* ((link (org-files-db--rebased-heading-link info)))
+  (when-let* ((link (org-files-db-export--rebased-heading-link info)))
     (concat (or (plist-get info :prefix) "")
             link
             (or (plist-get info :suffix) ""))))
 
-(defun org-files-db--resolved-linked-heading (info)
+(defun org-files-db-export--resolved-linked-heading (info)
   "Return an Org link to the effective target represented by INFO."
   (save-current-buffer
     (save-window-excursion
@@ -165,7 +63,7 @@ Return a result-like alist for the target."
         (org-files-db--result-org-link target
                                        (org-files-db--result-title target))))))
 
-(defun org-files-db--export-result-text (result)
+(defun org-files-db-export--result-text (result)
   "Return Org text representing RESULT."
   (if (not (org-files-db--result-file result))
       (org-files-db--node-title result)
@@ -173,15 +71,15 @@ Return a result-like alist for the target."
         (if-let* ((info (org-files-db--heading-link-info result)))
             (condition-case nil
                 (pcase org-files-db-export-linked-heading-style
-                  ('resolve (org-files-db--resolved-linked-heading info))
-                  (_ (org-files-db--preserved-linked-heading info)))
+                  ('resolve (org-files-db-export--resolved-linked-heading info))
+                  (_ (org-files-db-export--preserved-linked-heading info)))
               (error
-               (or (org-files-db--preserved-linked-heading info)
+               (or (org-files-db-export--preserved-linked-heading info)
                    (org-files-db--result-org-link result))))
           (org-files-db--result-org-link result))
       (org-files-db--result-org-link result))))
 
-(defun org-files-db--path-node-key (node)
+(defun org-files-db-export--path-node-key (node)
   "Return a stable key for outline path NODE."
   (format "%s:%s:%s:%s:%s:%s:%s"
           (or (org-files-db--get node 'kind) "")
@@ -192,7 +90,7 @@ Return a result-like alist for the target."
           (or (org-files-db--get node 'level) "")
           (org-files-db--node-title node)))
 
-(defun org-files-db--same-node-p (node result)
+(defun org-files-db-export--same-node-p (node result)
   "Return non-nil when path NODE denotes RESULT."
   (let ((node-id (org-files-db--get node 'id))
         (result-id (org-files-db--get result 'id)))
@@ -203,7 +101,7 @@ Return a result-like alist for the target."
            (equal (org-files-db--get node 'level)
                   (org-files-db--get result 'level))))))
 
-(defun org-files-db--source-outline-nodes (result)
+(defun org-files-db-export--source-outline-nodes (result)
   "Build outline context for RESULT from its current source file."
   (let ((file (org-files-db--result-file result)))
     (when (and file
@@ -238,23 +136,23 @@ Return a result-like alist for the target."
                                      (byte_start . 0))))
                       nodes)))))))))
 
-(defun org-files-db--result-outline-nodes (result)
+(defun org-files-db-export--result-outline-nodes (result)
   "Return complete outline path nodes for RESULT."
   (let ((nodes (copy-sequence
                 (or (org-files-db--result-path-nodes result)
-                    (org-files-db--source-outline-nodes result)
+                    (org-files-db-export--source-outline-nodes result)
                     nil))))
-    (if (and nodes (org-files-db--same-node-p (car (last nodes)) result))
+    (if (and nodes (org-files-db-export--same-node-p (car (last nodes)) result))
         (setcar (last nodes) result)
       (setq nodes (append nodes (list result))))
     nodes))
 
-(defun org-files-db--tree-add (tree nodes)
+(defun org-files-db-export--tree-add (tree nodes)
   "Add NODES to outline TREE and return TREE."
   (if (null nodes)
       tree
     (let* ((node (car nodes))
-           (key (org-files-db--path-node-key node))
+           (key (org-files-db-export--path-node-key node))
            (entry (seq-find (lambda (item)
                               (equal (plist-get item :key) key))
                             tree)))
@@ -263,30 +161,31 @@ Return a result-like alist for the target."
               tree (append tree (list entry))))
       (when (cdr nodes)
         (setf (plist-get entry :children)
-              (org-files-db--tree-add
+              (org-files-db-export--tree-add
                (plist-get entry :children)
                (cdr nodes))))
       tree)))
 
-(defun org-files-db--outline-tree (results)
+(defun org-files-db-export--outline-tree (results)
   "Build an ordered outline tree for RESULTS."
   (let (tree)
     (dolist (result results tree)
-      (setq tree (org-files-db--tree-add
-                  tree (org-files-db--result-outline-nodes result))))))
+      (setq tree (org-files-db-export--tree-add
+                  tree (org-files-db-export--result-outline-nodes result))))))
 
-(defun org-files-db--render-tree (tree level)
+(defun org-files-db-export--render-tree (tree level)
   "Render outline TREE beginning at Org LEVEL."
   (mapconcat
    (lambda (entry)
      (concat (make-string level ?*) " "
-             (org-files-db--export-result-text (plist-get entry :data)) "\n"
-             (org-files-db--render-tree (plist-get entry :children)
-                                        (1+ level))))
+             (org-files-db-export--result-text (plist-get entry :data)) "\n"
+             (org-files-db-export--render-tree
+              (plist-get entry :children)
+              (1+ level))))
    tree
    ""))
 
-(defun org-files-db--render-org-results (results layout &optional base-level)
+(defun org-files-db-export-render-results (results layout &optional base-level)
   "Render RESULTS as Org using LAYOUT below BASE-LEVEL."
   (let ((level (1+ (or base-level 0))))
     (pcase layout
@@ -295,14 +194,15 @@ Return a result-like alist for the target."
         (lambda (result)
           (format "%s %s\n"
                   (make-string level ?*)
-                  (org-files-db--export-result-text result)))
+                  (org-files-db-export--result-text result)))
         results
         ""))
       ('outline
-       (org-files-db--render-tree (org-files-db--outline-tree results) level))
+       (org-files-db-export--render-tree
+        (org-files-db-export--outline-tree results) level))
       (_ (user-error "Unsupported Org result layout: %s" layout)))))
 
-(defun org-files-db-embark-export-org (candidates)
+(defun org-files-db-export-embark-org (candidates)
   "Export org-files-db CANDIDATES to a new Org buffer."
   (let ((results
          (delq nil
@@ -315,29 +215,29 @@ Return a result-like alist for the target."
       (with-current-buffer buffer
         (org-mode)
         (insert "#+TITLE: org-files-db results\n\n")
-        (insert (org-files-db--render-org-results
+        (insert (org-files-db-export-render-results
                  results org-files-db-export-layout 0))
         (goto-char (point-min))
         (set-buffer-modified-p nil))
       (pop-to-buffer buffer))))
 
-(defun org-files-db--register-embark-exporter ()
+(defun org-files-db-export--register-embark-exporter ()
   "Register the org-files-db exporter with Embark."
   (setf (alist-get org-files-db--completion-category
                    embark-exporters-alist)
-        #'org-files-db-embark-export-org))
+        #'org-files-db-export-embark-org))
 
-(defun org-files-db--register-embark-exporter-after-load (_file)
+(defun org-files-db-export--register-embark-exporter-after-load (_file)
   "Register the Embark exporter once Embark has loaded."
   (when (featurep 'embark)
-    (org-files-db--register-embark-exporter)
+    (org-files-db-export--register-embark-exporter)
     (remove-hook 'after-load-functions
-                 #'org-files-db--register-embark-exporter-after-load)))
+                 #'org-files-db-export--register-embark-exporter-after-load)))
 
 (if (featurep 'embark)
-    (org-files-db--register-embark-exporter)
+    (org-files-db-export--register-embark-exporter)
   (add-hook 'after-load-functions
-            #'org-files-db--register-embark-exporter-after-load))
+            #'org-files-db-export--register-embark-exporter-after-load))
 
 (provide 'org-files-db-export)
 

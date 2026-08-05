@@ -28,10 +28,15 @@
 (require 'json)
 (require 'org)
 (require 'org-id)
+(require 'org-element)
 (require 'seq)
 (require 'subr-x)
 
 (defvar read-eval)
+
+(declare-function org-files-db-actions-open-result
+                  "org-files-db-actions"
+                  (result))
 
 (defgroup org-files-db nil
   "Emacs interface for org-files-db."
@@ -84,7 +89,7 @@ When nil, do not pass the --config option."
   :type '(repeat sexp)
   :group 'org-files-db)
 
-(defcustom org-files-db-query-action #'org-files-db-open-result
+(defcustom org-files-db-query-action #'org-files-db-actions-open-result
   "Function called with the selected query or search result."
   :type 'function
   :group 'org-files-db)
@@ -368,6 +373,43 @@ success.  ERROR is a plist containing :status and :stderr on failure."
    ((consp query) (prin1-to-string query))
    (t (user-error "Query must be a Query Model v0 list or string"))))
 
+(defun org-files-db--query-arguments (query)
+  "Return command arguments for Query Model v0 QUERY."
+  (append '("--format" "json" "--output" "flat" "--include" "path")
+          (org-files-db--config-arguments)
+          (list (org-files-db--query-string query))))
+
+(defun org-files-db--execute-query (query)
+  "Execute Query Model v0 QUERY and return the response envelope."
+  (org-files-db--call "query" (org-files-db--query-arguments query)))
+
+(defun org-files-db--validate-search-scope (scope)
+  "Return validated search SCOPE."
+  (let ((scope (or scope 'all)))
+    (unless (memq scope '(all title body))
+      (user-error "Unsupported orgfdb search scope: %S" scope))
+    scope))
+
+(defun org-files-db--search-arguments (expression &optional scope)
+  "Return orgfdb arguments for EXPRESSION and SCOPE."
+  (unless (and (stringp expression)
+               (not (string-empty-p (string-trim expression))))
+    (user-error "Search expression must be a non-empty string"))
+  (let ((scope (org-files-db--validate-search-scope scope)))
+    (append '("--format" "json")
+            (pcase scope
+              ('title '("--title"))
+              ('body '("--body"))
+              (_ nil))
+            (org-files-db--config-arguments)
+            (list expression))))
+
+(defun org-files-db--execute-search (expression &optional scope)
+  "Execute one FTS5 search for EXPRESSION in SCOPE."
+  (org-files-db--call
+   "search"
+   (org-files-db--search-arguments expression scope)))
+
 (defun org-files-db--normalize-results (response)
   "Return a result list from orgfdb RESPONSE."
   (cond
@@ -458,13 +500,39 @@ CODING-SYSTEM is the coding system of the visiting buffer."
       (forward-line (1- line)))
      (t (goto-char (point-min))))))
 
-;;;###autoload
-(defun org-files-db-open-result (result)
-  "Open RESULT and jump to its stored source location."
-  (interactive
-   (list (get-text-property (point) 'org-files-db-result)))
-  (when (stringp result)
-    (setq result (get-text-property 0 'org-files-db-result result)))
+(defun org-files-db--backlinks-query-at-point (&optional no-create)
+  "Return a backlink query for the current Org location.
+When NO-CREATE is non-nil, never offer to create a missing heading ID."
+  (unless (and buffer-file-name (derived-mode-p 'org-mode))
+    (user-error "Backlinks require a file-visiting Org buffer"))
+  (let ((file (expand-file-name buffer-file-name)))
+    (if (org-before-first-heading-p)
+        `(links (target (files (file-path ,file :exact t))))
+      (org-back-to-heading t)
+      (let ((id (org-entry-get nil "ID"))
+            (custom-id (org-entry-get nil "CUSTOM_ID")))
+        (cond
+         (id
+          `(links
+            (target
+             (headings (property "ID" ,id :inherit nil)))))
+         (custom-id
+          `(links
+            (target
+             (headings
+              (and (file-path ,file :exact t)
+                   (property "CUSTOM_ID" ,custom-id :inherit nil))))))
+         ((and (not no-create)
+               (yes-or-no-p "Heading has no stable identifier; create an ID? "))
+          (setq id (org-id-get-create))
+          (save-buffer)
+          `(links
+            (target
+             (headings (property "ID" ,id :inherit nil)))))
+         (t (user-error "A stable heading identifier is required")))))))
+
+(defun org-files-db--visit-result (result)
+  "Open RESULT, jump to its source location, and reveal Org context."
   (unless result
     (user-error "No org-files-db result"))
   (let ((file (org-files-db--result-file result)))
@@ -474,6 +542,107 @@ CODING-SYSTEM is the coding system of the visiting buffer."
     (org-files-db--goto-result-location result)
     (when (derived-mode-p 'org-mode)
       (org-fold-show-context))))
+
+(defun org-files-db--heading-at-result (result function)
+  "Call FUNCTION at RESULT's heading and return its value."
+  (let ((file (org-files-db--result-file result)))
+    (when (and file (file-readable-p file))
+      (with-current-buffer (find-file-noselect file)
+        (save-excursion
+          (org-files-db--goto-result-location result)
+          (when (derived-mode-p 'org-mode)
+            (condition-case nil
+                (progn
+                  (org-back-to-heading t)
+                  (funcall function))
+              (error nil))))))))
+
+(defun org-files-db--heading-link-info (result)
+  "Return information about the first Org link in RESULT's title."
+  (org-files-db--heading-at-result
+   result
+   (lambda ()
+     (let* ((title (org-get-heading t t t t))
+            (tree (org-element-parse-secondary-string title '(link)))
+            (link (org-element-map tree 'link #'identity nil t)))
+       (when (and link
+                  (member (org-element-property :type link) '("file" "id")))
+         (let* ((rendered (org-element-interpret-data link))
+                (begin (string-search rendered title))
+                (end (and begin (+ begin (length rendered))))
+                (description
+                 (when-let* ((contents (org-element-contents link)))
+                   (org-element-interpret-data contents))))
+           (list :title title
+                 :source-file buffer-file-name
+                 :type (org-element-property :type link)
+                 :path (org-element-property :path link)
+                 :search-option (org-element-property :search-option link)
+                 :description description
+                 :rendered rendered
+                 :prefix (and begin (substring title 0 begin))
+                 :suffix (and end (substring title end)))))))))
+
+(defun org-files-db--split-file-link-path (path search-option)
+  "Return a pair of file PATH and SEARCH-OPTION.
+The fallback split is used for Org versions which leave the search option in
+PATH."
+  (if search-option
+      (cons path search-option)
+    (if (string-match "\\`\\(.*\\)::\\(.*\\)\\'" path)
+        (cons (match-string 1 path) (match-string 2 path))
+      (cons path nil))))
+
+(defun org-files-db--absolute-linked-file (info)
+  "Return the absolute file target described by INFO."
+  (pcase-let* ((`(,path . ,_) (org-files-db--split-file-link-path
+                               (plist-get info :path)
+                               (plist-get info :search-option)))
+               (path (org-link-unescape path)))
+    (expand-file-name path
+                      (file-name-directory (plist-get info :source-file)))))
+
+(defun org-files-db--goto-linked-target (info)
+  "Open and visit the link target described by INFO.
+Return a result-like alist for the target."
+  (pcase (plist-get info :type)
+    ("id"
+     (let* ((id (plist-get info :path))
+            (response
+             (org-files-db--execute-query
+              `(headings (property "ID" ,id :inherit nil))))
+            (results (org-files-db--normalize-results response)))
+       (pcase (length results)
+         (0 (user-error "Cannot resolve indexed Org ID %s" id))
+         (1
+          (let ((result (car results)))
+            (org-files-db--visit-result result)
+            result))
+         (_ (user-error "Org ID %s resolves to multiple indexed headings" id)))))
+    ("file"
+     (pcase-let* ((`(,_ . ,search)
+                   (org-files-db--split-file-link-path
+                    (plist-get info :path)
+                    (plist-get info :search-option)))
+                  (file (org-files-db--absolute-linked-file info)))
+       (unless (file-readable-p file)
+         (user-error "Linked file is missing: %s" file))
+       (find-file file)
+       (goto-char (point-min))
+       (when search
+         (org-link-search search))
+       (let ((title (if (org-at-heading-p)
+                        (org-get-heading t t t t)
+                      (or (cadr (assoc "TITLE" (org-collect-keywords '("TITLE"))))
+                          (file-name-base file)))))
+         (when (listp title)
+           (setq title (car title)))
+         `((kind . ,(if (org-at-heading-p) "heading" "file"))
+           (title . ,title)
+           (location . ((file_path . ,file)
+                        (line . ,(line-number-at-pos))
+                        (byte_start . nil)))))))
+    (_ (user-error "Unsupported heading link type"))))
 
 (defun org-files-db--base64url-encode (text)
   "Encode TEXT as unpadded URL-safe base64."
@@ -516,7 +685,7 @@ CODING-SYSTEM is the coding system of the visiting buffer."
   "Follow an org-files-db link encoded in PATH."
   (let* ((json (org-files-db--base64url-decode path))
          (result (org-files-db--parse-json json)))
-    (org-files-db-open-result `((location . ,result)))))
+    (org-files-db--visit-result `((location . ,result)))))
 
 (org-link-set-parameters "org-files-db" :follow #'org-files-db--follow-org-link)
 

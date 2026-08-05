@@ -73,7 +73,7 @@ Start Consult-powered live search with ~M-x org-files-db-search-live~.  Search s
          :scope title)))
 #+end_src
 
-Use ~M-x org-files-db-query-view~ or ~M-x org-files-db-search-view~.  From Lisp, pass the view name directly.
+Use ~M-x org-files-db-views-query~ or ~M-x org-files-db-views-search~.  From Lisp, pass the view name directly.
 
 * Embark export
 
@@ -92,21 +92,21 @@ The optional action argument of ~org-files-db-query~ and ~org-files-db-search~ r
 
 Built-in actions and wrappers include:
 
-- ~org-files-db-open-result~
-- ~org-files-db-follow-heading-link~
-- ~org-files-db-insert-file-link~
-- ~org-files-db-insert-heading-link~
-- ~org-files-db-query-insert-file-link~
-- ~org-files-db-query-insert-heading-link~
-- ~org-files-db-rename-file-result~
+- ~org-files-db-actions-open-result~
+- ~org-files-db-actions-follow-heading-link~
+- ~org-files-db-actions-insert-file-link~
+- ~org-files-db-actions-insert-heading-link~
+- ~org-files-db-actions-query-insert-file-link~
+- ~org-files-db-actions-query-insert-heading-link~
+- ~org-files-db-actions-rename-file-result~
 
 File links support normal ~file:~, ~id:~, and file-plus-~CUSTOM_ID~ styles.  Heading links support ~id:~, file-plus-~CUSTOM_ID~, and title-based file search links.  Missing IDs are created with Org APIs and saved before the link is inserted.
 
-~org-files-db-rename-file~ updates resolved path-based links before renaming the target.  It preserves descriptions and heading or custom-ID search options, but the multi-file operation is not globally atomic.  Version control is strongly recommended.
+~org-files-db-actions-rename-file~ updates resolved path-based links before renaming the target.  It preserves descriptions and heading or custom-ID search options, but the multi-file operation is not globally atomic.  Version control is strongly recommended.
 
 * Backlinks
 
-~M-x org-files-db-backlinks~ is a convenience wrapper around a normal link query for the current file or heading.  The returned objects are the source links, so selecting one jumps to the original link location.
+~M-x org-files-db-actions-backlinks~ is a convenience wrapper around a normal link query for the current file or heading.  The returned objects are the source links, so selecting one jumps to the original link location.
 
 * Org dynamic blocks
 
@@ -127,6 +127,29 @@ The package registers these block types:
 #+end_src
 
 Update a block with ~org-update-dblock~ or all blocks with ~org-update-all-dblocks~.  Generated entries link back to their indexed source locations.
+
+* API naming
+
+Public names identify their owning module, while the two central operations stay concise:
+
+#+begin_example
+org-files-db-query             central query operation
+org-files-db-search            central search operation
+org-files-db-search-live       live search operation
+org-files-db-actions-*         public result action
+org-files-db-actions--*        private action helper
+org-files-db-views-*           public view operation
+org-files-db-views--*          private view helper
+org-files-db-dblock-*          public dynamic-block insertion command
+org-files-db-dblock--*         private dynamic-block helper
+org-files-db-query--*          private query helper
+org-files-db-search--*         private search helper
+org-files-db-export-*          public export operation
+org-files-db-export--*         private export helper
+org-files-db--*                shared core helper
+#+end_example
+
+Names containing a double hyphen are internal implementation details and are not supported as public API.
 
 * Repository structure
 

@@ -25,10 +25,11 @@
 ;;; Code:
 
 (require 'org)
-(require 'org-files-db-actions)
+(require 'org-files-db-core)
+(require 'org-files-db-export)
 (require 'org-files-db-views)
 
-(defun org-files-db--dblock-value (value)
+(defun org-files-db-dblock--value (value)
   "Return dynamic-block VALUE in its useful scalar form."
   (cond
    ((stringp value) value)
@@ -36,7 +37,7 @@
    ((null value) nil)
    (t (format "%s" value))))
 
-(defun org-files-db--dblock-layout (params)
+(defun org-files-db-dblock--layout (params)
   "Return validated layout from dynamic-block PARAMS."
   (let* ((value (or (plist-get params :layout) 'flat))
          (layout (if (stringp value) (intern value) value)))
@@ -44,7 +45,7 @@
       (user-error "Unsupported org-files-db dynamic-block layout: %S" value))
     layout))
 
-(defun org-files-db--dblock-base-level ()
+(defun org-files-db-dblock--base-level ()
   "Return the level of the heading containing the current dynamic block."
   (save-excursion
     (condition-case nil
@@ -53,25 +54,25 @@
           (org-outline-level))
       (error 0))))
 
-(defun org-files-db--dblock-query-definition (params)
+(defun org-files-db-dblock--query-definition (params)
   "Return the Query Model expression represented by PARAMS."
   (let ((query (plist-get params :query))
         (view-name (plist-get params :view)))
     (when (and query view-name)
       (user-error "Use exactly one of :query or :view"))
     (cond
-     (query (org-files-db--dblock-value query))
+     (query (org-files-db-dblock--value query))
      (view-name
-      (let* ((view (org-files-db-get-view
-                    (format "%s" (org-files-db--dblock-value view-name))))
-             (command (org-files-db--view-command view)))
+      (let* ((view (org-files-db-views-get
+                    (format "%s" (org-files-db-dblock--value view-name))))
+             (command (plist-get (cdr view) :command)))
         (unless (eq command 'query)
           (user-error "View `%s' is not a query view" (car view)))
         (or (plist-get (cdr view) :query)
             (user-error "Query view `%s' has no :query" (car view)))))
      (t (user-error "Dynamic query block requires :query or :view")))))
 
-(defun org-files-db--dblock-search-definition (params)
+(defun org-files-db-dblock--search-definition (params)
   "Return (EXPRESSION . SCOPE) represented by PARAMS."
   (let ((expression (plist-get params :expression))
         (view-name (plist-get params :view))
@@ -80,14 +81,14 @@
       (user-error "Use exactly one of :expression or :view"))
     (cond
      (expression
-      (cons (format "%s" (org-files-db--dblock-value expression))
+      (cons (format "%s" (org-files-db-dblock--value expression))
             (or (and scope
                      (if (stringp scope) (intern scope) scope))
                 'all)))
      (view-name
-      (let* ((view (org-files-db-get-view
-                    (format "%s" (org-files-db--dblock-value view-name))))
-             (command (org-files-db--view-command view)))
+      (let* ((view (org-files-db-views-get
+                    (format "%s" (org-files-db-dblock--value view-name))))
+             (command (plist-get (cdr view) :command)))
         (unless (eq command 'search)
           (user-error "View `%s' is not a search view" (car view)))
         (cons (or (plist-get (cdr view) :expression)
@@ -95,21 +96,21 @@
               (or (plist-get (cdr view) :scope) 'all))))
      (t (user-error "Dynamic search block requires :expression or :view")))))
 
-(defun org-files-db--dblock-insert-name (params)
+(defun org-files-db-dblock--insert-name (params)
   "Insert optional generated result name from PARAMS."
   (when-let* ((name (plist-get params :block-name)))
     (insert (format "#+name: %s\n" name))))
 
-(defun org-files-db--dblock-render (results params)
+(defun org-files-db-dblock--render (results params)
   "Insert RESULTS according to dynamic-block PARAMS."
-  (org-files-db--dblock-insert-name params)
+  (org-files-db-dblock--insert-name params)
   (insert
-   (org-files-db--render-org-results
+   (org-files-db-export-render-results
     results
-    (org-files-db--dblock-layout params)
-    (org-files-db--dblock-base-level))))
+    (org-files-db-dblock--layout params)
+    (org-files-db-dblock--base-level))))
 
-(defun org-files-db--dblock-protect (name function)
+(defun org-files-db-dblock--protect (name function)
   "Run FUNCTION and report failures as dynamic block NAME errors."
   (condition-case err
       (funcall function)
@@ -129,16 +130,15 @@
    (list :name "org-files-db-query" :query query :layout 'flat))
   (org-update-dblock))
 
-;;;###autoload
 (defun org-dblock-write:org-files-db-query (params)
   "Write an org-files-db query dynamic block using PARAMS."
-  (org-files-db--dblock-protect
+  (org-files-db-dblock--protect
    "org-files-db-query"
    (lambda ()
-     (let* ((query (org-files-db--dblock-query-definition params))
+     (let* ((query (org-files-db-dblock--query-definition params))
             (response (org-files-db--execute-query query))
             (results (org-files-db--normalize-results response)))
-       (org-files-db--dblock-render results params)))))
+       (org-files-db-dblock--render results params)))))
 
 ;;;###autoload
 (defun org-files-db-dblock-insert-search (expression)
@@ -153,17 +153,16 @@
          :layout 'flat))
   (org-update-dblock))
 
-;;;###autoload
 (defun org-dblock-write:org-files-db-search (params)
   "Write an org-files-db search dynamic block using PARAMS."
-  (org-files-db--dblock-protect
+  (org-files-db-dblock--protect
    "org-files-db-search"
    (lambda ()
      (pcase-let* ((`(,expression . ,scope)
-                   (org-files-db--dblock-search-definition params))
+                   (org-files-db-dblock--search-definition params))
                   (response (org-files-db--execute-search expression scope))
                   (results (org-files-db--normalize-results response)))
-       (org-files-db--dblock-render results params)))))
+       (org-files-db-dblock--render results params)))))
 
 ;;;###autoload
 (defun org-files-db-dblock-insert-backlinks (&optional scope)
@@ -180,7 +179,7 @@
          :layout 'flat))
   (org-update-dblock))
 
-(defun org-files-db--dblock-backlink-query (params)
+(defun org-files-db-dblock--backlink-query (params)
   "Return the backlink query described by PARAMS."
   (let* ((value (or (plist-get params :scope) 'heading))
          (scope (if (stringp value) (intern value) value)))
@@ -197,18 +196,17 @@
          (org-files-db--backlinks-query-at-point t)))
       (_ (user-error "Unsupported backlink scope: %S" value)))))
 
-;;;###autoload
 (defun org-dblock-write:org-files-db-backlinks (params)
   "Write an org-files-db backlink dynamic block using PARAMS."
-  (org-files-db--dblock-protect
+  (org-files-db-dblock--protect
    "org-files-db-backlinks"
    (lambda ()
-     (let* ((query (org-files-db--dblock-backlink-query params))
+     (let* ((query (org-files-db-dblock--backlink-query params))
             (response (org-files-db--execute-query query))
             (results (org-files-db--normalize-results response)))
-       (org-files-db--dblock-render results params)))))
+       (org-files-db-dblock--render results params)))))
 
-(defun org-files-db--register-dynamic-blocks ()
+(defun org-files-db-dblock--register ()
   "Register all org-files-db dynamic block types."
   (org-dynamic-block-define
    "org-files-db-query" #'org-files-db-dblock-insert-query)
@@ -217,7 +215,7 @@
   (org-dynamic-block-define
    "org-files-db-backlinks" #'org-files-db-dblock-insert-backlinks))
 
-(org-files-db--register-dynamic-blocks)
+(org-files-db-dblock--register)
 
 (provide 'org-files-db-dblock)
 

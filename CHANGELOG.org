@@ -2,6 +2,15 @@
 
 * Unreleased
 
+- =CHANGED= Aligned function names with module ownership while retaining ~org-files-db-query~, ~org-files-db-search~, and ~org-files-db-search-live~ as the concise central operations.
+  - Renamed ~org-files-db-open-result~ to ~org-files-db-actions-open-result~.
+  - Renamed ~org-files-db-insert-file-link~ and ~org-files-db-insert-heading-link~ to ~org-files-db-actions-insert-file-link~ and ~org-files-db-actions-insert-heading-link~.
+  - Renamed ~org-files-db-query-insert-file-link~ and ~org-files-db-query-insert-heading-link~ to ~org-files-db-actions-query-insert-file-link~ and ~org-files-db-actions-query-insert-heading-link~.
+  - Renamed ~org-files-db-follow-heading-link~, ~org-files-db-rename-file~, ~org-files-db-rename-file-result~, and ~org-files-db-backlinks~ to their ~org-files-db-actions-*~ forms.
+  - Renamed ~org-files-db-get-view~, ~org-files-db-query-view~, and ~org-files-db-search-view~ to ~org-files-db-views-get~, ~org-files-db-views-query~, and ~org-files-db-views-search~.
+  - Renamed ~org-files-db-embark-export-org~ to ~org-files-db-export-embark-org~.
+  - Renamed private helpers to module-specific double-hyphen prefixes and kept shared helpers in core.
+  - Omitted compatibility aliases because version 0.1.0 remains unreleased.
 - =FIXED= Preserved file and ID links in exported heading titles with current Org versions.
 - =ADDED= Added shared ~orgfdb~ configuration, synchronous and asynchronous process execution, JSON handling, and setup diagnostics.
 - =ADDED= Added Query Model v0 completion with configurable columns, widths, result actions, and UTF-8 byte-offset navigation.

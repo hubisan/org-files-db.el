@@ -25,6 +25,7 @@
 ;;; Code:
 
 (require 'org-files-db-core)
+(require 'org-files-db-actions)
 
 (declare-function consult--dynamic-collection "consult" (fun &rest options))
 (declare-function consult--lookup-candidate "consult"
@@ -35,33 +36,6 @@
   "Minimum number of characters required before live search starts."
   :type 'natnum
   :group 'org-files-db)
-
-(defun org-files-db--validate-search-scope (scope)
-  "Return validated search SCOPE."
-  (let ((scope (or scope 'all)))
-    (unless (memq scope '(all title body))
-      (user-error "Unsupported orgfdb search scope: %S" scope))
-    scope))
-
-(defun org-files-db--search-arguments (expression &optional scope)
-  "Return orgfdb arguments for EXPRESSION and SCOPE."
-  (unless (and (stringp expression)
-               (not (string-empty-p (string-trim expression))))
-    (user-error "Search expression must be a non-empty string"))
-  (let ((scope (org-files-db--validate-search-scope scope)))
-    (append '("--format" "json")
-            (pcase scope
-              ('title '("--title"))
-              ('body '("--body"))
-              (_ nil))
-            (org-files-db--config-arguments)
-            (list expression))))
-
-(defun org-files-db--execute-search (expression &optional scope)
-  "Execute one FTS5 search for EXPRESSION in SCOPE."
-  (org-files-db--call
-   "search"
-   (org-files-db--search-arguments expression scope)))
 
 ;;;###autoload
 (defun org-files-db-search (expression &optional columns action scope)
@@ -77,13 +51,13 @@ ACTION receives the selected original result.  SCOPE is one of `all',
     (org-files-db--present-results
      results columns action "Search result: ")))
 
-(defun org-files-db--search-status-candidate (message)
+(defun org-files-db-search--status-candidate (message)
   "Return a non-selectable live-search status candidate for MESSAGE."
   (propertize (format "[%s]" message)
               'org-files-db-status message
               'consult--candidate nil))
 
-(defun org-files-db--live-search-candidates (expression columns scope)
+(defun org-files-db-search--live-candidates (expression columns scope)
   "Return live candidates for EXPRESSION using COLUMNS and SCOPE.
 This function starts an asynchronous orgfdb process.  When Consult interrupts
 it because the minibuffer input changed, unwind cleanup cancels the obsolete
@@ -106,21 +80,21 @@ process."
                                 :stderr "Search process ended unexpectedly")))
           (if failure
               (list
-               (org-files-db--search-status-candidate
+               (org-files-db-search--status-candidate
                 (or (plist-get failure :stderr)
                     "Invalid search expression")))
             (let ((results (org-files-db--normalize-results response)))
               (if results
                   (org-files-db--make-candidates results columns)
-                (list (org-files-db--search-status-candidate "No matches"))))))
+                (list (org-files-db-search--status-candidate "No matches"))))))
       (when (and process (not done))
         (org-files-db--cancel-process process)))))
 
-(defun org-files-db--consult-dynamic-collection (function &rest arguments)
+(defun org-files-db-search--consult-dynamic-collection (function &rest arguments)
   "Create a Consult dynamic collection from FUNCTION and ARGUMENTS."
   (apply #'consult--dynamic-collection function arguments))
 
-(defun org-files-db--consult-read (collection &rest arguments)
+(defun org-files-db-search--consult-read (collection &rest arguments)
   "Read one candidate from COLLECTION using Consult ARGUMENTS."
   (apply #'consult--read collection arguments))
 
@@ -135,12 +109,12 @@ SCOPE is one of `all', `title', or `body'.  This command requires Consult."
   (let* ((scope (org-files-db--validate-search-scope scope))
          (columns (or columns org-files-db-search-columns))
          (collection
-          (org-files-db--consult-dynamic-collection
+          (org-files-db-search--consult-dynamic-collection
            (lambda (input)
-             (org-files-db--live-search-candidates input columns scope))
+             (org-files-db-search--live-candidates input columns scope))
            :min-input org-files-db-search-min-input))
          (result
-          (org-files-db--consult-read
+          (org-files-db-search--consult-read
            collection
            :prompt "FTS5 search: "
            :category org-files-db--completion-category

@@ -33,62 +33,61 @@ Each entry has the form (NAME :command COMMAND ...), where COMMAND is
   :type '(repeat sexp)
   :group 'org-files-db)
 
-(defun org-files-db--validate-view-name (view)
+(defun org-files-db-views--validate-name (view)
   "Return VIEW's validated name."
   (let ((name (car-safe view)))
     (unless (and (stringp name) (not (string-empty-p name)))
       (user-error "Invalid org-files-db view name in %S" view))
     name))
 
-(defun org-files-db--view-command (view)
+(defun org-files-db-views--command (view)
   "Return VIEW's validated command."
   (let ((command (plist-get (cdr view) :command)))
     (unless (memq command '(query search))
       (user-error "View `%s' has invalid :command %S"
-                  (org-files-db--validate-view-name view) command))
+                  (org-files-db-views--validate-name view) command))
     command))
 
-(defun org-files-db--validate-views ()
+(defun org-files-db-views--validate ()
   "Validate `org-files-db-views' and return it."
   (let ((seen (make-hash-table :test #'equal)))
     (dolist (view org-files-db-views)
       (unless (and (listp view) (cdr view))
         (user-error "Malformed org-files-db view: %S" view))
-      (let ((name (org-files-db--validate-view-name view)))
+      (let ((name (org-files-db-views--validate-name view)))
         (when (gethash name seen)
           (user-error "Duplicate org-files-db view name: %s" name))
         (puthash name t seen)
-        (org-files-db--view-command view)))
+        (org-files-db-views--command view)))
     org-files-db-views))
 
-;;;###autoload
-(defun org-files-db-get-view (name)
+(defun org-files-db-views-get (name)
   "Return a copy of predefined view NAME."
   (unless (stringp name)
     (user-error "View name must be a string"))
-  (org-files-db--validate-views)
+  (org-files-db-views--validate)
   (if-let* ((view (assoc name org-files-db-views #'string=)))
       (copy-tree view)
     (user-error "Unknown org-files-db view: %s" name)))
 
-(defun org-files-db--view-names (command)
+(defun org-files-db-views--names (command)
   "Return configured view names for COMMAND."
-  (org-files-db--validate-views)
+  (org-files-db-views--validate)
   (mapcar #'car
           (seq-filter
-           (lambda (view) (eq (org-files-db--view-command view) command))
+           (lambda (view) (eq (org-files-db-views--command view) command))
            org-files-db-views)))
 
-(defun org-files-db--read-view-name (command)
+(defun org-files-db-views--read-name (command)
   "Read a configured view name for COMMAND."
-  (let ((names (org-files-db--view-names command)))
+  (let ((names (org-files-db-views--names command)))
     (unless names
       (user-error "No org-files-db %s views are configured" command))
     (completing-read
      (format "%s view: " (capitalize (symbol-name command)))
      names nil t nil nil (car names))))
 
-(defun org-files-db--view-action (view)
+(defun org-files-db-views--action (view)
   "Return VIEW's optional action function."
   (let ((action (plist-get (cdr view) :action)))
     (when (and action (not (functionp action)))
@@ -96,33 +95,33 @@ Each entry has the form (NAME :command COMMAND ...), where COMMAND is
     action))
 
 ;;;###autoload
-(defun org-files-db-query-view (&optional name)
+(defun org-files-db-views-query (&optional name)
   "Execute predefined query view NAME.
 Interactively, offer only query views through standard completion."
   (interactive)
-  (let* ((name (or name (org-files-db--read-view-name 'query)))
-         (view (org-files-db-get-view name)))
-    (unless (eq (org-files-db--view-command view) 'query)
+  (let* ((name (or name (org-files-db-views--read-name 'query)))
+         (view (org-files-db-views-get name)))
+    (unless (eq (org-files-db-views--command view) 'query)
       (user-error "View `%s' is not a query view" name))
     (let ((query (plist-get (cdr view) :query))
           (columns (plist-get (cdr view) :columns))
-          (action (org-files-db--view-action view)))
+          (action (org-files-db-views--action view)))
       (unless query
         (user-error "Query view `%s' has no :query" name))
       (org-files-db-query query columns action))))
 
 ;;;###autoload
-(defun org-files-db-search-view (&optional name)
+(defun org-files-db-views-search (&optional name)
   "Execute predefined search view NAME.
 Interactively, offer only search views through standard completion."
   (interactive)
-  (let* ((name (or name (org-files-db--read-view-name 'search)))
-         (view (org-files-db-get-view name)))
-    (unless (eq (org-files-db--view-command view) 'search)
+  (let* ((name (or name (org-files-db-views--read-name 'search)))
+         (view (org-files-db-views-get name)))
+    (unless (eq (org-files-db-views--command view) 'search)
       (user-error "View `%s' is not a search view" name))
     (let ((expression (plist-get (cdr view) :expression))
           (columns (plist-get (cdr view) :columns))
-          (action (org-files-db--view-action view))
+          (action (org-files-db-views--action view))
           (scope (or (plist-get (cdr view) :scope) 'all)))
       (unless (and (stringp expression)
                    (not (string-empty-p expression)))

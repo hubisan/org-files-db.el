@@ -24,10 +24,11 @@
 ;;; Code:
 
 (require 'org-files-db-core)
+(require 'org-files-db-actions)
 
 (defvar read-eval)
 
-(defun org-files-db--query-target (query)
+(defun org-files-db-query--target (query)
   "Infer the Query Model target from QUERY."
   (let* ((form (if (stringp query)
                    (condition-case nil
@@ -37,16 +38,6 @@
                  query))
          (head (car-safe form)))
     (if (memq head '(headings links files)) head 'headings)))
-
-(defun org-files-db--query-arguments (query)
-  "Return command arguments for Query Model v0 QUERY."
-  (append '("--format" "json" "--output" "flat" "--include" "path")
-          (org-files-db--config-arguments)
-          (list (org-files-db--query-string query))))
-
-(defun org-files-db--execute-query (query)
-  "Execute Query Model v0 QUERY and return the response envelope."
-  (org-files-db--call "query" (org-files-db--query-arguments query)))
 
 ;;;###autoload
 (defun org-files-db-query (query &optional columns action)
@@ -58,7 +49,7 @@ ACTION receives the selected original result.  When omitted, use
   (let* ((response (org-files-db--execute-query query))
          (results (org-files-db--normalize-results response))
          (target (or (org-files-db--response-target response)
-                     (org-files-db--query-target query)))
+                     (org-files-db-query--target query)))
          (columns (or columns
                       (org-files-db--default-columns target results))))
     (org-files-db--present-results results columns action "Query result: ")))
