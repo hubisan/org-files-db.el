@@ -15,7 +15,7 @@ This file is the active task index.
 
 Goal: Correct project-owned failures reported by ~make ci~ and record environment-only blockers.
 
-* REVIEW Define package configuration and CLI foundation
+* DONE Define package configuration and CLI foundation
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -1207,3 +1207,4530 @@ Errors expected while entering an incomplete FTS5 expression must not interrupt 
 - Incomplete FTS5 expressions do not interrupt live input.
 - FTS5 and database failures produce actionable errors.
 - Tests cover minimum input, debounce, process cancellation, stale output, scopes, JSON parsing, selection, Embark metadata, and CLI failures.
+  
+* TODO Align public and private function prefixes with module ownership
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Make function names identify their owning module consistently while keeping the central query and search API concise.
+
+Use module-specific prefixes for both public and private functions implemented by specialized modules.
+
+Keep the primary package entry points short:
+
+#+begin_example
+org-files-db-query
+org-files-db-search
+#+end_example
+
+Do not rename them to:
+
+#+begin_example
+org-files-db-query-run
+org-files-db-search-run
+#+end_example
+
+The shorter names are the canonical public operations and already describe the action clearly.
+
+** Naming convention
+
+Use the following naming scheme.
+
+*** Central public API
+
+The main package operations retain the short package-wide prefix:
+
+#+begin_example
+org-files-db-query
+org-files-db-search
+#+end_example
+
+These functions represent the central package concepts rather than auxiliary operations owned by a specialized module.
+
+Do not add redundant suffixes such as:
+
+#+begin_example
+-run
+-execute
+-command
+-start
+#+end_example
+
+unless a second public operation with a genuinely different lifecycle requires the distinction.
+
+*** Public functions in specialized modules
+
+Public functions implemented by a specialized module use the module name as part of the prefix.
+
+Examples:
+
+#+begin_example
+org-files-db-actions-open-result
+org-files-db-actions-insert-file-link
+org-files-db-actions-insert-heading-link
+org-files-db-actions-follow-heading-link
+org-files-db-actions-rename-file
+org-files-db-actions-rename-file-result
+
+org-files-db-views-get
+org-files-db-views-query
+org-files-db-views-search
+
+org-files-db-dblock-insert-query
+org-files-db-dblock-insert-search
+org-files-db-dblock-insert-backlinks
+
+org-files-db-search-live
+#+end_example
+
+A public function remains callable by users and other modules, but its name identifies the module that owns its implementation.
+
+*** Private functions
+
+Private helpers use a double hyphen after the module prefix:
+
+#+begin_example
+org-files-db-actions--rewritten-link-path
+org-files-db-actions--validate-result
+org-files-db-views--validate
+org-files-db-views--read-name
+org-files-db-dblock--parse-query
+org-files-db-dblock--render-results
+org-files-db-search--build-arguments
+org-files-db-search--parse-results
+#+end_example
+
+Private helpers in ~org-files-db-core.el~ retain the generic shared prefix:
+
+#+begin_example
+org-files-db--result-file
+org-files-db--goto-result-location
+org-files-db--parse-json
+#+end_example
+
+This is appropriate because core contains shared package infrastructure rather than one specialized feature area.
+
+** Rename action functions
+
+Move and rename the default result action:
+
+#+begin_src emacs-lisp
+org-files-db-open-result
+#+end_src
+
+to:
+
+#+begin_src emacs-lisp
+org-files-db-actions-open-result
+#+end_src
+
+The function belongs in ~org-files-db-actions.el~ because it is a reusable action applied to a selected result.
+
+Its behaviour remains unchanged:
+
+- accept the original result object
+- accept a propertized completion candidate string
+- retrieve ~org-files-db-result~ metadata
+- validate the source file
+- open the file
+- jump to the stored result location
+- reveal the surrounding Org context
+
+Keep it interactive because it is also usable as an Embark action.
+
+Do not add an autoload cookie merely because the function is interactive.
+
+Update the default action:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-query-action
+  #'org-files-db-actions-open-result
+  "Function called with the selected query or search result."
+  :type 'function
+  :group 'org-files-db)
+#+end_src
+
+Rename the other public action functions consistently.
+
+Conceptually:
+
+#+begin_example
+org-files-db-insert-file-link
+→ org-files-db-actions-insert-file-link
+
+org-files-db-insert-heading-link
+→ org-files-db-actions-insert-heading-link
+
+org-files-db-follow-heading-link
+→ org-files-db-actions-follow-heading-link
+
+org-files-db-rename-file
+→ org-files-db-actions-rename-file
+
+org-files-db-rename-file-result
+→ org-files-db-actions-rename-file-result
+#+end_example
+
+Rename the query convenience wrappers according to their actual ownership.
+
+If they remain implemented in the actions module:
+
+#+begin_example
+org-files-db-query-insert-file-link
+→ org-files-db-actions-query-insert-file-link
+
+org-files-db-query-insert-heading-link
+→ org-files-db-actions-query-insert-heading-link
+#+end_example
+
+Alternatively, if they are considered part of the central query API, retain their current names.
+
+Choose one ownership model and apply it consistently.
+
+Do not keep public functions with mixed naming rules inside the same module.
+
+** Rename private action helpers
+
+Rename private functions in ~org-files-db-actions.el~ to use the module-specific private prefix.
+
+For example:
+
+#+begin_src emacs-lisp
+(defun org-files-db--rewritten-link-path
+    (info new-path &optional old-path)
+  ...)
+#+end_src
+
+becomes:
+
+#+begin_src emacs-lisp
+(defun org-files-db-actions--rewritten-link-path
+    (info new-path &optional old-path)
+  ...)
+#+end_src
+
+Apply this to every private helper owned exclusively by the actions module.
+
+Update:
+
+- internal calls
+- tests
+- mocks and stubs
+- advice
+- declarations
+- documentation
+- examples
+
+Do not leave aliases for old private names unless required temporarily for a staged internal migration.
+
+Private names are not part of the supported public API.
+
+** Query and search naming
+
+Keep:
+
+#+begin_src emacs-lisp
+(org-files-db-query QUERY COLUMNS &optional ACTION ...)
+#+end_src
+
+and:
+
+#+begin_src emacs-lisp
+(org-files-db-search EXPRESSION COLUMNS &optional ACTION ...)
+#+end_src
+
+These are the canonical central operations.
+
+Using:
+
+#+begin_example
+org-files-db-query
+#+end_example
+
+instead of:
+
+#+begin_example
+org-files-db-query-run
+#+end_example
+
+is intentional.
+
+The noun already functions as the operation name in Emacs Lisp, similarly to established commands where the package concept and command name are identical.
+
+Add a suffix only when it distinguishes genuinely different operations.
+
+For example:
+
+#+begin_example
+org-files-db-search
+org-files-db-search-live
+#+end_example
+
+Here ~-live~ is meaningful because it distinguishes a different interactive lifecycle.
+
+Do not introduce:
+
+#+begin_example
+org-files-db-search-run
+org-files-db-query-run
+#+end_example
+
+solely for naming symmetry.
+
+** Views module
+
+Rename public view functions consistently.
+
+Conceptually:
+
+#+begin_example
+org-files-db-get-view
+→ org-files-db-views-get
+
+org-files-db-query-view
+→ org-files-db-views-query
+
+org-files-db-search-view
+→ org-files-db-views-search
+#+end_example
+
+Private helpers become:
+
+#+begin_example
+org-files-db-views--validate
+org-files-db-views--read-name
+org-files-db-views--resolve
+#+end_example
+
+The view commands continue to delegate to:
+
+#+begin_example
+org-files-db-query
+org-files-db-search
+#+end_example
+
+They must not introduce separate query or search execution paths.
+
+** Dynamic-block module
+
+Rename public dynamic-block insertion commands consistently.
+
+Conceptually:
+
+#+begin_example
+org-files-db-dblock-insert-query
+org-files-db-dblock-insert-search
+org-files-db-dblock-insert-backlinks
+#+end_example
+
+These names already follow the module prefix and may remain unchanged.
+
+Writer function names required by Org must retain the convention:
+
+#+begin_example
+org-dblock-write:org-files-db-query
+org-dblock-write:org-files-db-search
+org-dblock-write:org-files-db-backlinks
+#+end_example
+
+Do not rename Org callback functions in a way that breaks dynamic-block dispatch.
+
+Private helpers become:
+
+#+begin_example
+org-files-db-dblock--parse-query
+org-files-db-dblock--parse-sort
+org-files-db-dblock--render-results
+#+end_example
+
+** Search module
+
+Keep the central one-shot function:
+
+#+begin_example
+org-files-db-search
+#+end_example
+
+The live frontend may remain:
+
+#+begin_example
+org-files-db-search-live
+#+end_example
+
+This is preferable to:
+
+#+begin_example
+org-files-db-search-run
+org-files-db-search-run-live
+#+end_example
+
+Private search helpers use:
+
+#+begin_example
+org-files-db-search--build-arguments
+org-files-db-search--run-live-process
+org-files-db-search--parse-results
+#+end_example
+
+If ~org-files-db-search~ is implemented in ~org-files-db-core.el~, its private shared helpers may remain ~org-files-db--...~.
+
+If it is implemented in ~org-files-db-search.el~, module-specific private helper names should be used.
+
+** Core ownership
+
+Keep shared helpers in core when they are used across several modules.
+
+Examples may include:
+
+#+begin_example
+org-files-db--result-file
+org-files-db--goto-result-location
+org-files-db--parse-json
+org-files-db--run
+org-files-db--get
+#+end_example
+
+Do not rename shared core helpers to an actions, views, search, or dblock prefix merely because one of those modules calls them.
+
+Determine ownership from actual usage:
+
+- used across several modules → core
+- used only by one module → that module
+- intended for users → public module prefix
+- internal implementation → module prefix with double hyphen
+
+Avoid one module calling another module's private helper.
+
+If a helper becomes shared, move it to core rather than treating another module's private namespace as an internal API.
+
+** Module dependencies
+
+Keep dependencies one-directional where possible.
+
+Conceptually:
+
+#+begin_example
+core
+↑
+actions
+views
+search
+dblock
+embark
+#+end_example
+
+Specialized modules may depend on core.
+
+Core must not require specialized modules merely to refer to a public function symbol in a default option.
+
+For example, this is valid even when the action is defined in another file:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-query-action
+  #'org-files-db-actions-open-result
+  ...)
+#+end_src
+
+Where byte compilation requires a declaration, use:
+
+#+begin_src emacs-lisp
+(declare-function org-files-db-actions-open-result
+                  "org-files-db-actions"
+                  (result))
+#+end_src
+
+The package entry file must load the modules required for normal operation.
+
+Do not introduce circular dependencies during the rename.
+
+** Compatibility policy
+
+Decide whether the public renames require temporary compatibility aliases.
+
+For one release, aliases may be provided:
+
+#+begin_src emacs-lisp
+(define-obsolete-function-alias
+  'org-files-db-open-result
+  #'org-files-db-actions-open-result
+  "NEXT-VERSION")
+#+end_src
+
+Use compatibility aliases for renamed public functions when users may already reference them in:
+
+- key bindings
+- view definitions
+- custom actions
+- configuration files
+- personal Lisp code
+
+Do not provide aliases for private functions unless a staged repository migration requires them temporarily.
+
+Document every renamed public function in the changelog.
+
+If the package has not yet had a public release, compatibility aliases may be omitted and all internal references can be updated directly.
+
+** Autoload policy
+
+Add autoload cookies only to top-level commands intended for direct user invocation before the package has been loaded.
+
+Likely autoload candidates include:
+
+#+begin_example
+org-files-db-query
+org-files-db-search
+org-files-db-search-live
+org-files-db-views-query
+org-files-db-views-search
+org-files-db-dblock-insert-query
+org-files-db-dblock-insert-search
+org-files-db-dblock-insert-backlinks
+org-files-db-actions-rename-file
+#+end_example
+
+A reusable action does not require an autoload cookie merely because it is interactive.
+
+For example:
+
+#+begin_example
+org-files-db-actions-open-result
+#+end_example
+
+normally runs only after query completion or through an already registered Embark action.
+
+Avoid autoloading low-level helpers and callbacks.
+
+** Documentation
+
+Update:
+
+- README examples
+- docstrings
+- view examples
+- action examples
+- Embark configuration
+- dynamic-block documentation
+- changelog
+- project documentation
+
+Examples should use the final public names.
+
+Document the naming principle briefly:
+
+#+begin_example
+org-files-db-query             central operation
+org-files-db-actions-*         public action
+org-files-db-actions--*        private action helper
+org-files-db-views-*           public view command
+org-files-db-views--*          private view helper
+#+end_example
+
+Do not expose private helpers as supported API.
+
+** Tests
+
+Update all tests for renamed functions.
+
+Add tests covering:
+
+- the default action resolves to ~org-files-db-actions-open-result~
+- public action names use ~org-files-db-actions-~
+- private action helpers use ~org-files-db-actions--~
+- public view functions use ~org-files-db-views-~
+- private view helpers use ~org-files-db-views--~
+- dynamic-block callbacks retain Org-required names
+- central commands remain ~org-files-db-query~ and ~org-files-db-search~
+- no obsolete internal references remain
+- programmatic action invocation works
+- interactive Embark action invocation works
+- byte compilation succeeds
+- no circular module dependency is introduced
+
+Where practical, add a source-level naming test that checks function definitions by file.
+
+The test should allow explicit exceptions for:
+
+- central API functions
+- Org-required callback names
+- autoload support functions
+- compatibility aliases
+
+** Implementation order
+
+1. Inventory all public and private functions by source file.
+2. Classify every function as central API, public module API, private module helper, or shared core helper.
+3. Define the final names before changing callers.
+4. Move ~org-files-db-open-result~ to ~org-files-db-actions.el~.
+5. Rename public action functions.
+6. Rename private action helpers.
+7. Rename public and private view functions.
+8. Audit search, dynamic-block, Embark, and other modules.
+9. Update all internal callers.
+10. Add compatibility aliases where required.
+11. Update tests and documentation.
+12. Run byte compilation, linting, and the complete test suite.
+13. Verify that no old private names remain.
+14. Verify that the central commands still use their short names.
+
+** Acceptance criteria
+
+- The central commands remain ~org-files-db-query~ and ~org-files-db-search~.
+- No redundant ~-run~ suffix is added to the central commands.
+- Public action functions use the prefix ~org-files-db-actions-~.
+- Private action helpers use the prefix ~org-files-db-actions--~.
+- ~org-files-db-open-result~ becomes ~org-files-db-actions-open-result~.
+- The default query action uses ~org-files-db-actions-open-result~.
+- Public view functions use the prefix ~org-files-db-views-~.
+- Private view helpers use the prefix ~org-files-db-views--~.
+- Public dynamic-block insertion commands use the prefix ~org-files-db-dblock-~.
+- Org-required dynamic-block writer names remain compatible with Org dispatch.
+- Shared core helpers retain the prefix ~org-files-db--~.
+- Specialized modules do not call private helpers owned by other modules.
+- Public renames have compatibility aliases when required by the release policy.
+- Private obsolete names are removed.
+- Autoload cookies are limited to genuine top-level entry commands.
+- Documentation and examples use the final public names.
+- The project byte-compiles without circular dependencies.
+- All tests pass after the rename.
+  
+* TODO Support per-command and per-view configuration files
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Allow individual query, search, view, and related CLI operations to override the global ~org-files-db-config-file~ without introducing separate execution paths.
+
+** Configuration semantics
+
+Every command that starts ~orgfdb~ has an effective configuration file.
+
+The effective value is determined as follows:
+
+- If no command-specific configuration is supplied, inherit ~org-files-db-config-file~.
+- If a command-specific path is supplied, use that configuration file.
+- If ~nil~ is supplied explicitly, invoke ~orgfdb~ without ~--config~.
+
+The implementation must distinguish an omitted value from an explicitly supplied ~nil~.
+
+** Public command interface
+
+Allow direct query and search calls to specify a configuration file through keyword arguments.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(cl-defun org-files-db-query
+    (query columns &optional action
+           &key
+           (config-file nil config-file-supplied-p))
+  ...)
+#+end_src
+
+Examples:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (not (done)))
+ nil)
+
+(org-files-db-query
+ '(headings (not (done)))
+ nil
+ nil
+ :config-file "~/org/private/Config.toml")
+
+(org-files-db-query
+ '(headings (not (done)))
+ nil
+ nil
+ :config-file nil)
+#+end_src
+
+The first call inherits ~org-files-db-config-file~.
+
+The second call uses the specified configuration file.
+
+The third call explicitly disables the configured global file for this invocation.
+
+Apply the same mechanism to search:
+
+#+begin_src emacs-lisp
+(cl-defun org-files-db-search
+    (expression columns &optional action
+                &key
+                (scope 'all)
+                (config-file nil config-file-supplied-p))
+  ...)
+#+end_src
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-search
+ "quarterly report"
+ nil
+ nil
+ :scope 'title
+ :config-file "~/work/org/Config.toml")
+#+end_src
+
+Apply the same configuration option to the live-search frontend:
+
+#+begin_src emacs-lisp
+(org-files-db-search-live
+ nil
+ nil
+ :scope 'all
+ :config-file "~/work/org/Config.toml")
+#+end_src
+
+Public wrapper commands that start additional ~orgfdb~ operations must provide or propagate the same execution configuration.
+
+** Shared option resolution
+
+Provide one internal function for resolving the effective configuration:
+
+#+begin_src emacs-lisp
+(org-files-db--resolve-config-file CONFIG-FILE SUPPLIED-P)
+#+end_src
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(if supplied-p
+    config-file
+  org-files-db-config-file)
+#+end_src
+
+All CLI calls must continue to use the shared process layer.
+
+Do not add query-, search-, view-, or action-specific process execution implementations.
+
+** View configuration
+
+Support an optional ~:config-file~ property in predefined views:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("private-tasks"
+         :command query
+         :config-file "~/org/private/Config.toml"
+         :query (headings (not (done))))
+
+        ("work-search"
+         :command search
+         :config-file "~/work/org/Config.toml"
+         :expression "quarterly report"
+         :scope title)
+
+        ("default-query"
+         :command query
+         :query (headings (todo "NEXT")))
+
+        ("without-config"
+         :command query
+         :config-file nil
+         :query (headings (tags "public")))))
+#+end_src
+
+The effective view configuration is determined as follows:
+
+- If ~:config-file~ is absent, inherit ~org-files-db-config-file~.
+- If ~:config-file~ contains a path, pass it to the delegated command.
+- If ~:config-file~ is explicitly ~nil~, disable ~--config~ for that view.
+
+Use ~plist-member~ to distinguish an absent property from an explicit ~nil~.
+
+** View delegation
+
+Query views continue to delegate to ~org-files-db-query~:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ query
+ columns
+ action
+ :config-file effective-config-file)
+#+end_src
+
+Search views continue to delegate to ~org-files-db-search~:
+
+#+begin_src emacs-lisp
+(org-files-db-search
+ expression
+ columns
+ action
+ :scope scope
+ :config-file effective-config-file)
+#+end_src
+
+The view wrappers must not dynamically modify the global value permanently.
+
+They must not implement separate query, search, completion, or process paths.
+
+** Result execution context
+
+Query and search results must retain the effective configuration context that produced them.
+
+This is required when a result action performs another CLI operation, for example:
+
+- retrieving links before renaming a file
+- resolving additional indexed targets
+- executing another query based on a selected result
+- exporting data that requires additional indexed information
+
+The configuration context is metadata of the result and must not be displayed as a completion column unless explicitly requested.
+
+Actions that do not execute ~orgfdb~, such as opening a stored file location, do not need to use it.
+
+A follow-up CLI call originating from a result must use the result's configuration context rather than silently reverting to the current global configuration.
+
+** Dynamic blocks
+
+Dynamic blocks using a predefined view automatically use the view's effective configuration file:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :view "private-tasks" :layout outline
+,#+END:
+#+end_src
+
+Direct query and search blocks may also accept ~:config-file~:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :config-file "~/org/private/Config.toml" :layout flat
+,#+END:
+#+end_src
+
+#+begin_src org
+,#+BEGIN: org-files-db-search :expression "quarterly report" :config-file "~/work/org/Config.toml" :layout flat
+,#+END:
+#+end_src
+
+For direct blocks:
+
+- an absent ~:config-file~ inherits the global configuration
+- a path overrides the global configuration
+
+An explicit no-config representation for dynamic blocks may use a dedicated value such as:
+
+#+begin_src org
+:config-file none
+#+end_src
+
+The value ~none~ means that ~orgfdb~ is invoked without ~--config~.
+
+Do not interpret the string ~"nil"~ as a file path or as Lisp.
+
+** Dynamic binding
+
+Users may still temporarily bind the global option for ad-hoc Lisp code:
+
+#+begin_src emacs-lisp
+(let ((org-files-db-config-file
+       "~/org/private/Config.toml"))
+  (org-files-db-query
+   '(headings (not (done)))
+   nil))
+#+end_src
+
+This remains supported because ~org-files-db-config-file~ is dynamically bindable.
+
+Dynamic binding is a convenience mechanism, not the required implementation for views or public wrappers.
+
+Explicit command parameters take precedence over a dynamically bound global value.
+
+** Path handling and validation
+
+For every effective non-nil configuration file:
+
+- expand ~~~ with ~expand-file-name~
+- resolve relative paths consistently
+- verify that the file exists
+- verify that the file is readable
+- pass the expanded path to ~orgfdb~
+- include the originating command or view name in validation errors where available
+
+An explicitly supplied ~nil~ must not be validated as a path and must not add ~--config~.
+
+Do not modify the global value of ~org-files-db-config-file~ permanently.
+
+** Backwards compatibility
+
+Calls that do not provide keyword arguments must continue to work.
+
+Existing calls such as:
+
+#+begin_src emacs-lisp
+(org-files-db-query QUERY COLUMNS ACTION)
+#+end_src
+
+continue to inherit ~org-files-db-config-file~.
+
+Existing search callers using a positional ~SCOPE~ argument may either:
+
+- remain supported temporarily through a compatibility wrapper
+- or be migrated consistently to the new ~:scope~ keyword interface
+
+Do not retain two independent search implementations.
+
+** Acceptance criteria
+
+- Direct query calls can inherit, override, or disable the global configuration.
+- Direct search calls can inherit, override, or disable the global configuration.
+- Live search supports the same configuration behaviour.
+- Query and search views support ~:config-file~.
+- Views without ~:config-file~ inherit the global configuration.
+- An explicit view value of ~nil~ disables ~--config~.
+- View wrappers pass configuration explicitly to query or search.
+- Dynamic blocks using views inherit the view configuration.
+- Direct dynamic blocks can override the configuration.
+- Results retain the configuration context required by follow-up CLI actions.
+- Follow-up operations do not silently switch to another database.
+- Explicit command options override dynamically bound global values.
+- All execution continues through the shared CLI process layer.
+- Tests cover global inheritance, direct overrides, explicit ~nil~, per-view paths, view inheritance, dynamic binding, dynamic blocks, result context propagation, invalid files, query calls, one-shot search, and live search.
+  
+* TODO Define configurable outline paths and column truncation
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Make the ~outline-path~ column configurable and provide consistent truncation behaviour for all displayed columns.
+
+** Outline-path options
+
+Support the following options for ~outline-path~ columns:
+
+#+begin_src emacs-lisp
+(outline-path
+ :separator " » "
+ :include-root nil
+ :include-match t
+ :width (max 30)
+ :truncate (:position right :marker "…"))
+#+end_src
+
+The options have the following meaning:
+
+- ~:separator STRING~ separates the included path components.
+- ~:include-root t~ includes the synthetic file or root node.
+- ~:include-root nil~ omits the synthetic file or root node.
+- ~:include-match t~ includes the matched heading.
+- ~:include-match nil~ includes only its ancestors.
+- ~:width~ continues to use ~auto~, ~(max N)~, or ~(fixed N)~.
+- ~:truncate~ controls how the final display value is shortened when it exceeds the calculated column width.
+
+Use positive option names such as ~:include-root~ and ~:include-match~ rather than exclusion flags.
+
+Example:
+
+#+begin_src emacs-lisp
+(setq org-files-db-heading-columns
+      '((todo-keyword)
+        (priority
+         :width (fixed 3))
+        (outline-path
+         :separator " / "
+         :include-root t
+         :include-match nil
+         :width (max 40)
+         :truncate (:position left :marker " (…) "))
+        (file-name
+         :width (max 30))))
+#+end_src
+
+The separator is inserted only between components that are actually included.
+
+When both the root and matched heading are excluded and no ancestor remains, the column value is an empty string. It must not fall back to the matched heading title.
+
+** Outline-path defaults
+
+Provide global defaults:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-outline-path-separator " » "
+  "Default separator used between outline path components."
+  :type 'string
+  :group 'org-files-db)
+
+(defcustom org-files-db-outline-path-include-root nil
+  "Whether outline paths include the synthetic file or root node by default."
+  :type 'boolean
+  :group 'org-files-db)
+
+(defcustom org-files-db-outline-path-include-match t
+  "Whether outline paths include the matched heading by default."
+  :type 'boolean
+  :group 'org-files-db)
+#+end_src
+
+Therefore:
+
+#+begin_src emacs-lisp
+(outline-path :width (max 30))
+#+end_src
+
+is equivalent to:
+
+#+begin_src emacs-lisp
+(outline-path
+ :separator " » "
+ :include-root nil
+ :include-match t
+ :width (max 30))
+#+end_src
+
+Column-specific options override the corresponding global defaults.
+
+Use ~plist-member~ when resolving boolean options so an explicit ~nil~ can be distinguished from an absent property.
+
+** General column truncation
+
+Support ~:truncate~ for every displayed column:
+
+#+begin_src emacs-lisp
+(file-name
+ :width (max 30)
+ :truncate (:position middle :marker "…"))
+#+end_src
+
+Supported positions are:
+
+- ~left~ removes text from the beginning.
+- ~middle~ removes text from the middle.
+- ~right~ removes text from the end.
+
+Examples:
+
+#+begin_example
+Original: applications/web-browsers/firefox
+
+left:     …browsers/firefox
+middle:   applications/…/firefox
+right:    applications/web…
+#+end_example
+
+The exact retained text depends on the available display width.
+
+The marker is part of the final column width. A truncated value must never exceed the calculated width.
+
+An empty marker performs hard truncation:
+
+#+begin_src emacs-lisp
+:truncate (:position right :marker "")
+#+end_src
+
+Truncation is applied after the final shared column width has been calculated:
+
+- ~(max N)~ truncates values that exceed the calculated width capped at ~N~.
+- ~(fixed N)~ truncates values longer than ~N~ and pads shorter values as before.
+- ~auto~ normally requires no truncation because its width is derived from the longest value.
+
+Use Emacs display width rather than raw character count so Unicode characters and wide glyphs are handled correctly.
+
+** Truncation defaults
+
+Provide global defaults:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-truncate-position 'right
+  "Default position at which column values are truncated."
+  :type '(choice
+          (const left)
+          (const middle)
+          (const right))
+  :group 'org-files-db)
+
+(defcustom org-files-db-truncate-marker "…"
+  "Default marker inserted when a column value is truncated."
+  :type 'string
+  :group 'org-files-db)
+#+end_src
+
+When ~:truncate~ is omitted, the effective configuration is:
+
+#+begin_src emacs-lisp
+:truncate (:position right :marker "…")
+#+end_src
+
+Allow partial overrides:
+
+#+begin_src emacs-lisp
+:truncate (:position middle)
+:truncate (:marker "")
+#+end_src
+
+Missing values inherit their global defaults.
+
+The resolution order is:
+
+#+begin_example
+column option
+→ global defcustom
+→ built-in fallback
+#+end_example
+
+The built-in fallbacks are:
+
+#+begin_example
+separator       " » "
+include-root    nil
+include-match   t
+position        right
+marker          "…"
+#+end_example
+
+** Validation
+
+Report clear errors for:
+
+- a non-string separator
+- an unsupported truncation position
+- a non-string truncation marker
+- malformed ~:truncate~ definitions
+- invalid boolean values for ~:include-root~ or ~:include-match~
+- markers that cannot fit within the final column width
+
+An empty truncation marker is valid.
+
+** Implementation boundaries
+
+- Keep path construction separate from width calculation and truncation.
+- Build the complete ~outline-path~ value before applying width constraints.
+- Apply the same shared truncation implementation to every column.
+- Do not duplicate truncation logic inside individual column formatters.
+- Preserve the existing separation between displayed candidate text and the original result object.
+- Keep existing column faces and text properties where possible.
+
+** Acceptance criteria
+
+- The ~outline-path~ separator is configurable globally and per column.
+- Synthetic root inclusion is configurable globally and per column.
+- Matched-heading inclusion is configurable globally and per column.
+- Explicit ~nil~ values override global boolean defaults.
+- Every column supports left, middle, and right truncation.
+- The truncation marker is configurable and defaults to ~…~.
+- An empty marker performs hard truncation.
+- Partial ~:truncate~ definitions inherit missing global values.
+- Truncated values never exceed their calculated display width.
+- ~(fixed N)~ and ~(max N)~ apply truncation consistently.
+- ~auto~ retains its existing automatic-width behaviour.
+- Tests cover all outline-path options, option inheritance, explicit ~nil~, custom separators, all truncation positions, Unicode markers, empty markers, narrow widths, fixed widths, maximum widths, and non-ASCII column values.
+  
+* TODO Add source and target outline-path columns for links
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Display the outline hierarchy containing a link and the outline hierarchy of its resolved target as separate configurable columns.
+
+** Column names
+
+For link results, provide two explicit columns:
+
+- ~source-outline-path~ shows the hierarchy in which the link occurs.
+- ~target-outline-path~ shows the hierarchy of the resolved link target.
+
+Use ~outline-path~ for heading and search results.
+
+Do not use the ambiguous ~outline-path~ name as the documented link column.
+
+Existing support for ~outline-path~ on link results may remain temporarily as an alias for ~source-outline-path~, but new documentation and examples must use the explicit column names.
+
+** Source outline path
+
+~source-outline-path~ represents the Org hierarchy containing the matched link.
+
+Example source:
+
+#+begin_src org
+,* Applications
+,** Editors
+,*** Emacs
+,**** [[file:packages.org][Packages]]
+#+end_src
+
+The source outline path is:
+
+#+begin_example
+Applications » Editors » Emacs
+#+end_example
+
+The link itself is not an outline component.
+
+The column uses structured source context returned for link results.
+
+The query command must request the required source data automatically when ~source-outline-path~ is configured.
+
+Prefer the structured source heading outline path when available.
+
+A ~node_path~ returned through the ~path~ include may be used when it represents the same source hierarchy.
+
+Do not require ~--output outline~ merely to calculate this column.
+
+** Target outline path
+
+~target-outline-path~ represents the hierarchy of the resolved target.
+
+Example target:
+
+#+begin_src org
+,* heading 1
+,** heading 2
+,*** heading 3
+:PROPERTIES:
+:CUSTOM_ID: 4cd16e0c-cd97-42c7-8338-b4208e02224c
+:END:
+#+end_src
+
+Given a resolved link to ~heading 3~, the target data contains:
+
+#+begin_src json
+"target": {
+  "file": {
+    "title": "test-subheading"
+  },
+  "heading": {
+    "title": "heading 3",
+    "outline_path": [
+      "heading 1",
+      "heading 2",
+      "heading 3"
+    ]
+  }
+}
+#+end_src
+
+The displayed target outline path is:
+
+#+begin_example
+heading 1 » heading 2 » heading 3
+#+end_example
+
+The query command must automatically request ~--include target~ when ~target-outline-path~ is configured.
+
+No additional query may be executed for each target.
+
+** File targets
+
+When the resolved target is a file rather than a heading:
+
+- With ~:include-root t~, display the target file title.
+- With ~:include-root nil~, display an empty value.
+
+When the target is a heading, the target file title is included only when ~:include-root t~.
+
+Example:
+
+#+begin_example
+test-subheading » heading 1 » heading 2 » heading 3
+#+end_example
+
+** Unresolved targets
+
+~target-outline-path~ is empty when the link target is:
+
+- unresolved
+- ambiguous
+- external
+- unsupported
+- missing structured target data
+
+Do not display the authored raw target as an outline path.
+
+Other columns such as ~link-target~ and ~resolution-status~ continue to expose those details.
+
+** Shared outline options
+
+Both columns support the same outline options:
+
+#+begin_src emacs-lisp
+(source-outline-path
+ :separator " » "
+ :include-root nil
+ :include-match t
+ :width (max 50)
+ :truncate (:position right :marker "…"))
+
+(target-outline-path
+ :separator " » "
+ :include-root nil
+ :include-match t
+ :width (max 50)
+ :truncate (:position middle :marker "…"))
+#+end_src
+
+The options have the following meaning:
+
+- ~:separator~ separates path components.
+- ~:include-root~ includes the source or target file root.
+- ~:include-match~ includes the final heading component.
+- ~:width~ controls the shared column width.
+- ~:truncate~ controls shortening when the final width is exceeded.
+
+The global outline defaults also apply:
+
+#+begin_src emacs-lisp
+org-files-db-outline-path-separator
+org-files-db-outline-path-include-root
+org-files-db-outline-path-include-match
+#+end_src
+
+** Include inference
+
+Determine required CLI includes from the configured columns.
+
+At minimum:
+
+#+begin_example
+source-outline-path  → source or path
+target-outline-path  → target
+#+end_example
+
+When both columns are configured, invoke the CLI with all required includes in one call.
+
+Conceptually:
+
+#+begin_src sh
+orgfdb query \
+  --include source,target \
+  '(links (status "resolved"))'
+#+end_src
+
+If ~path~ is required for source hierarchy instead of ~source~, combine it in the same invocation:
+
+#+begin_src sh
+orgfdb query \
+  --include path,target \
+  '(links (status "resolved"))'
+#+end_src
+
+Do not require users to specify includes manually merely because they selected these columns.
+
+Do not request expensive includes that are not needed by the configured columns or actions.
+
+** Output mode
+
+Keep the normal link query output flat for completion and column formatting.
+
+~--output outline~ changes the shape of the result output and is intended for hierarchical output, not for providing individual column values.
+
+The package's Org exporter may still construct outline output from the included path information.
+
+Do not maintain separate flat and outline query execution paths solely for these columns.
+
+** Default link columns
+
+Update the configurable link-column defaults to use explicit source and target names where appropriate.
+
+Example:
+
+#+begin_src emacs-lisp
+(setq org-files-db-link-columns
+      '((source-outline-path
+         :width (max 50))
+        (link-description
+         :width (max 40))
+        (target-outline-path
+         :width (max 50))
+        (resolution-status
+         :width (fixed 10))
+        (file-name
+         :width (max 30))))
+#+end_src
+
+The target column need not be part of the built-in default if requesting target information for every link would be undesirable.
+
+It must nevertheless be available as a documented supported column.
+
+** README documentation
+
+Document:
+
+- ~source-outline-path~ as the hierarchy containing the link
+- ~target-outline-path~ as the hierarchy of the resolved target
+- unresolved targets producing an empty target path
+- both columns supporting the standard outline and truncation options
+- required includes being selected automatically by the package
+
+Do not imply that ~--output outline~ is required.
+
+** Acceptance criteria
+
+- Link results support ~source-outline-path~.
+- Link results support ~target-outline-path~.
+- The source path describes where the link occurs.
+- The target path describes the resolved target hierarchy.
+- File roots can be included independently through ~:include-root~.
+- The final heading can be omitted through ~:include-match nil~.
+- Unresolved and external targets produce an empty target path.
+- Configured columns automatically add the required CLI includes.
+- Source and target data are retrieved in one CLI invocation.
+- No per-result target queries are executed.
+- Flat query output remains usable for completion.
+- The columns support separators, widths, and general truncation options.
+- Tests cover nested source headings, nested target headings, file targets, root inclusion, match exclusion, unresolved targets, custom separators, include inference, and simultaneous source and target columns.
+  
+* TODO Add row expansion for tags, effective properties, and keywords
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Allow one heading or file result to produce one displayed row per tag, effective property, or keyword.
+
+Currently, multi-valued fields are formatted as one combined column value. Provide a shared row-expansion mechanism instead of implementing separate presentation paths for tags, properties, and keywords.
+
+** Row-source option
+
+Add an optional ~:row-source~ keyword to query execution:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (tags "project"))
+ '((tag :width (max 30))
+   (outline-path :width (max 60))
+   (file-name :width (max 30)))
+ nil
+ :row-source 'tags)
+#+end_src
+
+Supported values are:
+
+- ~nil~: one displayed row per query result
+- ~tags~: one displayed row per tag
+- ~effective-properties~: one displayed row per effective property
+- ~keywords~: one displayed row per keyword
+
+The default is ~nil~, preserving the current behaviour.
+
+A result containing three tags therefore produces three completion candidates.
+
+Ordinary result columns such as ~outline-path~, ~file-name~, and ~title~ are repeated for every expanded row.
+
+** Tags
+
+With:
+
+#+begin_src emacs-lisp
+:row-source 'tags
+#+end_src
+
+provide the singular column:
+
+#+begin_src emacs-lisp
+(tag)
+#+end_src
+
+Example source heading:
+
+#+begin_src org
+,* Example :project:emacs:active:
+#+end_src
+
+Example rows:
+
+#+begin_example
+project  Example  notes.org
+emacs    Example  notes.org
+active   Example  notes.org
+#+end_example
+
+The existing plural ~tags~ column may continue to display all tags together when no row expansion is requested.
+
+The singular ~tag~ column is valid only with ~:row-source tags~.
+
+Preserve the tag order returned by ~orgfdb~.
+
+Do not add or remove Org tag delimiters unless explicitly configured as part of column formatting.
+
+** Effective properties
+
+With:
+
+#+begin_src emacs-lisp
+:row-source 'effective-properties
+#+end_src
+
+provide the columns:
+
+#+begin_src emacs-lisp
+(property-name)
+(property-value)
+#+end_src
+
+Example effective properties:
+
+#+begin_example
+CATEGORY=work
+OWNER=Daniel
+STATUS=active
+#+end_example
+
+Example rows:
+
+#+begin_example
+CATEGORY  work
+OWNER     Daniel
+STATUS    active
+#+end_example
+
+Each effective property name and its resolved value form one row.
+
+The query command must automatically request:
+
+#+begin_src sh
+--include effective_properties
+#+end_src
+
+Users must not need to specify this include manually.
+
+Effective properties represent the resolved values used by query matching. They must not be confused with raw property rows.
+
+If the CLI representation does not provide a stable order, sort effective properties by property name for deterministic output.
+
+** Keywords
+
+With:
+
+#+begin_src emacs-lisp
+:row-source 'keywords
+#+end_src
+
+provide the columns:
+
+#+begin_src emacs-lisp
+(keyword-name)
+(keyword-value)
+#+end_src
+
+Example keywords:
+
+#+begin_src org
+,#+TITLE: Example
+,#+FILETAGS: :project:
+,#+CATEGORY: work
+#+end_src
+
+Example rows:
+
+#+begin_example
+TITLE     Example
+FILETAGS  :project:
+CATEGORY  work
+#+end_example
+
+The query command must automatically request:
+
+#+begin_src sh
+--include keywords
+#+end_src
+
+Users must not need to specify this include manually.
+
+Preserve duplicate keyword entries when they are returned separately by ~orgfdb~.
+
+Preserve source order when the CLI provides it. Otherwise, use a deterministic order without merging entries.
+
+** Views
+
+Allow predefined query views to configure ~:row-source~:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("heading-tags"
+         :command query
+         :query (headings)
+         :row-source tags
+         :columns
+         ((tag :width (max 30))
+          (outline-path :width (max 60))
+          (file-name :width (max 30))))
+
+        ("effective-properties"
+         :command query
+         :query (headings)
+         :row-source effective-properties
+         :columns
+         ((property-name :width (max 30))
+          (property-value :width (max 60))
+          (outline-path :width (max 60))))
+
+        ("file-keywords"
+         :command query
+         :query (files)
+         :row-source keywords
+         :columns
+         ((keyword-name :width (max 30))
+          (keyword-value :width (max 60))
+          (file-name :width (max 30))))))
+#+end_src
+
+Query views pass ~:row-source~ to ~org-files-db-query~.
+
+They must not implement a separate expansion or completion path.
+
+** Dynamic blocks
+
+Allow direct query blocks to define ~:row-source~:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :query "(headings)" :row-source tags :layout flat
+,#+END:
+#+end_src
+
+Views referenced by dynamic blocks inherit their configured ~:row-source~.
+
+Supported dynamic-block values are:
+
+- ~tags~
+- ~effective-properties~
+- ~keywords~
+
+An absent value keeps the normal one-row-per-result behaviour.
+
+** Candidate representation
+
+Keep the matched query result separate from the expanded row data.
+
+Conceptually, each displayed candidate contains:
+
+#+begin_example
+original result
+row-source
+row value
+formatted columns
+#+end_example
+
+Selecting an expanded row continues to execute the configured action on the original heading or file result.
+
+Existing actions such as opening a result, inserting a link, or renaming a file must continue to work without modification.
+
+The row metadata is used for formatting and exporting but must not replace or mutate the original query result.
+
+** Empty collections
+
+When a result has no entries for the selected row source, it produces no displayed rows.
+
+Examples:
+
+- a heading without tags produces no rows for ~:row-source tags~
+- a result without effective properties produces no property rows
+- a result without keywords produces no keyword rows
+
+Do not create an artificial empty row.
+
+A future option may add empty rows if a concrete use case requires them.
+
+** Column validation
+
+Validate singular row columns against the selected row source:
+
+- ~tag~ requires ~:row-source tags~
+- ~property-name~ and ~property-value~ require ~:row-source effective-properties~
+- ~keyword-name~ and ~keyword-value~ require ~:row-source keywords~
+
+Report a clear error for incompatible combinations.
+
+Do not allow multiple row sources in one invocation.
+
+In particular, do not create Cartesian products between tags, properties, and keywords.
+
+** Include inference
+
+Infer required CLI includes from ~:row-source~:
+
+#+begin_example
+tags                  → no additional include when tags are already part of the result
+effective-properties  → effective_properties
+keywords              → keywords
+#+end_example
+
+Combine inferred includes with includes required by configured columns and actions.
+
+Use one ~orgfdb~ invocation for the complete result set.
+
+** Width and truncation
+
+Expanded row columns support the same width and truncation options as all other columns:
+
+#+begin_src emacs-lisp
+(tag
+ :width (max 20)
+ :truncate (:position right :marker "…"))
+
+(property-value
+ :width (fixed 40)
+ :truncate (:position middle :marker "…"))
+#+end_src
+
+Shared column widths are calculated across all expanded rows, not separately for each original result.
+
+** Embark export
+
+~embark-export~ must preserve the currently filtered expanded rows.
+
+It must not collapse several tag, property, or keyword rows back into one result.
+
+For flat export:
+
+- produce one exported entry per expanded row
+- retain a link to the original heading or file
+- include the singular row value in the exported description
+
+For outline export:
+
+- preserve the original file and heading hierarchy
+- group expanded rows below their matched result where necessary
+- avoid repeating identical ancestor hierarchy for every row
+
+The exact presentation may reuse the configured columns, but every expanded row must remain distinguishable.
+
+** Supported result kinds
+
+Initial support applies to:
+
+- heading results
+- file results
+- synthetic file-root results where the corresponding data is available
+
+Reject row expansion for link results unless a later feature explicitly defines whether source or target metadata should be expanded.
+
+Search-result support may be added only when the search CLI output provides the required structured data and includes.
+
+** README documentation
+
+Document:
+
+- the purpose of ~:row-source~
+- one row per tag
+- one row per effective property
+- one row per keyword
+- the singular columns available for each mode
+- views and dynamic-block examples
+- empty collections producing no rows
+- automatic include inference
+- the difference between aggregate ~tags~ and singular ~tag~
+
+Avoid describing the feature as JSON expansion or exposing internal candidate structures.
+
+** Acceptance criteria
+
+- Query results can expand to one row per tag.
+- Query results can expand to one row per effective property.
+- Query results can expand to one row per keyword.
+- Normal columns are repeated for every expanded row.
+- ~tag~, ~property-name~, ~property-value~, ~keyword-name~, and ~keyword-value~ are supported.
+- Effective properties automatically request ~effective_properties~.
+- Keywords automatically request ~keywords~.
+- Only one row source can be active per invocation.
+- No Cartesian products are created.
+- Empty collections produce no rows.
+- Existing result actions continue to receive the original matched result.
+- Views pass their row source to the generic query function.
+- Dynamic blocks support direct and view-provided row sources.
+- Embark export preserves individual expanded rows.
+- Width and truncation are calculated across all expanded rows.
+- Tests cover multiple tags, no tags, effective-property ordering, keyword duplicates, empty collections, include inference, column validation, views, dynamic blocks, filtering, actions, flat export, outline export, and non-ASCII values.
+
+* TODO Add configurable result sorting
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Allow query and search results to be sorted by one or more user-facing columns before they are presented, exported, or rendered in dynamic blocks.
+
+Sorting must reuse the shared result-presentation pipeline and must not introduce separate query, completion, or rendering paths.
+
+** Public syntax
+
+Add an optional ~:sort~ argument to query and search commands.
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (not (done)))
+ '((todo-keyword)
+   (priority :width (fixed 3))
+   (outline-path :width (max 80))
+   (file-name :width (max 30)))
+ nil
+ :sort
+ '((priority :direction asc :missing last)
+   (outline-path :direction asc)))
+#+end_src
+
+Search example:
+
+#+begin_src emacs-lisp
+(org-files-db-search
+ "quarterly report"
+ nil
+ nil
+ :scope 'all
+ :sort
+ '((rank :direction asc)
+   (title :direction asc)))
+#+end_src
+
+~:sort nil~ preserves the order returned by ~orgfdb~.
+
+Each sort specification has the form:
+
+#+begin_src emacs-lisp
+(COLUMN
+ :direction asc
+ :missing last
+ :case-fold t)
+#+end_src
+
+Supported options are:
+
+- ~:direction asc~ sorts in ascending order.
+- ~:direction desc~ sorts in descending order.
+- ~:missing first~ places missing values before non-missing values.
+- ~:missing last~ places missing values after non-missing values.
+- ~:case-fold t~ compares textual values without case distinctions.
+- ~:case-fold nil~ compares textual values with case distinctions.
+
+Defaults are:
+
+#+begin_example
+direction   asc
+missing     last
+case-fold   t
+#+end_example
+
+Allow multiple sort keys. Later keys are used only when all earlier keys compare equally.
+
+** Supported sort columns
+
+Sorting uses the same public column names as result presentation.
+
+Examples include:
+
+- ~title~
+- ~todo-keyword~
+- ~todo-type~
+- ~priority~
+- ~outline-path~
+- ~source-outline-path~
+- ~target-outline-path~
+- ~tags~
+- ~file-title~
+- ~file-name~
+- ~file-path~
+- ~line-number~
+- ~scheduled-raw~
+- ~deadline-raw~
+- ~closed-raw~
+- ~link-type~
+- ~link-target~
+- ~link-description~
+- ~resolution-status~
+- ~rank~
+
+A sort column does not need to be displayed.
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings)
+ '((title)
+   (file-name :width (max 30)))
+ nil
+ :sort
+ '((priority :direction asc)
+   (title :direction asc)))
+#+end_src
+
+Here ~priority~ controls the ordering without appearing as a visible column.
+
+Do not expose arbitrary internal JSON fields as supported sort keys. Sortable columns must use the documented public column API.
+
+** Comparison semantics
+
+Use type-aware comparison.
+
+*** Text
+
+Textual columns are compared as strings.
+
+With the default ~:case-fold t~, values differing only by case compare equally for the current sort key.
+
+Use the original result order as the final tie-breaker so sorting remains stable.
+
+*** Numbers
+
+Numeric columns such as ~line-number~ and ~rank~ are compared numerically rather than as strings.
+
+For example:
+
+#+begin_example
+2
+10
+100
+#+end_example
+
+must not be ordered as:
+
+#+begin_example
+10
+100
+2
+#+end_example
+
+*** Priority
+
+Org priorities use their natural order.
+
+Ascending order means:
+
+#+begin_example
+A
+B
+C
+#+end_example
+
+Missing priorities follow the configured ~:missing~ behaviour.
+
+*** Timestamps
+
+Planning columns such as:
+
+- ~scheduled-raw~
+- ~deadline-raw~
+- ~closed-raw~
+
+are compared chronologically.
+
+Parse each timestamp at most once per presentation.
+
+Invalid or absent timestamps are treated as missing values and follow the configured ~:missing~ behaviour.
+
+*** Outline paths
+
+~outline-path~, ~source-outline-path~, and ~target-outline-path~ are compared using their complete untruncated path values.
+
+Display truncation must not affect sorting.
+
+Custom separators affect presentation only and must not change the logical path order.
+
+*** Tags
+
+The aggregate ~tags~ column is compared using its complete tag collection, not its truncated display value.
+
+When row expansion is active with:
+
+#+begin_src emacs-lisp
+:row-source 'tags
+#+end_src
+
+the singular ~tag~ column sorts by the individual expanded tag.
+
+** Sorting and cached presentation rows
+
+Integrate sorting with the optimized presentation pipeline.
+
+Conceptually:
+
+#+begin_example
+results
+→ normalized column and sort specifications
+→ cached presentation rows
+→ cached sort keys
+→ stable sorting
+→ shared-width calculation
+→ formatted completion candidates
+#+end_example
+
+Calculate every sort key at most once per presentation row.
+
+When a sort key uses the same value as a displayed column, reuse the already cached value.
+
+Do not call the general column extractor again during individual comparisons.
+
+A comparison function may be called many times by the sorting algorithm, so it must compare already normalized cached values.
+
+Do not sort using truncated, padded, propertized, or otherwise formatted candidate strings.
+
+** Stable ordering
+
+Sorting must be stable.
+
+When all configured sort keys compare equally, preserve the original order returned by ~orgfdb~.
+
+Store the original result position in the presentation row and use it as the final tie-breaker when necessary.
+
+This ensures deterministic handling of:
+
+- duplicate titles
+- identical file names
+- equal priorities
+- missing values
+- row-expanded values with the same text
+
+** Row expansion
+
+Sorting applies after row expansion.
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings)
+ '((tag)
+   (outline-path :width (max 60)))
+ nil
+ :row-source 'tags
+ :sort
+ '((tag :direction asc)
+   (outline-path :direction asc)))
+#+end_src
+
+This sorts individual tag rows rather than only their original heading results.
+
+The singular row columns are valid only with their matching row source:
+
+- ~tag~ with ~tags~
+- ~property-name~ and ~property-value~ with ~effective-properties~
+- ~keyword-name~ and ~keyword-value~ with ~keywords~
+
+Do not create separate sorting implementations for expanded rows.
+
+** Defaults by result type
+
+Provide configurable default sorting:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-heading-sort nil
+  "Default sorting for heading query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-file-sort nil
+  "Default sorting for file query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-link-sort nil
+  "Default sorting for link query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-search-sort nil
+  "Default sorting for full-text search results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+#+end_src
+
+All defaults are ~nil~, preserving the CLI order.
+
+This is especially important for search results, where the default CLI order represents search relevance.
+
+An explicit command-specific ~:sort~ overrides the corresponding global default.
+
+An explicitly supplied ~nil~ preserves the CLI order for that invocation even when a global default is configured.
+
+The implementation must distinguish an omitted ~:sort~ argument from an explicitly supplied ~nil~.
+
+** Views
+
+Allow query and search views to define ~:sort~:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("next-actions"
+         :command query
+         :query (headings (not (done)))
+         :sort
+         ((priority :direction asc :missing last)
+          (deadline-raw :direction asc :missing last)
+          (outline-path :direction asc))
+         :columns
+         ((todo-keyword)
+          (priority :width (fixed 3))
+          (deadline-raw :width (max 20))
+          (outline-path :width (max 80))))
+
+        ("recent-search"
+         :command search
+         :expression "org-files-db"
+         :sort
+         ((title :direction asc))
+         :columns
+         ((title)
+          (file-name :width (max 30))))))
+#+end_src
+
+View-specific sorting overrides the corresponding global default.
+
+A view without ~:sort~ inherits the default for its result type.
+
+An explicit ~:sort nil~ preserves the order returned by ~orgfdb~.
+
+Views continue to delegate to ~org-files-db-query~ or ~org-files-db-search~.
+
+** Dynamic blocks
+
+Allow direct dynamic blocks to specify sorting:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :sort "((priority :direction asc) (outline-path :direction asc))" :layout flat
+,#+END:
+#+end_src
+
+Parse the sort expression safely with ~read-eval~ disabled.
+
+Dynamic blocks referencing a view inherit that view's sorting.
+
+Exported and rendered entries must follow the same order as interactive completion.
+
+** Embark export
+
+~embark-export~ preserves the current sorted candidate order.
+
+It must not:
+
+- restore the original CLI order
+- sort candidates alphabetically through the completion framework
+- recalculate sort keys
+- reorder equal candidates unexpectedly
+
+Keep the completion metadata sorting functions set to ~identity~ where required so the prepared order remains authoritative.
+
+For outline export, preserve the requested sort order where it does not conflict with the required ancestor hierarchy.
+
+Matched siblings within the same generated hierarchy must follow the configured sorting.
+
+** Performance
+
+Sorting approximately 10,000 prepared rows must remain practical.
+
+To avoid repeated work:
+
+- normalize sort specifications once
+- extract every sort key once
+- parse timestamps once
+- reuse displayed column values where possible
+- compare cached scalar values
+- avoid allocating new strings inside comparison functions
+- preserve the original position as a numeric tie-breaker
+
+Add sorting benchmarks for approximately:
+
+- 1,000 rows
+- 10,000 rows
+- multiple text keys
+- numeric keys
+- timestamp keys
+- row-expanded tag values
+
+Measure sorting separately from JSON parsing, row preparation, width calculation, and candidate formatting.
+
+** Validation
+
+Report clear errors for:
+
+- unknown sort columns
+- malformed sort specifications
+- unsupported directions
+- unsupported missing-value positions
+- non-boolean ~:case-fold~ values
+- singular row columns without the corresponding row source
+- sort columns unavailable for the selected result type
+
+Include the affected command or view name where available.
+
+** README documentation
+
+Document:
+
+- sorting by one or more columns
+- ascending and descending order
+- missing-value placement
+- case-sensitive and case-insensitive text sorting
+- sort columns not needing to be displayed
+- per-command sorting
+- per-view sorting
+- global defaults by result type
+- search preserving relevance order when no sort is configured
+- row-expanded sorting
+- dynamic-block sorting
+
+Use practical examples rather than implementation details.
+
+** Acceptance criteria
+
+- Query results can be sorted by one or more columns.
+- Search results can be sorted without changing their default relevance order.
+- Sort columns do not need to be displayed.
+- Text, numeric, priority, timestamp, and outline-path values use appropriate comparisons.
+- Missing values can be placed first or last.
+- Ascending and descending ordering are supported.
+- Text comparison supports configurable case folding.
+- Sorting uses complete untruncated values.
+- Every sort key is calculated at most once per presentation row.
+- Sorting reuses cached displayed values where possible.
+- Equal rows preserve their original CLI order.
+- Row-expanded tags, properties, and keywords can be sorted.
+- Views and dynamic blocks support sorting.
+- Embark export preserves the configured ordering.
+- Existing result actions continue to receive their original result objects.
+- Tests cover all comparison types, multiple keys, missing values, explicit ~nil~, global defaults, view overrides, row expansion, duplicate values, stable ordering, Embark export, and non-ASCII text.
+- Benchmarks document sorting performance for approximately 1,000 and 10,000 rows.
+  
+* TODO Optimize large query result handling
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Make synchronous queries returning 10,000 or more results fast enough that the completion interface appears promptly and filtering remains effectively instant.
+
+Keep the existing synchronous public interface.
+
+Do not add asynchronous query commands, Emacs Lisp worker threads, streaming, pagination, or lazy result loading as part of this task.
+
+Follow the same general performance model used successfully by Vulpea:
+
+#+begin_example
+database or CLI results
+→ build each display candidate once
+→ associate it directly with the original result
+→ pass the prepared candidates to completion
+#+end_example
+
+The optimized ~org-files-db~ pipeline additionally needs shared-width handling:
+
+#+begin_example
+orgfdb response
+→ parse once
+→ normalize column specifications once
+→ calculate each required result value once
+→ calculate each displayed cell once
+→ calculate shared widths from cached cells
+→ format each candidate once
+→ open completion
+#+end_example
+
+Once completion opens, filtering and redisplay must reuse the already prepared candidate strings without invoking result extraction, column formatting, width calculation, or face processing again.
+
+** Expected user experience
+
+A call such as:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings)
+ '((todo-keyword)
+   (title)
+   (file-name :width (max 30))))
+#+end_src
+
+waits synchronously until the complete result set has been prepared.
+
+After preparation:
+
+- the completion interface appears promptly
+- typing filters the prepared candidate strings
+- redisplay does not rebuild columns or candidates
+- selecting a result remains immediate
+- actions and Embark receive the original result object
+
+Do not introduce a separate asynchronous command or require users to choose between synchronous and asynchronous execution.
+
+** Establish a performance baseline
+
+Add repeatable benchmarks for result sets containing approximately:
+
+- 100 results
+- 1,000 results
+- 10,000 results
+- 50,000 results where practical
+
+Measure these phases independently:
+
+- CLI execution
+- JSON parsing
+- column-specification normalization
+- result-value extraction
+- presentation-row construction
+- sort-key preparation when sorting is enabled
+- shared-width calculation
+- face preparation
+- candidate formatting
+- completion-frontend initialization
+- total time until the minibuffer is usable
+
+Use representative columns:
+
+#+begin_src emacs-lisp
+'((todo-keyword)
+  (title)
+  (file-name :width (max 30)))
+#+end_src
+
+Also benchmark more expensive columns:
+
+#+begin_src emacs-lisp
+'((todo-keyword)
+  (priority :width (fixed 3))
+  (outline-path :width (max 80))
+  (tags)
+  (file-name :width (max 30)))
+#+end_src
+
+Use:
+
+- synthetic result objects for deterministic regression benchmarks
+- at least one captured representative ~orgfdb~ response
+- duplicate titles and file names
+- non-ASCII text
+- nested outline paths
+- missing values
+
+Record baseline results before changing the implementation.
+
+Do not optimize only according to total command duration.
+
+Identify whether the dominant cost comes from:
+
+- ~orgfdb~
+- JSON parsing
+- repeated result access
+- repeated column calculation
+- width calculation
+- face handling
+- string allocation
+- candidate construction
+- completion initialization
+
+** Benchmark JSON representations
+
+Compare JSON parsing with:
+
+#+begin_src emacs-lisp
+:object-type 'alist
+#+end_src
+
+and:
+
+#+begin_src emacs-lisp
+:object-type 'hash-table
+#+end_src
+
+Measure:
+
+- parsing time
+- repeated direct field access
+- repeated nested field access
+- complete presentation preparation
+- garbage collection
+- memory use where practical
+
+Do not switch to hash tables merely because individual lookups have better theoretical complexity.
+
+Hash tables create additional objects and may increase parsing time and memory use.
+
+Change the JSON representation only when the complete representative benchmark shows a meaningful overall improvement.
+
+Keep all JSON access behind shared access functions so the chosen representation remains an internal implementation detail.
+
+** Normalize column specifications once
+
+Compile each configured column into an internal presentation specification before processing results.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(cl-defstruct org-files-db--presentation-column
+  name
+  extractor
+  width-kind
+  width-limit
+  truncate-position
+  truncate-marker
+  face-function
+  outline-options)
+#+end_src
+
+The exact representation may differ.
+
+Each normalized specification should contain everything required to process its cells without repeatedly inspecting the original property list.
+
+Resolve and validate once per invocation:
+
+- column name
+- value extractor
+- width mode
+- width limit
+- truncation position
+- truncation marker
+- outline separator
+- root inclusion
+- matched-heading inclusion
+- face selection
+- required CLI includes
+
+Avoid repeated ~pcase~, ~plist-get~, and validation inside the result loop.
+
+** Extract shared result values once
+
+Vulpea uses compact ~cl-defstruct~ note objects and direct accessors such as:
+
+#+begin_src emacs-lisp
+(vulpea-note-title note)
+(vulpea-note-path note)
+(vulpea-note-tags note)
+#+end_src
+
+Do not repeatedly traverse raw nested alists for every displayed column.
+
+Build a compact presentation source containing only values required by the current invocation.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(cl-defstruct org-files-db--presentation-source
+  result
+  kind
+  title
+  file-path
+  file-name
+  line-number
+  heading-level
+  todo-keyword
+  todo-type
+  priority
+  tags
+  outline-path
+  source-outline-path
+  target-outline-path)
+#+end_src
+
+The exact fields may differ.
+
+Only calculate values required by:
+
+- displayed columns
+- configured sort keys
+- row expansion
+- presentation metadata
+
+Do not eagerly normalize every possible result field.
+
+Several columns depending on the same value must reuse the normalized value.
+
+Examples:
+
+- ~file-name~ reuses the already extracted ~file-path~
+- ~outline-path~ is constructed once
+- aggregate tags are formatted once
+- title lookup is not repeated for display, searching, sorting, and export
+
+Keep the original result object unchanged.
+
+Actions continue to receive the original result rather than the normalized presentation source.
+
+** Build cached presentation rows
+
+Represent every visible row explicitly.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(cl-defstruct org-files-db--presentation-row
+  result
+  source
+  original-position
+  row-source
+  row-value
+  cells
+  sort-keys
+  candidate)
+#+end_src
+
+A normal result creates one presentation row.
+
+Tag, property, and keyword expansion may create several rows sharing the same presentation source and original result.
+
+Each cached cell contains at least:
+
+#+begin_example
+logical value
+display string
+display width
+source face
+#+end_example
+
+The preparation pipeline becomes:
+
+#+begin_example
+raw results
+→ presentation sources
+→ row expansion
+→ cached presentation rows
+→ cached sort keys
+→ stable sorting
+→ shared-width calculation
+→ candidate formatting
+#+end_example
+
+Calculate each displayed value at most once per presentation row.
+
+Do not call the general column extractor again during width calculation or candidate formatting.
+
+** Calculate widths from cached cells
+
+Calculate final shared widths from cached display widths.
+
+For ~(fixed N)~:
+
+- use ~N~ directly
+- do not scan cell widths to determine the column width
+- still calculate each cell once because its value is needed for display and filtering
+
+For ~(max N)~:
+
+- track the largest cached display width
+- stop updating the width accumulator once it reaches ~N~
+- continue preparing remaining cells because they are still required as candidates
+
+For ~auto~:
+
+- inspect all cached display widths
+- preserve exact existing behaviour
+- do not estimate or sample
+
+Avoid creating a temporary list of all widths before reducing it.
+
+Do not use a pattern such as:
+
+#+begin_src emacs-lisp
+(apply #'max
+       (mapcar #'string-width values))
+#+end_src
+
+Update width accumulators directly while rows are prepared or through one allocation-free pass over cached cells.
+
+** Format every candidate exactly once
+
+Vulpea constructs each completion candidate once:
+
+#+begin_src emacs-lisp
+(cons (vulpea-select-describe note) note)
+#+end_src
+
+Follow the same principle.
+
+After final shared widths are known, build one complete completion string per presentation row.
+
+The candidate contains:
+
+- truncated and padded column text
+- faces
+- searchable column values
+- an invisible unique identity where required
+- a direct reference to the original result
+- row-expansion metadata where applicable
+
+Do not:
+
+- rebuild candidates during filtering
+- rebuild candidates during redisplay
+- recalculate columns in an annotation function
+- recalculate columns in an affixation function
+- recalculate result metadata through completion callbacks
+
+Filtering must operate on already prepared candidate strings.
+
+All configured visible values must remain searchable.
+
+The internal uniqueness component must not be visible and must not meaningfully affect filtering.
+
+** Keep the completion representation simple
+
+Use an eager representation comparable to:
+
+#+begin_example
+formatted candidate string → original result
+#+end_example
+
+Prefer attaching the original result and row metadata directly to the candidate through text properties when this remains compatible with standard completion and Embark.
+
+For example, the equivalent of:
+
+#+begin_src emacs-lisp
+(get-text-property 0 'org-files-db-result candidate)
+#+end_src
+
+is preferable to repeatedly searching a large association list.
+
+Avoid a lookup implementation such as:
+
+#+begin_src emacs-lisp
+(cdr (assoc selected candidates))
+#+end_src
+
+for large result collections.
+
+A linear lookup through 10,000 candidates must not occur during:
+
+- preview
+- redisplay
+- selection
+- Embark actions
+- Embark export
+
+The selected representation must support:
+
+- identical visible candidate text
+- stable individual identity
+- direct access to the original result
+- row-expansion metadata
+- standard completion
+- Embark actions
+- Embark export
+
+** Cache sanitized faces
+
+Do not call ~face-attribute~ for every displayed cell.
+
+Create a presentation-local cache:
+
+#+begin_src emacs-lisp
+(make-hash-table :test #'eq)
+#+end_src
+
+For each distinct source face:
+
+- sanitize it once
+- cache the resulting property list
+- reuse it for every matching cell
+
+Typical faces include:
+
+- ~org-todo~
+- ~org-done~
+- ~org-priority~
+- ~org-tag~
+- ~org-date~
+- ~org-level-1~ through ~org-level-8~
+
+Use a presentation-local cache so later invocations observe theme changes.
+
+Do not globally cache complete formatted candidates or cells.
+
+** Reduce temporary allocation
+
+Avoid unnecessary temporary objects in hot paths.
+
+In particular:
+
+- do not create a list of all cell widths before reducing it
+- do not repeatedly derive a file name from the same path
+- do not repeatedly join the same outline components
+- do not repeatedly format the same tags
+- do not repeatedly convert the same scalar value to text
+- do not rebuild searchable strings during filtering
+- do not repeatedly sanitize the same face
+- do not repeatedly inspect column property lists
+- do not allocate strings inside sort comparison functions
+- do not copy result objects solely for presentation
+
+Use vectors or compact structs for fixed-size cell collections if benchmarks show a measurable advantage.
+
+Prefer understandable code over speculative micro-optimization.
+
+** Completion frontend comparison
+
+Benchmark the same completely prepared candidate collection with:
+
+- standard ~completing-read~
+- ~consult--read~ when Consult is available
+
+Begin this benchmark only after all candidate strings have been constructed.
+
+This separates presentation-preparation cost from completion-frontend initialization and filtering cost.
+
+When testing Consult:
+
+- pass already formatted candidate strings
+- do not perform column formatting through annotations
+- do not perform result lookup through repeated linear ~assoc~
+- disable Consult sorting when CLI or configured result order is authoritative
+- preserve duplicate candidates through their internal identity
+- do not enable previews during the core performance benchmark
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(consult--read
+ candidates
+ :sort nil
+ ...)
+#+end_src
+
+Vulpea uses:
+
+#+begin_src emacs-lisp
+:sort t
+#+end_src
+
+because its note selector allows Consult to control ordering.
+
+Do not copy this behaviour for ~org-files-db~ when the authoritative order comes from:
+
+- ~orgfdb~
+- search relevance
+- configured sorting
+- row expansion
+
+Do not add Consult as a requirement for normal query completion merely for performance reasons.
+
+Consult integration remains optional.
+
+The implementation must remain fast with standard completion.
+
+** Preserve prepared ordering
+
+Completion must preserve the order established before the minibuffer opens.
+
+This may be:
+
+- CLI order
+- search relevance order
+- configured result sorting
+- expanded-row sorting
+
+Use identity sorting metadata where necessary.
+
+Do not let the completion framework alphabetically reorder candidates unless explicitly requested by a future user option.
+
+Candidate filtering must not modify the authoritative result order.
+
+** Profiling and benchmark helpers
+
+Add an internal helper that prepares results without opening the minibuffer.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(org-files-db--benchmark-presentation
+ results
+ columns
+ &rest options)
+#+end_src
+
+Return or report timings for:
+
+- column normalization
+- result-value extraction
+- row construction
+- sort-key extraction
+- sorting
+- width calculation
+- face preparation
+- candidate formatting
+- total preparation
+
+Also provide a way to benchmark already prepared candidates with the supported completion frontends.
+
+Keep benchmark helpers internal.
+
+Document how to profile a real invocation with:
+
+#+begin_example
+M-x profiler-start
+M-x profiler-report
+#+end_example
+
+Where practical, use repeated measurements rather than one run and report:
+
+- minimum
+- median
+- maximum
+- garbage collections
+
+** Preserve synchronous execution
+
+Keep the public interface synchronous:
+
+#+begin_src emacs-lisp
+(org-files-db-query QUERY COLUMNS &optional ACTION ...)
+#+end_src
+
+The command continues to:
+
+- invoke ~orgfdb~
+- wait for the complete response
+- parse all results
+- prepare all candidates
+- open completion
+- call the selected action
+
+Do not add:
+
+- ~org-files-db-query-async~
+- an ~:async~ view option
+- background completion appearing later
+- Emacs Lisp worker threads
+- duplicate ~orgfdb~ processes
+- chunked UI updates
+- lazy candidate formatting
+- streaming requirements
+- pagination requirements
+
+Reconsider these approaches only if the optimized eager pipeline remains insufficient after measurement.
+
+** Shared presentation pipeline
+
+Use one presentation implementation for:
+
+- heading queries
+- file queries
+- link queries
+- one-shot search
+- query views
+- search views
+- Embark export
+- dynamic-block rendering where applicable
+- row-expanded tags, properties, and keywords
+- configured sorting
+
+Do not keep separate old and optimized presentation implementations.
+
+Views and dynamic blocks continue to delegate through the normal query and search interfaces.
+
+** Embark and actions
+
+Optimization must not change externally visible behaviour.
+
+- Selecting a candidate calls the configured action with the original result.
+- Embark actions receive the correct original result.
+- ~embark-export~ preserves the currently filtered and prepared candidate order.
+- Duplicate visible candidates remain individually selectable.
+- Insert-link actions continue to work.
+- Follow-link actions continue to work.
+- Rename actions continue to work.
+- Result configuration context remains available.
+- Row-expanded candidates retain original result and row metadata.
+
+Embark export must not reconstruct query results from candidate text.
+
+** Implementation plan
+
+Implement and measure in this order:
+
+1. Add benchmarks for the current implementation.
+2. Separate CLI, JSON, presentation, and completion timings.
+3. Benchmark standard completion and Consult using already prepared candidates.
+4. Normalize column specifications once.
+5. Extract only required result-level values.
+6. Build presentation rows with cached cell strings and display widths.
+7. Calculate shared widths from cached cells.
+8. Format every candidate once.
+9. Attach result identity and row metadata without linear lookup.
+10. Cache sanitized faces per presentation.
+11. Remove temporary allocation identified by profiling.
+12. Integrate row expansion with the same presentation-row structure.
+13. Integrate sorting using cached logical values.
+14. Benchmark alists and hash tables using the complete pipeline.
+15. Change JSON representation only when justified by results.
+16. Remove the previous duplicate presentation path.
+17. Run all regression tests.
+18. Record before-and-after benchmark results.
+
+Do not combine speculative optimizations before recording the baseline.
+
+** Acceptance criteria
+
+- The public query interface remains synchronous.
+- No additional asynchronous query command is introduced.
+- A query returning approximately 10,000 headings opens completion substantially faster than before.
+- Filtering after completion opens remains effectively instant.
+- Every displayed column value is calculated at most once per presentation row.
+- Frequently reused result-level values are extracted at most once where practical.
+- Width calculation reuses cached display widths.
+- Candidate formatting reuses cached cell strings.
+- Every completion candidate is formatted exactly once.
+- Completion filtering does not invoke result extraction or column formatting.
+- Fixed-width columns do not perform unnecessary width comparisons.
+- Maximum-width accumulators stop updating after reaching their cap.
+- Automatic widths preserve exact existing behaviour.
+- Sanitized face attributes are calculated once per distinct face and presentation.
+- No repeated linear lookup through all candidates occurs during selection, preview, or export.
+- All configured column values remain searchable.
+- Prepared result order is preserved.
+- Duplicate visible candidates remain individually selectable.
+- Result actions receive the original result object.
+- Embark export retains original result and row metadata.
+- Row expansion uses the same cached presentation-row structure.
+- Sorting compares cached logical values rather than formatted strings.
+- Alist and hash-table JSON representations are benchmarked before changing the parser.
+- Standard completion remains supported without Consult.
+- Tests cover cached values, width modes, face caching, duplicate candidates, order preservation, actions, Embark metadata, row metadata, sorting metadata, non-ASCII values, Unicode display widths, and truncation.
+- Benchmarks document before-and-after results for approximately 1,000 and 10,000 rows.
+
+ * TODO Add generation-aware asynchronous pre-caching for predefined views
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Allow selected predefined views in the Emacs Lisp package to keep a prepared in-memory completion cache that is refreshed asynchronously with ~async.el~ whenever the committed ~orgfdb~ index state changes.
+
+The Rust CLI now provides:
+
+- a stable database identity
+- a monotonic committed generation
+- a persistent affected-file journal
+- a lightweight status command
+- a changes-since command
+- file-restricted structural queries
+
+The Emacs cache must use ~database_id~ and ~generation~ as the authoritative freshness signal.
+
+For patch-safe structural query views, use the affected-file journal to update only the portions of the complete cached view that belong to changed files.
+
+For search views and query views that are not safely patchable, rebuild the complete view after a generation change.
+
+Do not use a short time-based maximum age as the primary cache-invalidating mechanism.
+
+A cached view remains current while:
+
+#+begin_example
+cached database_id = current database_id
+and
+cached generation = current generation
+#+end_example
+
+** Scope
+
+This task belongs to the Emacs Lisp package.
+
+It does not modify the Rust indexing implementation except where a genuine public-contract defect is discovered.
+
+Pre-caching is optional and applies only to predefined query and search views.
+
+Direct calls to:
+
+#+begin_src emacs-lisp
+(org-files-db-query ...)
+(org-files-db-search ...)
+#+end_src
+
+remain uncached and always execute a fresh CLI operation.
+
+Views without pre-caching retain their existing synchronous fresh behaviour.
+
+** Available Rust interfaces
+
+*** Status command
+
+Use:
+
+#+begin_src sh
+orgfdb status \
+  --config ~/memento/orgfdb-config.toml \
+  --format json
+#+end_src
+
+The response contains at least:
+
+#+begin_src json
+{
+  "schema_version": 12,
+  "database_id": "74f470e2-0354-4ed8-b2e0-e0647e0c706a",
+  "generation": 1842,
+  "last_changed_at": "2026-08-05T18:42:12Z"
+}
+#+end_src
+
+The exact schema version is database-defined and must not be hard-coded in Emacs.
+
+~last_changed_at~ changes only when the committed generation advances.
+
+Do not refer to this field as ~last_indexed_at~.
+
+*** Changes-since command
+
+Use:
+
+#+begin_src sh
+orgfdb changes \
+  --config ~/memento/orgfdb-config.toml \
+  --database-id 74f470e2-0354-4ed8-b2e0-e0647e0c706a \
+  --since-generation 1840 \
+  --format json
+#+end_src
+
+The response contains conceptually:
+
+#+begin_src json
+{
+  "schema_version": 12,
+  "database_id": "74f470e2-0354-4ed8-b2e0-e0647e0c706a",
+  "from_generation": 1840,
+  "to_generation": 1842,
+  "oldest_available_generation": 0,
+  "cache_action": "patch",
+  "complete": true,
+  "reason": null,
+  "upsert_files": [
+    "/home/user/notes/a.org",
+    "/home/user/notes/b with spaces.org"
+  ],
+  "deleted_files": [
+    "/home/user/notes/old.org"
+  ]
+}
+#+end_src
+
+Supported ~cache_action~ values are:
+
+#+begin_example
+unchanged
+patch
+rebuild
+#+end_example
+
+Interpret them as follows:
+
+- ~unchanged~ means the existing cached view remains current.
+- ~patch~ means the complete cached view may be updated using the exact affected-file sets.
+- ~rebuild~ means the complete view must be rerun.
+
+Stable rebuild reasons may include:
+
+#+begin_example
+database-id-changed
+history-unavailable
+full-invalidation
+#+end_example
+
+Do not infer patchability from the presence of file paths alone.
+
+Obey ~cache_action~.
+
+*** File-restricted structural queries
+
+A patch-safe cached query view can rerun the same structural query for only the ~upsert_files~ paths:
+
+#+begin_src sh
+orgfdb query \
+  --config ~/memento/orgfdb-config.toml \
+  --restrict-files-json - \
+  '(headings (not (done)))'
+#+end_src
+
+The command reads one JSON array of exact persisted canonical paths from standard input:
+
+#+begin_src json
+[
+  "/home/user/notes/a.org",
+  "/home/user/notes/b with spaces.org"
+]
+#+end_src
+
+An empty array returns an empty result set.
+
+Duplicate paths are ignored.
+
+Unknown paths return no rows.
+
+The restriction is an additional owning-file condition.
+
+It does not rewrite or weaken the original user query.
+
+It applies to structural query targets including:
+
+- headings
+- links
+- files
+- synthetic root rows
+
+Existing sorting and machine-readable result shapes remain unchanged.
+
+Every machine-readable structural result exposes its owning canonical path independently of displayed columns.
+
+Use the existing ownership fields:
+
+- file rows expose ~path~ and ~location.file_path~
+- heading and root rows expose ~location.file_path~
+- link rows expose ~location.file_path~
+
+Do not force users to display the file path as a visible column merely to support cache maintenance.
+
+Do not use file-restricted execution for ~search~ views in this task.
+
+** View configuration
+
+Allow views to opt into pre-caching:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("all-headings"
+         :command query
+         :pre-cache t
+         :query (headings)
+         :columns
+         ((todo-keyword)
+          (title)
+          (file-name :width (max 30))))
+
+        ("open-tasks"
+         :command query
+         :pre-cache t
+         :query (headings (not (done)))
+         :sort
+         ((priority :direction asc :missing last)
+          (outline-path :direction asc))
+         :columns
+         ((todo-keyword)
+          (priority :width (fixed 3))
+          (outline-path :width (max 80))))
+
+        ("project-search"
+         :command search
+         :pre-cache nil
+         :expression "org-files-db"
+         :scope title
+         :columns
+         ((title)
+          (file-name :width (max 30))))))
+#+end_src
+
+Supported values:
+
+- ~nil~ disables pre-caching.
+- ~t~ enables pre-caching using package defaults.
+
+Avoid adding many per-view cache options initially.
+
+Generation tracking makes short ~:max-age~ values unnecessary.
+
+A future fallback age may be added only for environments where index-state checks are unavailable.
+
+** Cache model
+
+A cache belongs to one complete predefined view.
+
+It is not one independent cache per file.
+
+Each cached result row nevertheless retains its owning canonical file path so affected portions can be replaced safely.
+
+A cache entry contains conceptually:
+
+#+begin_example
+cache key
+database id
+index generation
+creation time
+last-used time
+view definition
+effective configuration context
+original result objects
+prepared logical rows
+formatted completion candidates
+owning file path per row
+result count
+estimated memory cost
+refresh state
+refresh token
+#+end_example
+
+The prepared data must retain:
+
+- original result objects
+- effective configuration context
+- duplicate candidate identity
+- row-expansion metadata
+- configured sorting order
+- owning canonical file path
+- Embark metadata
+- action metadata
+
+Do not cache only visible candidate strings if that would prevent actions or exports from receiving the original result.
+
+Do not retain the original raw JSON text after parsing.
+
+Avoid storing duplicate copies of large values where the presentation pipeline can safely share them.
+
+** Cache key
+
+The cache key must include every input that can change the result set or its presentation.
+
+At minimum:
+
+- view name
+- command type
+- query or search expression
+- search scope
+- effective configuration file
+- effective database identity
+- columns
+- row source
+- sort specification
+- inferred includes
+- relevant outline-path defaults
+- relevant truncation defaults
+- cache-format version
+
+Do not key only by view name.
+
+Changing any relevant view definition or global presentation option must produce a different cache key or invalidate the existing entry.
+
+The generation does not need to be embedded in the logical view-definition key if it is stored and checked separately on the cache entry.
+
+** Shared index-state API
+
+Provide one shared internal function:
+
+#+begin_src emacs-lisp
+(org-files-db-views--read-index-state config-file)
+#+end_src
+
+Return at least:
+
+#+begin_src emacs-lisp
+(:schema-version 12
+ :database-id "74f470e2-0354-4ed8-b2e0-e0647e0c706a"
+ :generation 1842
+ :last-changed-at "2026-08-05T18:42:12Z")
+#+end_src
+
+Use the existing shared CLI process layer and effective configuration resolution.
+
+Do not duplicate process execution or configuration resolution inside the cache implementation.
+
+Treat malformed or missing index-state output as an actionable error.
+
+Do not silently synthesize a database ID or generation.
+
+** Shared changes API
+
+Provide one shared internal function conceptually equivalent to:
+
+#+begin_src emacs-lisp
+(org-files-db-views--read-changes
+ config-file
+ cached-database-id
+ cached-generation)
+#+end_src
+
+Return a normalized Lisp representation such as:
+
+#+begin_src emacs-lisp
+(:database-id "74f470e2-0354-4ed8-b2e0-e0647e0c706a"
+ :from-generation 1840
+ :to-generation 1842
+ :cache-action patch
+ :complete t
+ :reason nil
+ :upsert-files
+ ("/home/user/notes/a.org"
+  "/home/user/notes/b with spaces.org")
+ :deleted-files
+ ("/home/user/notes/old.org"))
+#+end_src
+
+Validate:
+
+- required fields
+- integer generations
+- supported cache actions
+- string file paths
+- deterministic absence versus empty arrays
+- expected database identity
+
+Do not independently derive a file delta from SQLite modification times.
+
+** Freshness semantics
+
+*** Same database ID and generation
+
+The cache represents the current known committed index state.
+
+Use it immediately.
+
+Do not execute the query or search again.
+
+Do not parse JSON again.
+
+Do not rebuild presentation rows.
+
+*** Same database ID and newer generation
+
+The database changed after the cache was prepared.
+
+For a patch-safe structural query view:
+
+- call ~orgfdb changes~
+- obey its ~cache_action~
+- patch or rebuild as instructed
+
+For a search view or non-patch-safe query view:
+
+- rebuild the complete view asynchronously
+
+*** Different database ID
+
+The database was replaced, recreated, or the effective configuration now points to another database.
+
+Discard the incompatible entry.
+
+Rebuild the complete view.
+
+Do not attempt to apply file deltas from the old database identity.
+
+*** Status unavailable
+
+When current index state cannot be read:
+
+- do not claim the cache is current
+- preserve the last successful entry for diagnostics
+- do not silently present it as fresh
+- allow a forced synchronous execution
+- report the status failure concisely
+
+The initial implementation should fall back to a fresh synchronous view execution when the view is opened.
+
+Background retries must be rate-limited.
+
+** Patch-safe query views
+
+A structural query view may be patched only when all of the following are true:
+
+- its command is ~query~
+- every result row has one owning canonical file path
+- the cached result contains the complete untruncated result set
+- the view has no result limit
+- the view has no offset
+- the view has no top-N semantics
+- its result semantics do not depend on corpus-wide ranking
+- its sorting can be reapplied deterministically after merging
+- ~orgfdb changes~ returns ~cache_action = patch~
+- the complete affected-file history is available
+
+Do not attempt patch refresh when any condition is uncertain.
+
+Fall back to a complete rebuild.
+
+Search views are never patch-safe in this task.
+
+Query views using limit, offset, truncation, or global aggregates are not patch-safe.
+
+** Applying a query-view patch
+
+Given:
+
+#+begin_example
+cached generation = G0
+changes to generation = G1
+upsert_files = U
+deleted_files = D
+#+end_example
+
+Apply the patch as follows:
+
+1. Remove all cached rows whose owning canonical path is in ~U~.
+2. Remove all cached rows whose owning canonical path is in ~D~.
+3. Rerun the identical structural query restricted to ~U~.
+4. Parse the restricted result using the normal shared result pipeline.
+5. Merge the restricted result rows into the remaining cached rows.
+6. Reapply row expansion where required.
+7. Recalculate sort keys where required.
+8. Sort the complete merged result using the configured view sort.
+9. Recalculate shared column widths for the complete merged result.
+10. Reformat completion candidates where shared widths or row order require it.
+11. Publish the result for generation ~G1~ only after a final generation check.
+
+Deleted paths are never passed to ~--restrict-files-json~.
+
+An empty ~upsert_files~ list skips the restricted query and only removes deleted rows.
+
+Do not mutate the currently published cache entry in place while constructing a replacement.
+
+Build a new candidate entry and publish it atomically in the main Emacs process.
+
+** Full rebuild cases
+
+Rebuild the complete view when:
+
+- ~cache_action = rebuild~
+- the database ID changed
+- history is unavailable
+- a full-invalidation generation occurred
+- the command is ~search~
+- the query view is limited, offset, or truncated
+- result rows lack stable owning paths
+- sorting cannot be reapplied deterministically
+- the previous cache entry is incomplete
+- patch construction or validation fails
+
+Correctness takes priority over avoiding a full query.
+
+** Asynchronous cache construction
+
+Use ~async.el~ to build cache replacements in a separate Emacs process.
+
+The worker performs the expensive path:
+
+#+begin_example
+load required org-files-db modules
+→ resolve the effective view
+→ read the expected index state
+→ run a full or restricted orgfdb query/search
+→ parse JSON
+→ prepare logical result rows
+→ calculate sort keys
+→ sort rows
+→ calculate shared widths
+→ format completion candidates where serializable
+→ return a serializable prepared replacement
+#+end_example
+
+For patch refresh, the worker may receive the existing cache's serializable logical rows together with:
+
+- ~upsert_files~
+- ~deleted_files~
+- expected database ID
+- expected target generation
+- current view-definition token
+
+Alternatively, the main process may remove and merge logical rows after receiving the restricted worker result.
+
+Choose the design that avoids transferring unnecessary duplicated data while keeping the main process responsive.
+
+Do not implement a second independent query or formatting pipeline for cache workers.
+
+The worker must reuse shared query, result-access, row-expansion, sorting, width, and candidate-preparation functions.
+
+Do not use Emacs Lisp threads.
+
+** Serializable worker results
+
+Ensure all values crossing the ~async.el~ boundary are readable Lisp data.
+
+Do not return:
+
+- buffers
+- processes
+- markers
+- overlays
+- windows
+- closures
+- hash tables with non-readable tests or keys unless converted safely
+- non-readable opaque objects
+
+Use plain serializable data such as:
+
+- strings
+- numbers
+- symbols
+- lists
+- vectors
+- alists
+- plists
+- explicitly serializable structs where verified
+
+Recreate process-local or theme-sensitive state in the main Emacs process where necessary.
+
+If text properties or face objects do not transfer safely or efficiently, return logical cells and apply final face properties in the main process.
+
+Do not assume every current presentation object can pass through ~async.el~ unchanged.
+
+** Generation-safe publication
+
+Every worker records:
+
+#+begin_example
+database_id
+source generation
+target generation
+cache key
+view-definition token
+refresh token
+#+end_example
+
+Before publishing any worker result, the main process reads current index state again.
+
+Publish only when:
+
+#+begin_example
+worker database_id = current database_id
+and
+worker target generation = current generation
+and
+worker cache key = current cache key
+and
+worker view-definition token = current view-definition token
+and
+worker refresh token = current refresh token
+#+end_example
+
+If the generation changed during the worker run:
+
+- discard the worker result
+- preserve the previous entry as stale
+- request changes from the worker target generation to the new current generation
+- enqueue another patch or rebuild
+
+An older worker must never overwrite a newer cache entry.
+
+Changing a view definition must obsolete callbacks created for the previous definition even if database generation is unchanged.
+
+** Opening a pre-cached view
+
+*** Valid cache available
+
+When database ID and generation match:
+
+- use the prepared candidates immediately
+- do not run ~orgfdb query~ or ~orgfdb search~
+- do not parse JSON
+- do not rebuild rows
+- preserve prepared order and metadata
+
+*** No cache available
+
+Use the normal synchronous fresh-view path.
+
+After successful preparation:
+
+- open completion
+- publish the prepared result as the initial cache
+- record current database ID and generation
+- avoid launching a duplicate async worker
+
+The user must not receive an empty result because idle pre-caching has not completed.
+
+*** Stale cache and refresh running
+
+Prefer correctness.
+
+Do not silently present a cache known to represent an older generation.
+
+Use the normal synchronous fresh path when the user opens the view unless an explicit stale-while-refresh option is added later.
+
+*** Cache refresh failed
+
+Keep the previous entry for diagnostics.
+
+Do not mark it current.
+
+Fall back to the normal synchronous path when the user opens the view.
+
+** Force refresh
+
+Allow predefined view commands to bypass the cache:
+
+#+begin_src emacs-lisp
+(org-files-db-views-query
+ "all-headings"
+ :force-refresh t)
+
+(org-files-db-views-search
+ "project-search"
+ :force-refresh t)
+#+end_src
+
+With ~:force-refresh t~:
+
+- ignore the current prepared cache
+- obsolete an in-progress refresh for the previous token
+- execute the complete view synchronously
+- do not use a partial patch
+- use current effective configuration
+- read current database state
+- prepare fresh candidates
+- open completion
+- replace the cache only after successful preparation and final generation verification
+
+Interactive view commands use a prefix argument for the same behaviour.
+
+Direct ~org-files-db-query~ and ~org-files-db-search~ remain uncached and require no force-refresh option.
+
+** SQLite file monitoring
+
+Use file notifications only as a wake-up signal to check authoritative Rust state.
+
+Watch the directory containing the configured SQLite database where that path can be obtained reliably.
+
+Account for:
+
+#+begin_example
+database.sqlite
+database.sqlite-wal
+database.sqlite-shm
+#+end_example
+
+Use:
+
+#+begin_src emacs-lisp
+(file-notify-add-watch ...)
+#+end_src
+
+where available.
+
+Do not invalidate a cache solely because a SQLite-related file changed.
+
+Use:
+
+#+begin_example
+matching file event
+→ debounce
+→ read orgfdb status
+→ compare database_id and generation
+→ call orgfdb changes where applicable
+→ enqueue patch or rebuild
+#+end_example
+
+A WAL checkpoint or unrelated SQLite activity must not cause cache reconstruction when generation is unchanged.
+
+** Determining the database path
+
+Use one shared mechanism to determine the effective database path for a configuration.
+
+Preferred approaches:
+
+- a Rust status or configuration-inspection field exposing the canonical database path
+- an existing shared Emacs configuration-resolution function
+- one narrowly scoped parser if no CLI contract exists
+
+Do not independently parse the same TOML configuration in several Emacs modules.
+
+If the current Rust status response does not expose the database path, file notification support may initially be deferred.
+
+Generation checks can still occur:
+
+- when a predefined view is opened
+- after known package actions
+- from an idle polling timer
+- from explicit refresh commands
+
+Do not guess the SQLite path.
+
+** Event debouncing
+
+SQLite writes may produce several notifications for one logical transaction.
+
+Debounce status checks per effective configuration or database.
+
+Conceptually:
+
+#+begin_example
+first relevant event
+→ schedule one short timer
+
+additional events before timer fires
+→ keep the existing timer
+
+timer fires
+→ read status once
+→ compare generation once
+#+end_example
+
+Do not launch one status process or cache worker per filesystem event.
+
+** Initial pre-caching
+
+Views with ~:pre-cache t~ may be populated while Emacs is idle.
+
+Use an idle timer after package initialization.
+
+Do not block startup.
+
+Initially allow only one async worker at a time.
+
+Process views in configuration order.
+
+Skip a view when:
+
+- a valid cache already exists
+- a worker for the same cache key is running
+- the view previously exceeded automatic cache limits
+- the effective configuration is unavailable
+- index state is unavailable
+- the view no longer exists
+- ~:pre-cache~ is no longer enabled
+
+** Refresh after generation changes
+
+When one database generation changes:
+
+1. Identify cache entries using the same database identity or effective configuration.
+2. Mark those entries stale.
+3. For each configured pre-cached view:
+   - use ~changes~ for patch-safe query views
+   - enqueue a patch when ~cache_action = patch~
+   - retain the entry when ~cache_action = unchanged~
+   - enqueue a full rebuild when ~cache_action = rebuild~
+   - enqueue a full rebuild for search and non-patch-safe views
+4. Avoid duplicate workers.
+5. Preserve configuration order where practical.
+
+A generation change in one database must not invalidate caches belonging to another database.
+
+** Package-controlled source mutations
+
+When the Emacs package performs actions that may change indexed Org data, such as:
+
+- renaming a file
+- inserting an ID
+- inserting a CUSTOM_ID
+- saving a modified target file
+
+mark related cache entries as potentially stale immediately.
+
+Do not attempt to construct a cache patch from unsaved or not-yet-indexed source changes.
+
+Wait until the Rust index generation advances.
+
+During the delay between source modification and indexing commit:
+
+- the current database still represents its previous committed generation
+- direct CLI queries remain fresh relative to that committed database
+- a pre-cached view must not be described as reflecting the newly edited source
+- generation-based refresh begins only after the committed generation changes
+
+** Multiple configurations and databases
+
+Different predefined views may use different configuration files and databases.
+
+Track independently:
+
+- current index state
+- database identity
+- watchers
+- debounce timers
+- cache entries
+- refresh queues
+- workers
+- failure backoff
+
+Do not assume one global database.
+
+Changing a view's ~:config-file~ must prevent reuse of a cache created for the previous configuration or database.
+
+** Memory safety
+
+Prepared caches for large views can consume substantial memory.
+
+Provide conservative limits:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-views-pre-cache-max-entries 3
+  "Maximum number of prepared view cache entries retained."
+  :type 'natnum
+  :group 'org-files-db)
+
+(defcustom org-files-db-views-pre-cache-max-results 10000
+  "Maximum number of result rows retained automatically for one view."
+  :type 'natnum
+  :group 'org-files-db)
+
+(defcustom org-files-db-views-pre-cache-max-total-results 20000
+  "Approximate maximum number of result rows retained across all view caches."
+  :type 'natnum
+  :group 'org-files-db)
+#+end_src
+
+A view exceeding the per-view result limit:
+
+- remains usable through the synchronous path
+- is not retained automatically
+- records that it was skipped for the current view definition and generation
+- is not retried repeatedly for the same state
+
+Use least-recently-used eviction where practical.
+
+Do not retain:
+
+- raw JSON
+- temporary process buffers
+- obsolete generations
+- duplicate full presentation representations
+- failed partial worker results
+- several generations of one view
+
+Do not run explicit garbage collection during normal interaction unless profiling proves it necessary.
+
+** Cache eviction
+
+Evict entries when:
+
+- the entry limit is exceeded
+- the total-result limit is exceeded
+- a view is removed
+- its definition changes
+- its cache key changes
+- its effective configuration changes
+- its database identity changes
+- the user clears it explicitly
+
+Prefer evicting the least recently used valid entry.
+
+Do not evict the entry currently being displayed merely to publish a background replacement.
+
+** Explicit cache commands
+
+Provide:
+
+#+begin_src emacs-lisp
+(org-files-db-views-refresh-cache VIEW)
+(org-files-db-views-refresh-all-caches)
+(org-files-db-views-clear-cache VIEW)
+(org-files-db-views-clear-all-caches)
+#+end_src
+
+Refresh commands use ~async.el~ by default.
+
+A prefix argument requests a complete synchronous refresh.
+
+Clearing a cache:
+
+- removes the prepared entry
+- obsoletes matching workers
+- does not modify the Rust database
+- does not alter the view's ~:pre-cache~ setting
+
+** Error handling
+
+A background status, changes, query, or worker failure must not crash the main Emacs process.
+
+Record:
+
+- view name
+- cache key
+- database ID
+- source and target generations
+- refresh type
+- start time
+- concise error
+- optional stderr details
+
+Do not publish partial results.
+
+Do not discard a previous successful entry solely because refresh failed.
+
+Do not present that previous entry as current.
+
+Avoid retrying a failing view after every file event.
+
+Apply failure backoff or wait for:
+
+- a distinct generation
+- a view-definition change
+- an explicit refresh
+
+Interactive forced refresh reports errors directly.
+
+** Completion behaviour
+
+A cached or patched view must behave identically to a freshly prepared view.
+
+It must preserve:
+
+- standard completion
+- immediate local filtering
+- authoritative row order
+- duplicate visible candidates
+- original result metadata
+- owning file metadata
+- row-expansion metadata
+- configured actions
+- Embark actions
+- Embark export
+- effective configuration context
+
+Completion must not rerun the query or formatter merely because the input came from a cache.
+
+Theme-dependent faces may be reapplied in the main Emacs process after async publication.
+
+** Tests
+
+*** Status and changes parsing
+
+Add tests covering:
+
+- valid status output
+- valid unchanged response
+- valid patch response
+- valid rebuild response
+- database-ID mismatch
+- future generation error
+- malformed status JSON
+- malformed changes JSON
+- unsupported cache action
+- missing required fields
+- Unicode and whitespace paths
+- empty affected-file arrays
+
+*** Cache freshness
+
+Add tests covering:
+
+- ~:pre-cache nil~
+- ~:pre-cache t~
+- valid cache reuse for equal database ID and generation
+- stale cache for newer generation
+- incompatible cache for changed database ID
+- missing cache synchronous fallback
+- synchronous result publication into cache
+- force refresh
+- stale entry never reported as current
+
+*** Patch refresh
+
+Add tests covering:
+
+- one upsert file
+- several upsert files
+- one deleted file
+- upsert plus delete
+- empty upsert list
+- duplicate paths
+- restricted query JSON sent through stdin
+- old rows removed by owning canonical path
+- deleted rows not requeried
+- restricted results merged into the complete view
+- configured sorting reapplied
+- shared widths recalculated
+- duplicate visible candidates retained
+- original result metadata retained
+- synthetic root rows patched correctly
+- headings patched correctly
+- links patched correctly
+- files patched correctly
+- patched result equals a fresh complete query result
+
+*** Full-rebuild fallback
+
+Add tests covering:
+
+- search view
+- limited query view
+- offset query view
+- truncated cache
+- full-invalidation response
+- history-unavailable response
+- database-ID change
+- missing ownership path
+- patch validation failure
+
+*** Async lifecycle
+
+Add tests covering:
+
+- idle async pre-caching
+- one-worker concurrency limit
+- duplicate worker suppression
+- async full rebuild
+- async patch refresh
+- worker success
+- worker failure
+- unserializable worker-data rejection
+- generation recheck before publication
+- patch result discarded after generation changes
+- full result discarded after generation changes
+- result discarded after view definition changes
+- result discarded after force refresh
+- obsolete worker cannot overwrite newer cache
+
+*** File notification and polling
+
+Add tests covering:
+
+- SQLite main-file notification
+- WAL notification
+- SHM notification
+- event debouncing
+- unchanged generation causing no refresh
+- changed generation causing changes lookup
+- one database not invalidating another
+- fallback polling where database path is unavailable
+
+*** Cache management
+
+Add tests covering:
+
+- explicit async refresh
+- explicit synchronous refresh
+- cache clear
+- clear-all
+- LRU eviction
+- per-view result limit
+- total-result limit
+- oversized view remains synchronously usable
+- raw JSON cleanup
+- temporary process-buffer cleanup
+- obsolete-generation cleanup
+- failure backoff
+
+*** Presentation compatibility
+
+Add tests covering:
+
+- duplicate candidates
+- original result metadata
+- owning canonical path
+- row-expansion metadata
+- sort order
+- shared widths
+- actions
+- Embark actions
+- Embark export
+- non-ASCII values
+- theme-sensitive presentation reconstruction
+
+Use stubbed status output, changes output, file-notify events, CLI processes, and ~async.el~ workers for deterministic tests.
+
+** Performance measurements
+
+Measure:
+
+- cold synchronous view opening
+- first complete cache publication
+- first patch publication
+- async full-worker duration
+- async restricted-query duration
+- worker-result transfer time
+- status-check time
+- changes-check time
+- file-event debounce overhead
+- warm cache lookup
+- warm completion initialization
+- retained memory for approximately 1,000 rows
+- retained memory for approximately 10,000 rows
+- patching a small number of files in a large cached view
+- full rebuild of the same view
+
+Compare:
+
+#+begin_example
+cold complete view
+warm unchanged view
+patch-safe generation update
+forced complete refresh
+search-view generation update
+full-invalidation update
+#+end_example
+
+A warm valid cache must skip:
+
+- query or search execution
+- JSON parsing
+- row expansion
+- sorting
+- width calculation
+- candidate formatting
+
+A successful patch should avoid querying unaffected files but may still need to:
+
+- merge complete logical rows
+- reapply complete sorting
+- recalculate shared widths
+- reformat candidates
+
+Do not claim that a patch has constant cost relative to total result count.
+
+** Documentation
+
+Document pre-caching as an advanced opt-in feature.
+
+Explain:
+
+- it is available only for predefined views
+- the implementation belongs to the Emacs Lisp package
+- cache construction uses ~async.el~
+- Rust ~database_id~ and ~generation~ determine freshness
+- ~last_changed_at~ is informational
+- ~status~ checks the current state
+- ~changes~ provides authoritative affected-file deltas
+- patch-safe structural query views use file-restricted reruns
+- the cache remains one complete view cache
+- search views always rerun completely after generation changes
+- limited, offset, and truncated query views rerun completely
+- SQLite file notifications are wake-up signals only
+- direct query and search calls remain uncached
+- a prefix argument forces a complete fresh view
+- source edits are not visible until the Rust watcher commits them
+- large cached views may consume significant memory
+- conservative limits apply
+- users can refresh and clear caches manually
+
+Do not describe cached results as synchronized directly with unsaved Org buffers.
+
+** Non-goals
+
+This task does not implement:
+
+- Rust schema or generation tracking
+- Rust affected-file journalling
+- Rust status or changes commands
+- Rust file-restricted query execution
+- persistent Emacs caches across restarts
+- one independent cache per file
+- selective search-result refresh
+- partial FTS ranking refresh
+- stale-while-refresh presentation
+- automatic journal retention
+- row-level database journals
+- per-query dependency tracking in Rust
+- automatic proof that every arbitrary Emacs view is patch-safe
+
+** Implementation order
+
+1. Inspect the current predefined-view and presentation pipeline.
+2. Identify shared synchronous functions usable by async workers.
+3. Add shared status parsing and index-state reading.
+4. Add shared changes parsing and delta reading.
+5. Define deterministic cache keys and view-definition tokens.
+6. Add the in-memory cache-entry representation.
+7. Add ownership-path access for every structural result row.
+8. Add synchronous cache publication from normal view execution.
+9. Add valid-cache lookup to predefined view commands.
+10. Add ~:force-refresh~ and interactive prefix handling.
+11. Add patch-safety classification.
+12. Add restricted structural query process support using JSON stdin.
+13. Add pure logical-row removal, merge, and re-sort operations.
+14. Add cache-patch equivalence tests before async integration.
+15. Add explicit clear and refresh commands.
+16. Add conservative entry and result limits.
+17. Add ~async.el~ full-rebuild workers using shared functions.
+18. Add ~async.el~ patch workers or restricted-result workers.
+19. Add serializable worker-result validation.
+20. Add refresh tokens and generation-safe publication.
+21. Add idle initial pre-caching with one-worker concurrency.
+22. Add generation-change handling through status and changes.
+23. Add SQLite file monitoring where the canonical database path is available.
+24. Add event debouncing and fallback polling.
+25. Add package-controlled source-mutation staleness tracking.
+26. Add failure backoff and obsolete-worker cleanup.
+27. Add lifecycle, multi-database, and integration tests.
+28. Add performance and memory measurements.
+29. Document consistency, patching, fallback, and memory behaviour.
+30. Run byte compilation, linting, unit tests, integration tests, and package checks.
+
+** Acceptance criteria
+
+- The implementation is in the Emacs Lisp package.
+- Pre-caching is available only to predefined views that enable ~:pre-cache~.
+- Direct query and search calls remain uncached and fresh.
+- Cache construction uses ~async.el~.
+- A cache is current only for matching database ID and generation.
+- Short time-based expiry is not the primary invalidation mechanism.
+- ~orgfdb status~ is used for current-state checks.
+- ~orgfdb changes~ is used for authoritative change classification.
+- ~cache_action = unchanged~ retains the current cache.
+- ~cache_action = patch~ patches only eligible structural query views.
+- ~cache_action = rebuild~ causes a complete view refresh.
+- Patch refresh removes cached rows owned by all upsert and deleted paths.
+- Only upsert paths are requeried.
+- Restricted queries receive exact canonical paths through machine-safe JSON.
+- The original query expression is not rewritten or weakened.
+- Patched results preserve original objects, ownership metadata, actions, sorting, row expansion, widths, and completion behaviour.
+- A patched complete query view equals a fresh complete query result at the same generation.
+- Search views always rerun completely after generation changes.
+- Limited, offset, truncated, or otherwise unsafe query views rerun completely.
+- SQLite and WAL events trigger debounced state checks rather than direct invalidation.
+- A generation change invalidates only caches for the affected database.
+- Worker results are published only when database ID, generation, cache key, view token, and refresh token remain current.
+- Obsolete workers cannot overwrite newer entries.
+- Opening a missing or stale cache falls back to a correct synchronous path.
+- Interactive prefix arguments force a complete fresh synchronous view.
+- Multiple configuration files and databases are handled independently.
+- Entry and result limits prevent unbounded memory growth.
+- Oversized views remain usable synchronously.
+- Raw JSON, temporary buffers, failed results, and obsolete generations are not retained.
+- Background failures preserve previous successful entries without presenting them as current.
+- Tests cover unchanged, patch, rebuild, database replacement, async publication, restricted queries, file notifications, limits, force refresh, and stale-worker rejection.
+- Benchmarks document cold, warm, patched, and fully rebuilt behaviour for representative result sizes. 
+  
+* TODO Improve user-facing README documentation
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Rewrite the README as user-facing package documentation and document all supported columns, configuration options, commands, and result types.
+
+** Documentation style
+
+Write for users of the Emacs package rather than contributors or implementers.
+
+Remove or avoid internal terminology such as:
+
+- ~Query Model v0~
+- JSON result objects
+- UTF-8 byte locations
+- completion implementation details
+- names of internal completion categories
+- internal process handling
+- database identifiers unless they are directly useful to users
+
+Do not describe compatibility by listing completion frontends such as Vertico, Icomplete, or Fido.
+
+Instead, describe observable behaviour:
+
+- Queries are written as Emacs Lisp forms.
+- Results are displayed in the minibuffer.
+- Selecting a result opens its original file and location.
+- Result columns can be configured globally, per view, or per command.
+- Embark can export the currently displayed results to an Org buffer.
+- Consult provides the optional live-search interface.
+
+Keep implementation and architecture details in project or contributor documentation rather than the README.
+
+** Recommended structure
+
+Organize the README approximately as follows:
+
+- Overview
+- Requirements
+- Installation
+- Basic configuration
+- Querying
+- Searching
+- Result columns
+- Column widths and truncation
+- Predefined views
+- Result actions
+- Embark export
+- Dynamic blocks
+- Configuration reference
+- Development
+
+Start with a minimal working example before presenting advanced customization.
+
+** Basic configuration
+
+Document:
+
+#+begin_src emacs-lisp
+(setq org-files-db-executable "orgfdb")
+(setq org-files-db-config-file "~/org/org-files-db.toml")
+#+end_src
+
+Explain that:
+
+- ~org-files-db-executable~ may be a command name or executable path.
+- ~org-files-db-config-file~ defines the default ~orgfdb~ configuration.
+- Individual commands and views may override or disable the default configuration.
+- ~org-files-db-check-setup~ checks whether the executable and configuration work.
+
+Do not describe the shared process implementation.
+
+** Query documentation
+
+Introduce query forms through examples without referring to a query-model version:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (not (done)))
+ '((todo-keyword)
+   (priority :width (fixed 3))
+   (outline-path :width (max 80))
+   (file-name :width (max 30))))
+#+end_src
+
+Provide examples for:
+
+#+begin_src emacs-lisp
+'(headings (not (done)))
+'(links (status "broken"))
+'(files (tags "project"))
+#+end_src
+
+Refer users to the ~orgfdb~ query documentation for the complete query syntax instead of duplicating the complete query language in this README.
+
+** Column reference
+
+Document supported columns by result type.
+
+A column should only be listed as supported when it has a stable, meaningful value for that result type.
+
+Do not present arbitrary JSON property lookup as a supported public column API.
+
+*** Heading columns
+
+Document at least:
+
+- ~title~: heading title
+- ~todo-keyword~: TODO keyword
+- ~todo-type~: open or closed TODO classification
+- ~priority~: heading priority
+- ~outline-path~: heading hierarchy
+- ~tags~: heading tags
+- ~scheduled-raw~: scheduled timestamp
+- ~deadline-raw~: deadline timestamp
+- ~closed-raw~: closed timestamp
+- ~file-name~: source file name
+- ~file-path~: complete source file path
+- ~line-number~: source line
+
+Explain that some columns are empty when the corresponding Org metadata is absent.
+
+*** File columns
+
+Document at least:
+
+- ~file-title~: Org file title or file-derived title
+- ~file-name~: file name
+- ~file-path~: complete file path
+- ~tags~: file-level tags when available
+- ~line-number~: source line when available
+
+Synthetic root results returned by heading searches may use the file columns where appropriate.
+
+*** Link columns
+
+Document at least:
+
+- ~link-type~: Org link type
+- ~link-target~: authored link target
+- ~link-description~: authored link description
+- ~resolution-status~: indexed resolution state
+- ~source-outline-path~: hierarchy containing the link
+- ~target-outline-path~: hierarchy of the resolved link target
+- ~file-name~: source file containing the link
+- ~file-path~: complete source file path
+- ~line-number~: source line of the link
+
+Explain that:
+
+- ~source-outline-path~ describes where the link occurs.
+- ~target-outline-path~ describes the hierarchy of the resolved target.
+- ~target-outline-path~ is empty for unresolved, ambiguous, external, or unsupported targets.
+- A target pointing directly to a file has no heading hierarchy unless the file root is included.
+- The package automatically requests the additional source or target information required by configured columns.
+
+Do not document the ambiguous ~outline-path~ name as a link-result column.
+
+If it remains supported as a compatibility alias, document it only in a migration or compatibility note.
+
+*** Search-result columns
+
+Document at least:
+
+- ~title~: matched heading or file title
+- ~outline-path~: hierarchy of the matched result
+- ~file-name~: source file name
+- ~file-path~: complete source file path
+- ~line-number~: source line
+- ~rank~: search-result ranking value
+
+Explain that search results may represent either headings or file roots.
+
+*** Advanced columns
+
+Internal values such as byte positions, file IDs, and parent IDs should not appear in the main column reference.
+
+If they remain intentionally supported as a public interface, place them in a clearly marked advanced subsection and explain their limited user-facing value.
+
+Otherwise, treat them as internal implementation details.
+
+** Outline-path configuration
+
+Document the global defaults:
+
+#+begin_src emacs-lisp
+(setq org-files-db-outline-path-separator " » ")
+(setq org-files-db-outline-path-include-root nil)
+(setq org-files-db-outline-path-include-match t)
+#+end_src
+
+Document per-column overrides for normal heading paths:
+
+#+begin_src emacs-lisp
+(outline-path
+ :separator " / "
+ :include-root t
+ :include-match nil
+ :width (max 50))
+#+end_src
+
+Document the same options for link source and target paths:
+
+#+begin_src emacs-lisp
+(source-outline-path
+ :separator " » "
+ :include-root nil
+ :include-match t
+ :width (max 50))
+
+(target-outline-path
+ :separator " » "
+ :include-root t
+ :include-match t
+ :width (max 50))
+#+end_src
+
+Explain:
+
+- ~:separator~ controls the text between path components.
+- ~:include-root~ includes or omits the corresponding file/root component.
+- ~:include-match~ includes or omits the final heading component.
+- The same global defaults apply to ~outline-path~, ~source-outline-path~, and ~target-outline-path~.
+- For ~source-outline-path~, the match is the heading containing the link.
+- For ~target-outline-path~, the match is the resolved target heading.
+
+Explain that configured source and target columns automatically request the required CLI includes. Users do not need to specify ~--include source~ or ~--include target~ themselves.
+
+** Column widths
+
+Document:
+
+- ~:width auto~
+- ~:width (max N)~
+- ~:width (fixed N)~
+
+Use user-facing explanations and examples.
+
+Do not discuss internal width-calculation functions.
+
+** Column truncation
+
+Document truncation as a general option available to every displayed column:
+
+#+begin_src emacs-lisp
+(file-name
+ :width (max 30)
+ :truncate (:position middle :marker "…"))
+#+end_src
+
+Supported positions:
+
+- ~left~
+- ~middle~
+- ~right~
+
+Document the defaults:
+
+#+begin_src emacs-lisp
+(setq org-files-db-truncate-position 'right)
+(setq org-files-db-truncate-marker "…")
+#+end_src
+
+Explain that:
+
+- truncation applies when a value exceeds a maximum or fixed width
+- the marker is included in the final width
+- an empty marker performs hard truncation
+- partial definitions inherit global defaults
+
+Examples:
+
+#+begin_src emacs-lisp
+:truncate (:position left)
+:truncate (:position middle :marker " (…) ")
+:truncate (:marker "")
+#+end_src
+
+** Per-command configuration
+
+Document command-specific configuration without requiring users to understand dynamic binding:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (not (done)))
+ nil
+ nil
+ :config-file "~/org/private/org-files-db.toml")
+#+end_src
+
+#+begin_src emacs-lisp
+(org-files-db-search
+ "quarterly report"
+ nil
+ nil
+ :scope 'title
+ :config-file "~/work/org-files-db.toml")
+#+end_src
+
+Explain:
+
+- omitted ~:config-file~ inherits the global value
+- a path overrides the global value
+- explicit ~nil~ disables the configuration for that call
+
+A short advanced example using ~let~ may be included, but it must not be presented as the primary interface.
+
+** View configuration
+
+Document query and search views with optional per-view configuration:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("private-tasks"
+         :command query
+         :config-file "~/org/private/org-files-db.toml"
+         :query (headings (not (done)))
+         :columns
+         ((todo-keyword)
+          (outline-path
+           :include-root nil
+           :include-match t
+           :width (max 60))))
+
+        ("resolved-links"
+         :command query
+         :query (links (status "resolved"))
+         :columns
+         ((source-outline-path
+           :width (max 50))
+          (link-description
+           :width (max 30))
+          (target-outline-path
+           :width (max 50))))
+
+        ("work-search"
+         :command search
+         :config-file "~/work/org-files-db.toml"
+         :expression "quarterly report"
+         :scope title)))
+#+end_src
+
+Explain that a missing ~:config-file~ inherits the global default and an explicit ~nil~ disables it for that view.
+
+** Actions and exports
+
+Describe result actions by their user-visible purpose:
+
+- open a result
+- follow a link contained in a heading
+- insert a file link
+- insert a heading link
+- rename a file and update indexed path-based links
+
+Avoid describing action arguments as raw JSON objects.
+
+Document the two linked-heading export representations:
+
+- ~preserve~ keeps the authored heading and link
+- ~resolve~ displays the effective linked target
+
+** Acceptance criteria
+
+- The README starts with a minimal working setup and query.
+- Internal query-model version terminology is removed.
+- Completion-backend lists are removed.
+- UTF-8 byte-position terminology is removed.
+- All stable user-facing columns are documented by result type.
+- Link documentation clearly distinguishes ~source-outline-path~ and ~target-outline-path~.
+- ~source-outline-path~ is documented as the hierarchy containing the link.
+- ~target-outline-path~ is documented as the hierarchy of the resolved target.
+- Empty target paths for unresolved, ambiguous, and external links are documented.
+- Automatic source and target include inference is documented without exposing unnecessary implementation detail.
+- Outline-path defaults and per-column options are documented.
+- The same outline options are documented for source and target paths.
+- General truncation options and defaults are documented.
+- Global, per-command, and per-view configuration files are documented.
+- Query, search, views, actions, exports, and dynamic blocks have practical examples.
+- Internal database and process details are absent from the main user documentation.
+- Examples use the current public function signatures and option names.
+- Tests or documentation checks detect examples that reference removed or renamed options.
+  
+* TODO Column Width in %
