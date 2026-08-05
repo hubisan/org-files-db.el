@@ -116,7 +116,7 @@ do not pass the --config option unless a command-specific path is supplied."
   "Internal result key containing the effective orgfdb configuration file.")
 
 (defvar org-files-db-query-history nil
-  "Minibuffer history for Query Model expressions.")
+  "Minibuffer history for orgfdb query expressions.")
 
 (defconst org-files-db--missing-key (make-symbol "org-files-db-missing-key")
   "Sentinel used to distinguish missing JSON object keys from nil values.")
@@ -387,18 +387,18 @@ success.  ERROR is a plist containing :status and :stderr on failure."
     (car parsed)))
 
 (defun org-files-db--query-string (query)
-  "Return QUERY in the textual Query Model v0 representation."
+  "Return QUERY in the textual form accepted by orgfdb."
   (cond
    ((stringp query)
     (if (string-empty-p (string-trim query))
         (user-error "Query must not be empty")
       query))
    ((consp query) (prin1-to-string query))
-   (t (user-error "Query must be a Query Model v0 list or string"))))
+   (t (user-error "Query must be a list or string"))))
 
 (cl-defun org-files-db--query-arguments
     (query &optional (config-file nil config-file-supplied-p) origin)
-  "Return command arguments for Query Model v0 QUERY.
+  "Return command arguments for QUERY.
 An omitted CONFIG-FILE inherits `org-files-db-config-file'; an explicitly
 supplied nil disables --config.  ORIGIN identifies validation errors."
   (let ((effective-config-file
@@ -410,7 +410,7 @@ supplied nil disables --config.  ORIGIN identifies validation errors."
 
 (cl-defun org-files-db--execute-query
     (query &optional (config-file nil config-file-supplied-p) origin)
-  "Execute Query Model v0 QUERY and return the response envelope.
+  "Execute QUERY and return the response envelope.
 An omitted CONFIG-FILE inherits `org-files-db-config-file'; an explicitly
 supplied nil disables --config.  ORIGIN identifies validation errors."
   (let ((effective-config-file

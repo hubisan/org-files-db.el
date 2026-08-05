@@ -45,7 +45,7 @@ Configuration paths are expanded and must identify readable files.  Relative pat
 
 * Query
 
-~org-files-db-query~ accepts a Query Model v0 expression as Emacs Lisp data:
+~org-files-db-query~ accepts an ~orgfdb~ query expression as Emacs Lisp data:
 
 #+begin_src emacs-lisp
 (org-files-db-query
@@ -206,7 +206,7 @@ Names containing a double hyphen are internal implementation details and are not
 #+begin_src text
 lisp/org-files-db.el          Package entry point
 lisp/org-files-db-core.el     Configuration, CLI, results, columns, completion
-lisp/org-files-db-query.el    Query Model v0 command
+lisp/org-files-db-query.el    Query command
 lisp/org-files-db-search.el   One-shot and live FTS5 search
 lisp/org-files-db-export.el   Org rendering and Embark exporter
 lisp/org-files-db-actions.el  Link, follow, rename, and backlink actions

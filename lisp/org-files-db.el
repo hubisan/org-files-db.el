@@ -27,7 +27,7 @@
 ;;; Commentary:
 
 ;; org-files-db.el is a thin Emacs interface to the orgfdb command-line tool.
-;; It provides Query Model v0 completion, FTS5 search, named views, result
+;; It provides query completion, FTS5 search, named views, result
 ;; actions, Org dynamic blocks, and optional Embark and Consult integration.
 ;; Indexing and SQLite access remain in orgfdb.
 

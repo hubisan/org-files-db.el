@@ -19,7 +19,7 @@
 
 ;;; Commentary:
 
-;; Query Model v0 execution and standard Emacs completion.
+;; Query execution and standard Emacs completion.
 
 ;;; Code:
 
@@ -30,7 +30,7 @@
 (defvar read-eval)
 
 (defun org-files-db-query--target (query)
-  "Infer the Query Model target from QUERY."
+  "Infer the orgfdb query target from QUERY."
   (let* ((form (if (stringp query)
                    (condition-case nil
                        (let ((read-eval nil))
@@ -45,7 +45,7 @@
     (query &optional columns action
            &key (config-file nil config-file-supplied-p))
   "Execute QUERY and select a result displayed with COLUMNS.
-QUERY is a Query Model v0 Lisp form or its textual representation.
+QUERY is an orgfdb query represented as an Emacs Lisp form or string.
 ACTION receives the selected result object.  When omitted, use
 `org-files-db-query-action'.  When CONFIG-FILE is omitted, inherit
 `org-files-db-config-file'; an explicit nil disables --config for this call."

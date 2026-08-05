@@ -97,7 +97,7 @@ The symbol or string `none' disables --config."
          (format "Dynamic %s block" command))))))
 
 (defun org-files-db-dblock--query-definition (params)
-  "Return the Query Model expression represented by PARAMS."
+  "Return the query expression represented by PARAMS."
   (let ((query (plist-get params :query))
         (view-name (plist-get params :view)))
     (when (and query view-name)
