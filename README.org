@@ -99,6 +99,21 @@ The package infers required CLI includes from the configured columns.  ~source-o
 
 Truncation is available for every displayed column.  Customize the defaults with ~org-files-db-truncate-position~ and ~org-files-db-truncate-marker~, or override them per column with ~:truncate (:position left|middle|right :marker STRING)~.  The marker counts toward the final column width, and an empty marker performs hard truncation.
 
+** Large result sets
+
+Query and search presentation is eager and synchronous.  The package normalizes column definitions once, extracts each displayed value once per row, calculates shared widths from cached cell widths, sanitizes each distinct face once, and formats every completion candidate once.  Completion filtering and redisplay operate only on the prepared candidate strings; selected actions and Embark still receive the original result object.
+
+Duplicate visible candidates retain separate invisible identities and direct result metadata.  Prepared CLI order is preserved, selection does not scan the complete candidate list, and values shortened for display remain available to completion filtering through hidden untruncated text.
+
+For a real invocation, profile Emacs with ~M-x profiler-start~, run the query, and inspect ~M-x profiler-report~.  The development benchmark covers synthetic sets of 100, 1,000, 10,000, and 50,000 rows, representative inexpensive and expensive columns, and alist versus hash-table JSON parsing:
+
+#+begin_src shell
+emacs -Q -L lisp -l benchmarks/org-files-db-benchmark.el \
+  --eval '(org-files-db-benchmark-run 3)'
+#+end_src
+
+Run ~M-x org-files-db-benchmark-query~ to separate real CLI execution, JSON parsing, result normalization, presentation, and total time for the current database.  Run ~M-x org-files-db-benchmark-compare-frontends~ interactively to compare initialization of standard completion and Consult using the same already prepared candidates.  Consult remains optional and normal query completion does not depend on it.
+
 * Search
 
 Perform one FTS5 search:
@@ -252,6 +267,7 @@ lisp/org-files-db-actions.el  Link, follow, rename, and backlink actions
 lisp/org-files-db-views.el    Named query and search views
 lisp/org-files-db-dblock.el   Org dynamic blocks
 tests/                        Buttercup tests
+benchmarks/                   Synthetic and representative performance checks
 #+end_src
 
 * Development

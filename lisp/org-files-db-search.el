@@ -89,8 +89,10 @@ omitted, inherit `org-files-db-config-file'; an explicit nil disables
           (org-files-db--results-with-config
            (org-files-db--normalize-results response)
            effective-config-file))
-         (columns (or columns
-                      (org-files-db--default-columns 'search results))))
+         (columns
+          (org-files-db--normalize-columns
+           (or columns
+               (org-files-db--default-columns 'search results)))))
     (org-files-db--present-results
      results columns action "Search result: ")))
 
@@ -166,7 +168,9 @@ positional scope remains supported.  This command requires Consult."
            (plist-get parsed :config-file)
            (plist-get parsed :config-file-supplied-p)
            "Live search"))
-         (columns (or columns org-files-db-search-columns))
+         (columns
+          (org-files-db--normalize-columns
+           (or columns org-files-db-search-columns)))
          (collection
           (org-files-db-search--consult-dynamic-collection
            (lambda (input)

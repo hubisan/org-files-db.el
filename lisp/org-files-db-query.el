@@ -53,10 +53,12 @@ Configured columns automatically request any required path or target context."
   (interactive (list (org-files-db--read-sexp "Query: ") nil nil))
   (let* ((requested-columns columns)
          (inferred-target (org-files-db-query--target query))
-         (include-columns
+         (initial-columns
           (or requested-columns
               (org-files-db--default-columns inferred-target nil)))
-         (includes (org-files-db--column-includes include-columns))
+         (normalized-columns
+          (org-files-db--normalize-columns initial-columns))
+         (includes (org-files-db--column-includes normalized-columns))
          (effective-config-file
           (org-files-db--resolve-config-file
            config-file config-file-supplied-p "Query"))
@@ -68,10 +70,13 @@ Configured columns automatically request any required path or target context."
            effective-config-file))
          (target (or (org-files-db--response-target response)
                      inferred-target))
-         (columns
-          (or requested-columns
-              (org-files-db--default-columns target results))))
-    (org-files-db--present-results results columns action "Query result: ")))
+         (final-columns
+          (if (or requested-columns (eq target inferred-target))
+              normalized-columns
+            (org-files-db--normalize-columns
+             (org-files-db--default-columns target results)))))
+    (org-files-db--present-results
+     results final-columns action "Query result: ")))
 
 (provide 'org-files-db-query)
 

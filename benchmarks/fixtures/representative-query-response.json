@@ -1,0 +1,92 @@
+{
+  "target": "headings",
+  "output": "flat",
+  "includes": ["path"],
+  "results": [
+    {
+      "kind": "heading",
+      "id": 1001,
+      "file_id": 41,
+      "level": 3,
+      "title": "Duplicate title",
+      "todo_keyword": "NEXT",
+      "todo_type": "open",
+      "priority": "A",
+      "all_tags": ["work", "emacs"],
+      "location": {
+        "file_path": "/tmp/projects/shared.org",
+        "line": 12,
+        "byte_start": 180
+      },
+      "node_path": [
+        {"kind": "file", "title": "Shared"},
+        {"kind": "heading", "title": "Projects", "level": 1},
+        {"kind": "heading", "title": "Editors", "level": 2},
+        {"kind": "heading", "title": "Duplicate title", "level": 3}
+      ]
+    },
+    {
+      "kind": "heading",
+      "id": 1002,
+      "file_id": 42,
+      "level": 3,
+      "title": "Duplicate title",
+      "todo_keyword": null,
+      "todo_type": null,
+      "priority": null,
+      "all_tags": ["private"],
+      "location": {
+        "file_path": "/tmp/archive/shared.org",
+        "line": 88,
+        "byte_start": 2048
+      },
+      "node_path": [
+        {"kind": "file", "title": "Archive"},
+        {"kind": "heading", "title": "Ältere Notizen", "level": 1},
+        {"kind": "heading", "title": "東京", "level": 2},
+        {"kind": "heading", "title": "Duplicate title", "level": 3}
+      ]
+    },
+    {
+      "kind": "heading",
+      "id": 1003,
+      "file_id": 43,
+      "level": 2,
+      "title": "Überblick",
+      "todo_keyword": "DONE",
+      "todo_type": "closed",
+      "priority": "C",
+      "all_tags": [],
+      "location": {
+        "file_path": "/tmp/non-ascii/überblick.org",
+        "line": 7,
+        "byte_start": 93
+      },
+      "node_path": [
+        {"kind": "file", "title": "Überblick"},
+        {"kind": "heading", "title": "Résumé", "level": 1},
+        {"kind": "heading", "title": "Überblick", "level": 2}
+      ]
+    },
+    {
+      "kind": "heading",
+      "id": 1004,
+      "file_id": 44,
+      "level": 1,
+      "title": "Missing optional values",
+      "todo_keyword": null,
+      "todo_type": null,
+      "priority": null,
+      "all_tags": null,
+      "location": {
+        "file_path": "/tmp/missing.org",
+        "line": 1,
+        "byte_start": 0
+      },
+      "node_path": [
+        {"kind": "file", "title": "Missing"},
+        {"kind": "heading", "title": "Missing optional values", "level": 1}
+      ]
+    }
+  ]
+}

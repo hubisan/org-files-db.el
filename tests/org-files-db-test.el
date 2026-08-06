@@ -27,6 +27,14 @@
                  (line . ,(or line 1))
                  (byte_start . ,(or byte 0))))))
 
+(defun org-files-db-test--candidate-visible (candidate)
+  "Return the visible formatted portion of CANDIDATE."
+  (substring-no-properties
+   candidate 0
+   (or (and (> (length candidate) 0)
+            (get-text-property 0 'org-files-db-visible-length candidate))
+       (length candidate))))
+
 (describe "org-files-db"
 
 (before-each
@@ -327,6 +335,23 @@
       (expect calls :to-equal 1)
       (expect seen-includes :to-equal '(path target))))
 
+  (it "retains response-target fallback for default query columns"
+    (let (seen-columns)
+      (cl-letf (((symbol-function 'org-files-db--execute-query)
+                 (lambda (&rest _)
+                   '((target . "links")
+                     (results . (((kind . "link")
+                                  (raw_target . "file:notes.org")))))))
+                ((symbol-function 'org-files-db--present-results)
+                 (lambda (_results columns &rest _)
+                   (setq seen-columns columns))))
+        (org-files-db-query '(headings) nil))
+      (expect
+       (mapcar #'org-files-db--presentation-column-name
+               (append seen-columns nil))
+       :to-equal
+       (mapcar #'org-files-db--column-name org-files-db-link-columns))))
+
   (it "does not request target data for the default link columns"
     (expect (org-files-db--column-includes org-files-db-link-columns)
             :to-equal '(path)))
@@ -597,6 +622,22 @@
       (expect (get-text-property 0 'consult--candidate candidate)
               :to-equal result)))
 
+  (it "attaches prepared row metadata directly to candidates"
+    (let* ((result '((kind . "heading") (title . "Metadata")))
+           (presentation
+            (org-files-db--prepare-presentation (list result) '((title))))
+           (row (aref (org-files-db--presentation-rows presentation) 0))
+           (candidate
+            (car (org-files-db--presentation-candidates presentation))))
+      (expect (eq (get-text-property
+                   0 'org-files-db-presentation-row candidate)
+                  row)
+              :to-equal t)
+      (expect (org-files-db--presentation-row-original-position row)
+              :to-equal 0)
+      (expect (eq (org-files-db--presentation-row-result row) result)
+              :to-equal t)))
+
   (it "does not display internal configuration metadata by default"
     (let* ((config (org-files-db-test--write-file
                     "candidate.toml" "db_path='candidate'\n"))
@@ -616,9 +657,239 @@
     (let* ((results '(((title . "A")) ((title . "Long"))))
            (candidates (org-files-db--make-candidates
                         results '((title :width auto)))))
-      (expect (string-width (substring-no-properties (car candidates)))
+      (expect (string-width
+               (org-files-db-test--candidate-visible (car candidates)))
               :to-equal
-              (string-width (substring-no-properties (cadr candidates)))))))
+              (string-width
+               (org-files-db-test--candidate-visible (cadr candidates))))))
+
+  (it "reuses normalized column specifications"
+    (let ((columns
+           (org-files-db--normalize-columns
+            '((title :width (max 20)
+                     :truncate (:position middle :marker "…"))))))
+      (expect (eq columns (org-files-db--normalize-columns columns))
+              :to-equal t)))
+
+  (it "calculates each displayed value once before completion filtering"
+    (let* ((results '(((title . "Alpha"))
+                      ((title . "Beta"))))
+           (columns (org-files-db--normalize-columns '((title))))
+           (column (aref columns 0))
+           (extractor
+            (org-files-db--presentation-column-extractor column))
+           (calls 0))
+      (setf (org-files-db--presentation-column-extractor column)
+            (lambda (source normalized-column)
+              (setq calls (1+ calls))
+              (funcall extractor source normalized-column)))
+      (let* ((presentation
+              (org-files-db--prepare-presentation results columns))
+             (candidates
+              (org-files-db--presentation-candidates presentation))
+             (table (org-files-db--completion-table candidates)))
+        (expect calls :to-equal 2)
+        (all-completions "a" table)
+        (all-completions "b" table)
+        (expect calls :to-equal 2))))
+
+  (it "does not recalculate presentation work during filtering"
+    (let* ((presentation
+            (org-files-db--prepare-presentation
+             '(((title . "Alpha"))
+               ((title . "Beta")))
+             '((title))))
+           (candidates
+            (org-files-db--presentation-candidates presentation))
+           (table (org-files-db--completion-table candidates)))
+      (cl-letf (((symbol-function 'org-files-db--presentation-populate-cells)
+                 (lambda (&rest _)
+                   (error "Filtering must reuse cached cells")))
+                ((symbol-function 'org-files-db--presentation-calculate-widths)
+                 (lambda (&rest _)
+                   (error "Filtering must reuse cached widths")))
+                ((symbol-function 'org-files-db--presentation-prepare-faces)
+                 (lambda (&rest _)
+                   (error "Filtering must reuse cached faces")))
+                ((symbol-function 'org-files-db--format-presentation-row)
+                 (lambda (&rest _)
+                   (error "Filtering must reuse formatted candidates"))))
+        (expect (length (all-completions "Alpha" table)) :to-equal 1)
+        (expect (length (all-completions "Beta" table)) :to-equal 1))))
+
+  (it "keeps complete untruncated column values searchable"
+    (let* ((result '((title . "Visible prefix and hidden needle")))
+           (presentation
+            (org-files-db--prepare-presentation
+             (list result)
+             '((title :width (fixed 10)
+                      :truncate (:position right :marker "…")))))
+           (candidates
+            (org-files-db--presentation-candidates presentation))
+           (candidate (car candidates))
+           (visible (org-files-db-test--candidate-visible candidate))
+           (completion-styles '(substring)))
+      (expect (string-match-p "hidden needle" visible) :to-equal nil)
+      (let ((matches
+             (completion-all-completions
+              "hidden needle"
+              (org-files-db--completion-table candidates)
+              nil
+              (length "hidden needle"))))
+        (expect (car matches) :to-equal candidate)
+        (expect (consp (cdr matches)) :to-equal nil))))
+
+  (it "does not inspect cached cell widths for fixed columns"
+    (let* ((columns
+            (org-files-db--normalize-columns
+             '((title :width (fixed 3)))))
+           (sources
+            (org-files-db--presentation-build-sources
+             '(((title . "Long title")))))
+           (rows (org-files-db--presentation-build-rows sources)))
+      (org-files-db--presentation-populate-cells rows columns)
+      (cl-letf (((symbol-function
+                  'org-files-db--presentation-cell-display-width)
+                 (lambda (_cell)
+                   (error "Fixed widths must not inspect cell widths"))))
+        (expect
+         (append
+          (org-files-db--presentation-calculate-widths rows columns)
+          nil)
+         :to-equal '(3)))))
+
+  (it "stops maximum-width scanning after the cap is reached"
+    (let* ((columns
+            (org-files-db--normalize-columns
+             '((title :width (max 5)))))
+           (sources
+            (org-files-db--presentation-build-sources
+             '(((title . "ab"))
+               ((title . "12345"))
+               ((title . "not inspected")))))
+           (rows (org-files-db--presentation-build-rows sources)))
+      (org-files-db--presentation-populate-cells rows columns)
+      (setf (org-files-db--presentation-cell-display-width
+             (aref (org-files-db--presentation-row-cells
+                    (aref rows 2))
+                   0))
+            'must-not-be-inspected)
+      (expect
+       (append
+        (org-files-db--presentation-calculate-widths rows columns)
+        nil)
+       :to-equal '(5))))
+
+  (it "sanitizes each distinct face once per presentation"
+    (let ((calls 0)
+          (results '(((title . "One") (level . 2))
+                     ((title . "Two") (level . 2))
+                     ((title . "Three") (level . 2)))))
+      (cl-letf (((symbol-function 'org-files-db--sanitized-face)
+                 (lambda (_face)
+                   (setq calls (1+ calls))
+                   nil)))
+        (org-files-db--prepare-presentation results '((title))))
+      (expect calls :to-equal 1)))
+
+  (it "uses direct lookup for selected prepared candidates"
+    (let* ((result '((kind . "heading") (title . "Example")))
+           (presentation
+            (org-files-db--prepare-presentation
+             (list result) '((title))))
+           (candidates
+            (org-files-db--presentation-candidates presentation))
+           (selected (substring-no-properties (car candidates))))
+      (expect
+       (not (null
+             (gethash candidates org-files-db--candidate-lookups)))
+       :to-equal t)
+      (expect (org-files-db--candidate-result selected candidates)
+              :to-equal result)))
+
+  (it "preserves duplicate visible candidates and source order"
+    (let* ((first '((kind . "heading") (title . "Same")))
+           (second '((kind . "heading") (title . "Same")))
+           (results (list first second))
+           (presentation
+            (org-files-db--prepare-presentation results '((title))))
+           (candidates
+            (org-files-db--presentation-candidates presentation))
+           (first-visible
+            (org-files-db-test--candidate-visible (car candidates)))
+           (second-visible
+            (org-files-db-test--candidate-visible (cadr candidates))))
+      (expect (substring-no-properties first-visible)
+              :to-equal (substring-no-properties second-visible))
+      (expect (equal (car candidates) (cadr candidates)) :to-equal nil)
+      (expect
+       (mapcar
+        (lambda (candidate)
+          (get-text-property 0 'org-files-db-result candidate))
+        candidates)
+       :to-equal results)))
+
+  (it "reports repeatable presentation benchmark phases"
+    (let* ((summary
+            (org-files-db--benchmark-presentation
+             '(((title . "Überblick"))
+               ((title . "東京")))
+             '((title :width auto))
+             :iterations 2))
+           (phases (plist-get summary :phases))
+           (formatting
+            (cdr (assq :candidate-formatting phases))))
+      (expect (plist-get summary :result-count) :to-equal 2)
+      (expect (plist-get summary :iterations) :to-equal 2)
+      (expect (numberp (plist-get formatting :minimum)) :to-equal t)
+      (expect (numberp (plist-get formatting :median)) :to-equal t)
+      (expect (numberp (plist-get formatting :maximum)) :to-equal t)))
+
+  (it "preserves mapped JSON fields in normalized columns"
+    (let ((result
+           '((file_id . 7)
+             (parent_id . 6)
+             (scheduled_raw . "<2026-08-06 Thu>")
+             (deadline_raw . "<2026-08-07 Fri>")
+             (closed_raw . "[2026-08-05 Wed]")
+             (link_type . "file")
+             (link_path . "notes.org")
+             (location . ((byte_end . 42))))))
+      (dolist (case '((byte-end "42")
+                      (file-id "7")
+                      (parent-id "6")
+                      (scheduled-raw "<2026-08-06 Thu>")
+                      (deadline-raw "<2026-08-07 Fri>")
+                      (closed-raw "[2026-08-05 Wed]")
+                      (link-type "file")
+                      (link-path "notes.org")))
+        (expect (org-files-db--column-value result (list (car case)))
+                :to-equal (cadr case)))))
+
+  (it "keeps hash-table JSON compatible with shared result access"
+    (let ((result
+           (org-files-db--parse-json-as
+            (concat
+             "{\"kind\":\"heading\",\"title\":\"Hash\","
+             "\"node_path\":["
+             "{\"kind\":\"file\",\"title\":\"Root\"},"
+             "{\"kind\":\"heading\",\"title\":\"Parent\"},"
+             "{\"kind\":\"heading\",\"title\":\"Hash\"}]}")
+            'hash-table)))
+      (expect (hash-table-p result) :to-equal t)
+      (expect (org-files-db--column-value result '(title))
+              :to-equal "Hash")
+      (expect (org-files-db--column-value result '(outline-path))
+              :to-equal "Parent » Hash"))))
+
+  (it "normalizes direct arrays of hash-table results"
+    (let* ((response
+            (org-files-db--parse-json-as
+             "[{\"kind\":\"heading\",\"title\":\"Hash\"}]"
+             'hash-table))
+           (results (org-files-db--normalize-results response)))
+      (expect (length results) :to-equal 1)
+      (expect (hash-table-p (car results)) :to-equal t)))
 
 (describe "UTF-8 locations"
   (it "converts zero-based UTF-8 offsets to Emacs positions"
