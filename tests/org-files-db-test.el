@@ -284,7 +284,7 @@
               :to-equal nil))))
 
 (describe "query and search arguments"
-  (it "serializes Query Model forms"
+  (it "serializes query forms"
     (expect (org-files-db--query-string '(headings (not (done))))
             :to-equal "(headings (not (done)))"))
 
@@ -294,12 +294,49 @@
       (expect (org-files-db--read-sexp "Query: ")
               :to-throw 'user-error)))
 
-  (it "includes path context in queries"
-    (let ((arguments (org-files-db--query-arguments '(links (status "broken")))))
-      (expect (not (null (member "--include" arguments))) :to-equal t)
-      (expect (not (null (member "path" arguments))) :to-equal t)
+  (it "keeps flat output and combines requested query includes"
+    (let ((arguments
+           (org-files-db--query-arguments
+            '(links (status "resolved")) nil nil '(path target))))
+      (expect (seq-count (lambda (item) (equal item "--include")) arguments)
+              :to-equal 1)
+      (expect (not (null (member "path,target" arguments))) :to-equal t)
+      (expect (not (null (member "--output" arguments))) :to-equal t)
+      (expect (not (null (member "flat" arguments))) :to-equal t)
       (expect (car (last arguments))
-              :to-equal "(links (status \"broken\"))")))
+              :to-equal "(links (status \"resolved\"))")))
+
+  (it "omits query includes when no configured feature requires them"
+    (expect (member "--include"
+                    (org-files-db--query-arguments '(files)))
+            :to-equal nil))
+
+  (it "infers source and target includes from link columns in one query"
+    (let (calls seen-includes)
+      (cl-letf (((symbol-function 'org-files-db--execute-query)
+                 (lambda (_query &optional _config _origin includes)
+                   (setq calls (1+ (or calls 0))
+                         seen-includes includes)
+                   '((target . "links") (results . nil))))
+                ((symbol-function 'org-files-db--present-results)
+                 (lambda (&rest _) nil)))
+        (org-files-db-query
+         '(links (status "resolved"))
+         '((source-outline-path)
+           (target-outline-path))))
+      (expect calls :to-equal 1)
+      (expect seen-includes :to-equal '(path target))))
+
+  (it "does not request target data for the default link columns"
+    (expect (org-files-db--column-includes org-files-db-link-columns)
+            :to-equal '(path)))
+
+  (it "requests only the context required by configured columns"
+    (expect (org-files-db--column-includes '((target-outline-path)))
+            :to-equal '(target))
+    (expect (org-files-db--column-includes '((link-target)
+                                             (resolution-status)))
+            :to-equal nil))
 
   (it "supports all search scopes"
     (expect (org-files-db--search-arguments "sqlite" 'all)
@@ -324,7 +361,7 @@
            seen-config selected)
       (setq org-files-db-config-file global)
       (cl-letf (((symbol-function 'org-files-db--execute-query)
-                 (lambda (_query &optional config-file _origin)
+                 (lambda (_query &optional config-file _origin _includes)
                    (setq seen-config config-file)
                    `((target . "headings") (results . (,result)))))
                 ((symbol-function 'org-files-db--present-results)
@@ -397,7 +434,7 @@
                       "explicit.toml" "db_path='explicit'\n"))
            seen-config)
       (cl-letf (((symbol-function 'org-files-db--execute-query)
-                 (lambda (_query &optional config-file _origin)
+                 (lambda (_query &optional config-file _origin _includes)
                    (setq seen-config config-file)
                    '((target . "headings") (results . nil))))
                 ((symbol-function 'org-files-db--present-results)
@@ -426,6 +463,130 @@
                            ((kind . "heading") (title . "Child")))))))
       (expect (org-files-db--outline-path result)
               :to-equal "Parent » Child")))
+
+  (it "does not duplicate a matched file root"
+    (let ((result
+           '((kind . "root")
+             (title . "File")
+             (node_path . (((kind . "root") (title . "File")))))))
+      (expect (org-files-db--column-value
+               result '(outline-path :include-root t))
+              :to-equal "File")))
+
+  (it "formats the structured source heading hierarchy for links"
+    (let ((result
+           '((kind . "link")
+             (source . ((file . ((title . "source-file")))
+                        (heading . ((title . "Emacs")
+                                    (outline_path . ("Applications"
+                                                     "Editors"
+                                                     "Emacs"))))))
+             (node_path . (((kind . "root") (title . "Wrong root"))
+                           ((kind . "heading") (title . "Wrong path")))))))
+      (expect (org-files-db--column-value result '(source-outline-path))
+              :to-equal "Applications » Editors » Emacs")
+      (expect (org-files-db--column-value result '(outline-path))
+              :to-equal "Applications » Editors » Emacs")
+      (expect (org-files-db--column-value
+               result '(source-outline-path :include-root t))
+              :to-equal "source-file » Applications » Editors » Emacs")
+      (expect (org-files-db--column-value
+               result '(source-outline-path :include-match nil))
+              :to-equal "Applications » Editors")))
+
+  (it "uses node_path as source hierarchy fallback without the link itself"
+    (let ((result
+           '((kind . "link")
+             (node_path . (((kind . "root") (title . "notes"))
+                           ((kind . "heading") (title . "Applications"))
+                           ((kind . "heading") (title . "Editors"))
+                           ((kind . "heading") (title . "Emacs"))
+                           ((kind . "link") (raw_target . "packages.org")))))))
+      (expect (org-files-db--column-value result '(source-outline-path))
+              :to-equal "Applications » Editors » Emacs")))
+
+  (it "formats nested resolved target headings"
+    (let ((result
+           '((kind . "link")
+             (resolution_status . "resolved")
+             (target . ((file . ((title . "test-subheading")))
+                        (heading . ((title . "heading 3")
+                                    (outline_path . ("heading 1"
+                                                     "heading 2"
+                                                     "heading 3")))))))))
+      (expect (org-files-db--column-value result '(target-outline-path))
+              :to-equal "heading 1 » heading 2 » heading 3")
+      (expect (org-files-db--column-value
+               result '(target-outline-path :include-root t))
+              :to-equal
+              "test-subheading » heading 1 » heading 2 » heading 3")
+      (expect (org-files-db--column-value
+               result '(target-outline-path :include-match nil))
+              :to-equal "heading 1 » heading 2")))
+
+  (it "shows only an included root for resolved file targets"
+    (let ((result
+           '((kind . "link")
+             (resolution_status . "resolved")
+             (target . ((file . ((title . "target-file"))))))))
+      (expect (org-files-db--column-value result '(target-outline-path))
+              :to-equal "")
+      (expect (org-files-db--column-value
+               result '(target-outline-path :include-root t))
+              :to-equal "target-file")
+      (expect (org-files-db--column-value
+               result
+               '(target-outline-path :include-root t :include-match nil))
+              :to-equal "target-file")))
+
+  (it "leaves unresolved and external target paths empty"
+    (dolist (status '("unresolved" "ambiguous" "external" "unsupported"))
+      (let ((result
+             `((kind . "link")
+               (resolution_status . ,status)
+               (raw_target . "file:authored.org::*Raw")
+               (target . ((file . ((title . "Must not appear")))
+                          (heading . ((outline_path . ("Raw")))))))))
+        (expect (org-files-db--column-value result '(target-outline-path))
+                :to-equal ""))))
+
+  (it "leaves resolved targets without structured data empty"
+    (expect (org-files-db--column-value
+             '((kind . "link")
+               (resolution_status . "resolved")
+               (raw_target . "file:missing.org"))
+             '(target-outline-path))
+            :to-equal ""))
+
+  (it "supports custom and global outline options independently"
+    (let ((result
+           '((kind . "link")
+             (resolution_status . "resolved")
+             (source . ((file . ((title . "source")))
+                        (heading . ((outline_path . ("One" "Two"))))))
+             (target . ((file . ((title . "target")))
+                        (heading . ((outline_path . ("Three" "Four")))))))))
+      (expect (org-files-db--column-value
+               result '(source-outline-path :separator " / "))
+              :to-equal "One / Two")
+      (let ((org-files-db-outline-path-separator " -> ")
+            (org-files-db-outline-path-include-root t)
+            (org-files-db-outline-path-include-match nil))
+        (expect (org-files-db--column-value result '(source-outline-path))
+                :to-equal "source -> One")
+        (expect (org-files-db--column-value result '(target-outline-path))
+                :to-equal "target -> Three"))))
+
+  (it "applies general middle truncation to outline columns"
+    (let* ((definition
+            '(target-outline-path
+              :width (fixed 19)
+              :truncate (:position middle :marker "…")))
+           (value "heading 1 » heading 2 » heading 3")
+           (text (org-files-db--truncate-column-value value 19 definition)))
+      (expect (string-width text) :to-equal 19)
+      (expect text :to-match "…")
+      (expect text :to-match "heading 3$")))
 
   (it "keeps original result objects on candidates"
     (let* ((result '((kind . "heading") (title . "Example")))
@@ -660,7 +821,7 @@
            seen-config returned)
       (setq org-files-db-config-file other-config)
       (cl-letf (((symbol-function 'org-files-db--execute-query)
-                 (lambda (_query &optional config-file _origin)
+                 (lambda (_query &optional config-file _origin _includes)
                    (setq seen-config config-file)
                    '((target . "headings")
                      (results . (((kind . "heading")
@@ -737,6 +898,20 @@
               :to-equal t)))
 
 (describe "dynamic blocks"
+  (it "requests path context only for outline query blocks"
+    (let (seen-includes)
+      (with-temp-buffer
+        (org-mode)
+        (cl-letf (((symbol-function 'org-files-db--execute-query)
+                   (lambda (_query &optional _config _origin includes)
+                     (push includes seen-includes)
+                     '((target . "headings") (results . nil)))))
+          (org-dblock-write:org-files-db-query
+           '(:query "(headings)" :layout flat))
+          (org-dblock-write:org-files-db-query
+           '(:query "(headings)" :layout outline))))
+      (expect (nreverse seen-includes) :to-equal '(nil (path)))))
+
   (it "renders direct query blocks through the shared query executor"
     (let ((config (org-files-db-test--write-file
                    "block-query.toml" "db_path='query'\n"))
@@ -749,7 +924,7 @@
       (with-temp-buffer
         (org-mode)
         (cl-letf (((symbol-function 'org-files-db--execute-query)
-                   (lambda (_query &optional config-file _origin)
+                   (lambda (_query &optional config-file _origin _includes)
                      (setq seen-config config-file)
                      `((target . "headings")
                        (results . (,result))))))
@@ -766,7 +941,7 @@
       (with-temp-buffer
         (org-mode)
         (cl-letf (((symbol-function 'org-files-db--execute-query)
-                   (lambda (_query &optional config-file _origin)
+                   (lambda (_query &optional config-file _origin _includes)
                      (push config-file seen-configs)
                      '((target . "headings") (results . nil)))))
           (org-dblock-write:org-files-db-query
@@ -787,7 +962,7 @@
       (with-temp-buffer
         (org-mode)
         (cl-letf (((symbol-function 'org-files-db--execute-query)
-                   (lambda (_query &optional config-file _origin)
+                   (lambda (_query &optional config-file _origin _includes)
                      (setq seen-config config-file)
                      '((target . "headings") (results . nil)))))
           (org-dblock-write:org-files-db-query
@@ -806,7 +981,7 @@
       (with-temp-buffer
         (org-mode)
         (cl-letf (((symbol-function 'org-files-db--execute-query)
-                   (lambda (_query &optional config-file _origin)
+                   (lambda (_query &optional config-file _origin _includes)
                      (push config-file seen-configs)
                      '((target . "headings") (results . nil)))))
           (org-dblock-write:org-files-db-query

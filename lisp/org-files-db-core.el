@@ -82,6 +82,31 @@ do not pass the --config option unless a command-specific path is supplied."
   :type '(repeat sexp)
   :group 'org-files-db)
 
+(defcustom org-files-db-outline-path-separator " » "
+  "Default separator between outline-path components."
+  :type 'string
+  :group 'org-files-db)
+
+(defcustom org-files-db-outline-path-include-root nil
+  "Non-nil means outline-path columns include their file root by default."
+  :type 'boolean
+  :group 'org-files-db)
+
+(defcustom org-files-db-outline-path-include-match t
+  "Non-nil means outline-path columns include their final heading by default."
+  :type 'boolean
+  :group 'org-files-db)
+
+(defcustom org-files-db-truncate-position 'right
+  "Default position at which displayed column values are truncated."
+  :type '(choice (const left) (const middle) (const right))
+  :group 'org-files-db)
+
+(defcustom org-files-db-truncate-marker "…"
+  "Default marker inserted when a displayed column value is truncated."
+  :type 'string
+  :group 'org-files-db)
+
 (defcustom org-files-db-search-columns
   '((title :width (max 70))
     (file-name :width (max 30))
@@ -396,29 +421,64 @@ success.  ERROR is a plist containing :status and :stderr on failure."
    ((consp query) (prin1-to-string query))
    (t (user-error "Query must be a list or string"))))
 
+(defun org-files-db--column-name (definition)
+  "Return the column name represented by DEFINITION."
+  (if (consp definition) (car definition) definition))
+
+(defun org-files-db--column-includes (columns)
+  "Return the orgfdb includes required by COLUMNS.
+The returned values are symbols in first-use order."
+  (let (includes)
+    (dolist (definition columns includes)
+      (pcase (org-files-db--column-name definition)
+        ((or 'outline-path 'source-outline-path)
+         (unless (memq 'path includes)
+           (setq includes (append includes '(path)))))
+        ('target-outline-path
+         (unless (memq 'target includes)
+           (setq includes (append includes '(target)))))))))
+
+(defun org-files-db--include-arguments (includes)
+  "Return orgfdb arguments for INCLUDES."
+  (when includes
+    (let ((names
+           (delete-dups
+            (mapcar
+             (lambda (include)
+               (cond
+                ((symbolp include) (symbol-name include))
+                ((and (stringp include) (not (string-empty-p include))) include)
+                (t (user-error "Invalid orgfdb include: %S" include))))
+             includes))))
+      (list "--include" (string-join names ",")))))
+
 (cl-defun org-files-db--query-arguments
-    (query &optional (config-file nil config-file-supplied-p) origin)
+    (query &optional (config-file nil config-file-supplied-p) origin includes)
   "Return command arguments for QUERY.
 An omitted CONFIG-FILE inherits `org-files-db-config-file'; an explicitly
-supplied nil disables --config.  ORIGIN identifies validation errors."
+supplied nil disables --config.  ORIGIN identifies validation errors.
+INCLUDES lists additional result context requested from orgfdb."
   (let ((effective-config-file
          (org-files-db--resolve-config-file
           config-file config-file-supplied-p origin)))
-    (append '("--format" "json" "--output" "flat" "--include" "path")
+    (append '("--format" "json" "--output" "flat")
+            (org-files-db--include-arguments includes)
             (org-files-db--config-arguments effective-config-file origin)
             (list (org-files-db--query-string query)))))
 
 (cl-defun org-files-db--execute-query
-    (query &optional (config-file nil config-file-supplied-p) origin)
+    (query &optional (config-file nil config-file-supplied-p) origin includes)
   "Execute QUERY and return the response envelope.
 An omitted CONFIG-FILE inherits `org-files-db-config-file'; an explicitly
-supplied nil disables --config.  ORIGIN identifies validation errors."
+supplied nil disables --config.  ORIGIN identifies validation errors.
+INCLUDES lists additional result context requested from orgfdb."
   (let ((effective-config-file
          (org-files-db--resolve-config-file
           config-file config-file-supplied-p origin)))
     (org-files-db--call
      "query"
-     (org-files-db--query-arguments query effective-config-file origin))))
+     (org-files-db--query-arguments
+      query effective-config-file origin includes))))
 
 (defun org-files-db--validate-search-scope (scope)
   "Return validated search SCOPE."
@@ -798,20 +858,166 @@ Return a result-like alist for the target."
   "Return outline path nodes for RESULT."
   (or (org-files-db--get result 'node_path)
       (org-files-db--get result 'source 'source_path)
-      (org-files-db--get result 'heading_path)))
+      (org-files-db--get result 'heading_path)
+      (org-files-db--get result 'outline_path)))
 
-(defun org-files-db--outline-path (result)
-  "Return RESULT outline path as a display string.
-Synthetic file/root nodes are omitted from the displayed heading path."
-  (let* ((nodes (org-files-db--result-path-nodes result))
+(defun org-files-db--column-properties (definition)
+  "Return the property list represented by column DEFINITION."
+  (if (consp definition) (cdr definition) nil))
+
+(defun org-files-db--column-option (definition property default)
+  "Return DEFINITION PROPERTY, or DEFAULT when it is absent."
+  (let ((properties (org-files-db--column-properties definition)))
+    (if (plist-member properties property)
+        (plist-get properties property)
+      default)))
+
+(defun org-files-db--outline-options (definition)
+  "Return validated outline options for column DEFINITION."
+  (let ((separator
+         (org-files-db--column-option
+          definition :separator org-files-db-outline-path-separator))
+        (include-root
+         (org-files-db--column-option
+          definition :include-root org-files-db-outline-path-include-root))
+        (include-match
+         (org-files-db--column-option
+          definition :include-match org-files-db-outline-path-include-match)))
+    (unless (stringp separator)
+      (user-error "Outline-path separator must be a string"))
+    (list :separator separator
+          :include-root include-root
+          :include-match include-match)))
+
+(defun org-files-db--path-root-title (nodes)
+  "Return the file/root title represented by NODES."
+  (when-let* ((root
+               (seq-find
+                (lambda (node)
+                  (and (listp node)
+                       (memq (org-files-db--kind node) '(file root))))
+                nodes)))
+    (org-files-db--node-title root)))
+
+(defun org-files-db--path-heading-titles (nodes)
+  "Return heading titles represented by NODES."
+  (delq nil
+        (mapcar
+         (lambda (node)
+           (let ((kind (and (listp node) (org-files-db--kind node))))
+             (when (or (stringp node)
+                       (eq kind 'heading)
+                       (and (listp node) (null kind)))
+               (let ((title (org-files-db--node-title node)))
+                 (unless (string-empty-p title) title)))))
+         nodes)))
+
+(defun org-files-db--append-heading-title (headings title)
+  "Append TITLE to HEADINGS unless it is already the final component."
+  (if (or (not (and (stringp title) (not (string-empty-p title))))
+          (equal (car (last headings)) title))
+      headings
+    (append headings (list title))))
+
+(defun org-files-db--outline-data (root headings)
+  "Return normalized outline data for ROOT and HEADINGS."
+  (list :root (and (stringp root) (not (string-empty-p root)) root)
+        :headings (delq nil headings)))
+
+(defun org-files-db--generic-outline-data (result)
+  "Return generic outline data for RESULT."
+  (let* ((nodes (or (org-files-db--result-path-nodes result) nil))
+         (root (org-files-db--path-root-title nodes))
+         (headings (org-files-db--path-heading-titles nodes)))
+    (unless headings
+      (let ((title (org-files-db--result-title result)))
+        (setq headings (list title))
+        (when (equal root title)
+          (setq root nil))))
+    (org-files-db--outline-data root headings)))
+
+(defun org-files-db--source-outline-data (result)
+  "Return source outline data for link RESULT."
+  (let* ((source (org-files-db--get result 'source))
+         (heading (org-files-db--get source 'heading))
          (nodes
-          (seq-remove
-           (lambda (node)
-             (memq (org-files-db--kind node) '(file root)))
-           nodes)))
-    (if nodes
-        (string-join (mapcar #'org-files-db--node-title nodes) " » ")
-      (org-files-db--result-title result))))
+          (or (org-files-db--get heading 'outline_path)
+              (org-files-db--get source 'outline_path)
+              (org-files-db--get source 'source_path)
+              (org-files-db--get result 'node_path)
+              nil))
+         (headings (org-files-db--path-heading-titles nodes))
+         (heading-title
+          (or (org-files-db--get heading 'title)
+              (when (eq (org-files-db--kind source) 'heading)
+                (org-files-db--get source 'title))))
+         (root
+          (or (org-files-db--get source 'file 'title)
+              (org-files-db--path-root-title nodes))))
+    (org-files-db--outline-data
+     root
+     (org-files-db--append-heading-title headings heading-title))))
+
+(defun org-files-db--resolved-target-p (result)
+  "Return non-nil when RESULT may contain a resolved structured target."
+  (let ((status (org-files-db--get result 'resolution_status)))
+    (or (null status)
+        (equal (if (symbolp status) (symbol-name status) status)
+               "resolved"))))
+
+(defun org-files-db--target-outline-data (result)
+  "Return resolved target outline data for link RESULT, or nil."
+  (when (org-files-db--resolved-target-p result)
+    (let* ((target (org-files-db--get result 'target))
+           (file (org-files-db--get target 'file))
+           (heading (org-files-db--get target 'heading))
+           (nodes
+            (or (org-files-db--get heading 'outline_path)
+                (org-files-db--get target 'outline_path)
+                (org-files-db--get target 'node_path)
+                nil))
+           (headings (org-files-db--path-heading-titles nodes))
+           (heading-title (org-files-db--get heading 'title))
+           (root
+            (or (org-files-db--get file 'title)
+                (org-files-db--path-root-title nodes))))
+      (when (or file heading nodes)
+        (org-files-db--outline-data
+         root
+         (org-files-db--append-heading-title headings heading-title))))))
+
+(defun org-files-db--format-outline-data (data definition)
+  "Format outline DATA according to column DEFINITION."
+  (if (null data)
+      ""
+    (let* ((options (org-files-db--outline-options definition))
+           (headings (copy-sequence (plist-get data :headings)))
+           (root (plist-get data :root))
+           (include-root (plist-get options :include-root))
+           (include-match (plist-get options :include-match)))
+      (unless include-match
+        (setq headings (butlast headings)))
+      (string-join
+       (append (when (and include-root root) (list root)) headings)
+       (plist-get options :separator)))))
+
+(defun org-files-db--outline-path (result &optional definition)
+  "Return RESULT outline path formatted for DEFINITION."
+  (org-files-db--format-outline-data
+   (org-files-db--generic-outline-data result)
+   (or definition 'outline-path)))
+
+(defun org-files-db--source-outline-path (result &optional definition)
+  "Return link RESULT source outline path formatted for DEFINITION."
+  (org-files-db--format-outline-data
+   (org-files-db--source-outline-data result)
+   (or definition 'source-outline-path)))
+
+(defun org-files-db--target-outline-path (result &optional definition)
+  "Return link RESULT target outline path formatted for DEFINITION."
+  (org-files-db--format-outline-data
+   (org-files-db--target-outline-data result)
+   (or definition 'target-outline-path)))
 
 (defun org-files-db--format-list-value (value)
   "Format list VALUE as a compact string."
@@ -821,44 +1027,51 @@ Synthetic file/root nodes are omitted from the displayed heading path."
            value)
    ","))
 
-(defun org-files-db--column-value (result column)
-  "Return RESULT value for COLUMN as a string."
-  (let ((value
-         (pcase column
-           ('todo-keyword (org-files-db--get result 'todo_keyword))
-           ('todo-type (org-files-db--get result 'todo_type))
-           ('priority (org-files-db--get result 'priority))
-           ('title (org-files-db--result-title result))
-           ('outline-path (org-files-db--outline-path result))
-           ('source-outline-path (org-files-db--outline-path result))
-           ('tags (or (org-files-db--get result 'all_tags)
-                      (org-files-db--get result 'tags)))
-           ('file-name
-            (when-let* ((file (org-files-db--result-file result)))
-              (file-name-nondirectory file)))
-           ('file-title
-            (or (org-files-db--get result 'title)
-                (when-let* ((file (org-files-db--result-file result)))
-                  (file-name-base file))))
-           ('file-path (org-files-db--result-file result))
-           ('line-number (org-files-db--result-line result))
-           ('byte-start (org-files-db--result-byte-start result))
-           ('byte-end (org-files-db--get result 'location 'byte_end))
-           ('file-id (org-files-db--get result 'file_id))
-           ('parent-id (org-files-db--get result 'parent_id))
-           ('scheduled-raw (org-files-db--get result 'scheduled_raw))
-           ('deadline-raw (org-files-db--get result 'deadline_raw))
-           ('closed-raw (org-files-db--get result 'closed_raw))
-           ('link-type (org-files-db--get result 'link_type))
-           ('link-target (org-files-db--get result 'raw_target))
-           ('link-description (org-files-db--get result 'raw_description))
-           ('link-path (org-files-db--get result 'link_path))
-           ('raw-target (org-files-db--get result 'raw_target))
-           ('raw-description (org-files-db--get result 'raw_description))
-           ('status (org-files-db--get result 'resolution_status))
-           ('resolution-status (org-files-db--get result 'resolution_status))
-           ('rank (org-files-db--get result 'rank))
-           (_ (org-files-db--get result column)))))
+(defun org-files-db--column-value (result definition)
+  "Return RESULT value for column DEFINITION as a string."
+  (let* ((column (org-files-db--column-name definition))
+         (value
+          (pcase column
+            ('todo-keyword (org-files-db--get result 'todo_keyword))
+            ('todo-type (org-files-db--get result 'todo_type))
+            ('priority (org-files-db--get result 'priority))
+            ('title (org-files-db--result-title result))
+            ('outline-path
+             (if (eq (org-files-db--kind result) 'link)
+                 (org-files-db--source-outline-path result definition)
+               (org-files-db--outline-path result definition)))
+            ('source-outline-path
+             (org-files-db--source-outline-path result definition))
+            ('target-outline-path
+             (org-files-db--target-outline-path result definition))
+            ('tags (or (org-files-db--get result 'all_tags)
+                       (org-files-db--get result 'tags)))
+            ('file-name
+             (when-let* ((file (org-files-db--result-file result)))
+               (file-name-nondirectory file)))
+            ('file-title
+             (or (org-files-db--get result 'title)
+                 (when-let* ((file (org-files-db--result-file result)))
+                   (file-name-base file))))
+            ('file-path (org-files-db--result-file result))
+            ('line-number (org-files-db--result-line result))
+            ('byte-start (org-files-db--result-byte-start result))
+            ('byte-end (org-files-db--get result 'location 'byte_end))
+            ('file-id (org-files-db--get result 'file_id))
+            ('parent-id (org-files-db--get result 'parent_id))
+            ('scheduled-raw (org-files-db--get result 'scheduled_raw))
+            ('deadline-raw (org-files-db--get result 'deadline_raw))
+            ('closed-raw (org-files-db--get result 'closed_raw))
+            ('link-type (org-files-db--get result 'link_type))
+            ('link-target (org-files-db--get result 'raw_target))
+            ('link-description (org-files-db--get result 'raw_description))
+            ('link-path (org-files-db--get result 'link_path))
+            ('raw-target (org-files-db--get result 'raw_target))
+            ('raw-description (org-files-db--get result 'raw_description))
+            ('status (org-files-db--get result 'resolution_status))
+            ('resolution-status (org-files-db--get result 'resolution_status))
+            ('rank (org-files-db--get result 'rank))
+            (_ (org-files-db--get result column)))))
     (cond
      ((null value) "")
      ((listp value) (org-files-db--format-list-value value))
@@ -875,7 +1088,7 @@ Synthetic file/root nodes are omitted from the displayed heading path."
     ('priority 'org-priority)
     ('tags 'org-tag)
     ((or 'scheduled-raw 'deadline-raw 'closed-raw 'date) 'org-date)
-    ((or 'title 'outline-path 'source-outline-path)
+    ((or 'title 'outline-path 'source-outline-path 'target-outline-path)
      (let* ((level (or (org-files-db--get result 'level)
                        (org-files-db--get result 'heading_level)
                        1))
@@ -896,7 +1109,7 @@ Synthetic file/root nodes are omitted from the displayed heading path."
 
 (defun org-files-db--column-width-spec (definition)
   "Return the width specification from column DEFINITION."
-  (or (plist-get (cdr definition) :width) 'auto))
+  (or (plist-get (org-files-db--column-properties definition) :width) 'auto))
 
 (defun org-files-db--validate-width-spec (spec column)
   "Validate width SPEC for COLUMN and return it."
@@ -917,7 +1130,7 @@ Synthetic file/root nodes are omitted from the displayed heading path."
   "Calculate shared widths for RESULTS and COLUMNS."
   (mapcar
    (lambda (definition)
-     (let* ((column (car definition))
+     (let* ((column (org-files-db--column-name definition))
             (spec (org-files-db--validate-width-spec
                    (org-files-db--column-width-spec definition)
                    column))
@@ -927,7 +1140,7 @@ Synthetic file/root nodes are omitted from the displayed heading path."
                    #'max
                    (mapcar (lambda (result)
                              (string-width
-                              (org-files-db--column-value result column)))
+                              (org-files-db--column-value result definition)))
                            results)
                    1))))
        (pcase spec
@@ -936,12 +1149,67 @@ Synthetic file/root nodes are omitted from the displayed heading path."
          (`(fixed ,n) n))))
    columns))
 
-(defun org-files-db--format-cell (result column width)
-  "Format RESULT COLUMN to WIDTH."
-  (let* ((raw (org-files-db--column-value result column))
-         (text (if (> (string-width raw) width)
-                   (truncate-string-to-width raw width nil nil "…")
-                 raw))
+(defun org-files-db--truncate-options (definition)
+  "Return validated truncation options for column DEFINITION."
+  (let* ((properties (org-files-db--column-properties definition))
+         (specified (and (plist-member properties :truncate)
+                         (plist-get properties :truncate))))
+    (unless (or (null specified) (listp specified))
+      (user-error "Column %s has invalid truncation options: %S"
+                  (org-files-db--column-name definition) specified))
+    (let ((position
+           (if (and specified (plist-member specified :position))
+               (plist-get specified :position)
+             org-files-db-truncate-position))
+          (marker
+           (if (and specified (plist-member specified :marker))
+               (plist-get specified :marker)
+             org-files-db-truncate-marker)))
+      (unless (memq position '(left middle right))
+        (user-error "Column %s has invalid truncation position: %S"
+                    (org-files-db--column-name definition) position))
+      (unless (stringp marker)
+        (user-error "Column %s has a non-string truncation marker"
+                    (org-files-db--column-name definition)))
+      (list :position position :marker marker))))
+
+(defun org-files-db--string-suffix-to-width (string width)
+  "Return the longest suffix of STRING whose display width is at most WIDTH."
+  (let ((start (length string)))
+    (while (and (> start 0)
+                (<= (string-width (substring string (1- start))) width))
+      (setq start (1- start)))
+    (substring string start)))
+
+(defun org-files-db--truncate-column-value (value width definition)
+  "Truncate VALUE to WIDTH according to column DEFINITION."
+  (if (<= (string-width value) width)
+      value
+    (pcase-let* ((options (org-files-db--truncate-options definition))
+                 (position (plist-get options :position))
+                 (marker (plist-get options :marker))
+                 (marker-width (string-width marker)))
+      (if (>= marker-width width)
+          (truncate-string-to-width marker width)
+        (let* ((available (- width marker-width))
+               (left-width (/ (+ available 1) 2))
+               (right-width (- available left-width)))
+          (pcase position
+            ('left
+             (concat marker
+                     (org-files-db--string-suffix-to-width value available)))
+            ('middle
+             (concat (truncate-string-to-width value left-width)
+                     marker
+                     (org-files-db--string-suffix-to-width value right-width)))
+            (_
+             (concat (truncate-string-to-width value available) marker))))))))
+
+(defun org-files-db--format-cell (result definition width)
+  "Format RESULT column DEFINITION to WIDTH."
+  (let* ((column (org-files-db--column-name definition))
+         (raw (org-files-db--column-value result definition))
+         (text (org-files-db--truncate-column-value raw width definition))
          (padding (max 0 (- width (string-width text))))
          (face (org-files-db--sanitized-face
                 (org-files-db--column-face result column))))
@@ -953,7 +1221,7 @@ Synthetic file/root nodes are omitted from the displayed heading path."
   (string-join
    (cl-mapcar
     (lambda (definition width)
-      (org-files-db--format-cell result (car definition) width))
+      (org-files-db--format-cell result definition width))
     columns widths)
    "  "))
 

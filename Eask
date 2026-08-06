@@ -26,6 +26,7 @@
  (depends-on "buttercup")
  (depends-on "consult")
  (depends-on "embark")
+ (depends-on "embark")
  (depends-on "package-lint")
  (depends-on "relint"))
 

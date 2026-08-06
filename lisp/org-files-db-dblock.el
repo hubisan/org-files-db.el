@@ -46,6 +46,11 @@
       (user-error "Unsupported org-files-db dynamic-block layout: %S" value))
     layout))
 
+(defun org-files-db-dblock--query-includes (params)
+  "Return query includes required to render dynamic-block PARAMS."
+  (when (eq (org-files-db-dblock--layout params) 'outline)
+    '(path)))
+
 (defun org-files-db-dblock--base-level ()
   "Return the level of the heading containing the current dynamic block."
   (save-excursion
@@ -180,7 +185,8 @@ CONFIG-FILE overrides the global configuration; an explicit nil writes
      (let* ((query (org-files-db-dblock--query-definition params))
             (config-file (org-files-db-dblock--config-file params 'query))
             (response (org-files-db--execute-query
-                       query config-file "Dynamic query block"))
+                       query config-file "Dynamic query block"
+                       (org-files-db-dblock--query-includes params)))
             (results
              (org-files-db--results-with-config
               (org-files-db--normalize-results response)
@@ -271,7 +277,8 @@ CONFIG-FILE overrides the global configuration; an explicit nil writes
             (config-file
              (org-files-db-dblock--config-file params 'backlinks))
             (response (org-files-db--execute-query
-                       query config-file "Dynamic backlinks block"))
+                       query config-file "Dynamic backlinks block"
+                       (org-files-db-dblock--query-includes params)))
             (results
              (org-files-db--results-with-config
               (org-files-db--normalize-results response)

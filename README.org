@@ -66,6 +66,39 @@ Supported column widths are:
 
 Default columns can be customized separately for headings, files, links, and search results.
 
+** Outline paths and truncation
+
+Heading and search results use the ~outline-path~ column.  Link results use two explicit columns: ~source-outline-path~ is the hierarchy containing the link, while ~target-outline-path~ is the hierarchy of its resolved target.  Unresolved, ambiguous, external, unsupported, and structurally incomplete targets produce an empty target path rather than displaying the authored link target.
+
+#+begin_src emacs-lisp
+(setq org-files-db-outline-path-separator " » ")
+(setq org-files-db-outline-path-include-root nil)
+(setq org-files-db-outline-path-include-match t)
+
+(org-files-db-query
+ '(links (status "resolved"))
+ '((source-outline-path
+    :separator " » "
+    :include-root nil
+    :include-match t
+    :width (max 50)
+    :truncate (:position right :marker "…"))
+   (link-description :width (max 40))
+   (target-outline-path
+    :separator " » "
+    :include-root t
+    :include-match t
+    :width (max 50)
+    :truncate (:position middle :marker "…"))
+   (resolution-status :width (fixed 10))))
+#+end_src
+
+~:separator~ controls the text between components.  ~:include-root~ includes the corresponding source or target file title.  ~:include-match nil~ omits the final source heading or resolved target heading.  For a target that resolves directly to a file, ~target-outline-path~ is empty unless ~:include-root t~ is used.
+
+The package infers required CLI includes from the configured columns.  ~source-outline-path~ requests source path context and ~target-outline-path~ requests structured target context; both are retrieved in the same flat query invocation.  Users do not need to add ~--include~ or switch to outline output.  For compatibility, ~outline-path~ on link results currently behaves like ~source-outline-path~, but new configurations should use the explicit link column name.
+
+Truncation is available for every displayed column.  Customize the defaults with ~org-files-db-truncate-position~ and ~org-files-db-truncate-marker~, or override them per column with ~:truncate (:position left|middle|right :marker STRING)~.  The marker counts toward the final column width, and an empty marker performs hard truncation.
+
 * Search
 
 Perform one FTS5 search:
@@ -105,6 +138,12 @@ The former leading positional search scope remains accepted for compatibility, i
          :command search
          :expression "org-files-db"
          :scope title)
+        ("resolved-links"
+         :command query
+         :query (links (status "resolved"))
+         :columns ((source-outline-path :width (max 50))
+                   (link-description :width (max 30))
+                   (target-outline-path :width (max 50))))
         ("public-tasks"
          :command query
          :config-file nil

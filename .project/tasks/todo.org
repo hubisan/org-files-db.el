@@ -1213,262 +1213,17 @@ Errors expected while entering an incomplete FTS5 expression must not interrupt 
 :VISIBILITY: folded
 :END:
 
+Per command geht, pro View noch prüfen.
+
 [[./archive/2026-08-05--support-per-command-view-configuration.org][Task details]]
 
-* TODO Add source and target outline-path columns for links
+* DONE Add source and target outline-path columns for links
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Display the outline hierarchy containing a link and the outline hierarchy of its resolved target as separate configurable columns.
+[[./archive/2026-08-06--add-link-outline-path-columns.org][Task details]]
 
-** Column names
-
-For link results, provide two explicit columns:
-
-- ~source-outline-path~ shows the hierarchy in which the link occurs.
-- ~target-outline-path~ shows the hierarchy of the resolved link target.
-
-Use ~outline-path~ for heading and search results.
-
-Do not use the ambiguous ~outline-path~ name as the documented link column.
-
-Existing support for ~outline-path~ on link results may remain temporarily as an alias for ~source-outline-path~, but new documentation and examples must use the explicit column names.
-
-** Source outline path
-
-~source-outline-path~ represents the Org hierarchy containing the matched link.
-
-Example source:
-
-#+begin_src org
-,* Applications
-,** Editors
-,*** Emacs
-,**** [[file:packages.org][Packages]]
-#+end_src
-
-The source outline path is:
-
-#+begin_example
-Applications » Editors » Emacs
-#+end_example
-
-The link itself is not an outline component.
-
-The column uses structured source context returned for link results.
-
-The query command must request the required source data automatically when ~source-outline-path~ is configured.
-
-Prefer the structured source heading outline path when available.
-
-A ~node_path~ returned through the ~path~ include may be used when it represents the same source hierarchy.
-
-Do not require ~--output outline~ merely to calculate this column.
-
-** Target outline path
-
-~target-outline-path~ represents the hierarchy of the resolved target.
-
-Example target:
-
-#+begin_src org
-,* heading 1
-,** heading 2
-,*** heading 3
-:PROPERTIES:
-:CUSTOM_ID: 4cd16e0c-cd97-42c7-8338-b4208e02224c
-:END:
-#+end_src
-
-Given a resolved link to ~heading 3~, the target data contains:
-
-#+begin_src json
-"target": {
-  "file": {
-    "title": "test-subheading"
-  },
-  "heading": {
-    "title": "heading 3",
-    "outline_path": [
-      "heading 1",
-      "heading 2",
-      "heading 3"
-    ]
-  }
-}
-#+end_src
-
-The displayed target outline path is:
-
-#+begin_example
-heading 1 » heading 2 » heading 3
-#+end_example
-
-The query command must automatically request ~--include target~ when ~target-outline-path~ is configured.
-
-No additional query may be executed for each target.
-
-** File targets
-
-When the resolved target is a file rather than a heading:
-
-- With ~:include-root t~, display the target file title.
-- With ~:include-root nil~, display an empty value.
-
-When the target is a heading, the target file title is included only when ~:include-root t~.
-
-Example:
-
-#+begin_example
-test-subheading » heading 1 » heading 2 » heading 3
-#+end_example
-
-** Unresolved targets
-
-~target-outline-path~ is empty when the link target is:
-
-- unresolved
-- ambiguous
-- external
-- unsupported
-- missing structured target data
-
-Do not display the authored raw target as an outline path.
-
-Other columns such as ~link-target~ and ~resolution-status~ continue to expose those details.
-
-** Shared outline options
-
-Both columns support the same outline options:
-
-#+begin_src emacs-lisp
-(source-outline-path
- :separator " » "
- :include-root nil
- :include-match t
- :width (max 50)
- :truncate (:position right :marker "…"))
-
-(target-outline-path
- :separator " » "
- :include-root nil
- :include-match t
- :width (max 50)
- :truncate (:position middle :marker "…"))
-#+end_src
-
-The options have the following meaning:
-
-- ~:separator~ separates path components.
-- ~:include-root~ includes the source or target file root.
-- ~:include-match~ includes the final heading component.
-- ~:width~ controls the shared column width.
-- ~:truncate~ controls shortening when the final width is exceeded.
-
-The global outline defaults also apply:
-
-#+begin_src emacs-lisp
-org-files-db-outline-path-separator
-org-files-db-outline-path-include-root
-org-files-db-outline-path-include-match
-#+end_src
-
-** Include inference
-
-Determine required CLI includes from the configured columns.
-
-At minimum:
-
-#+begin_example
-source-outline-path  → source or path
-target-outline-path  → target
-#+end_example
-
-When both columns are configured, invoke the CLI with all required includes in one call.
-
-Conceptually:
-
-#+begin_src sh
-orgfdb query \
-  --include source,target \
-  '(links (status "resolved"))'
-#+end_src
-
-If ~path~ is required for source hierarchy instead of ~source~, combine it in the same invocation:
-
-#+begin_src sh
-orgfdb query \
-  --include path,target \
-  '(links (status "resolved"))'
-#+end_src
-
-Do not require users to specify includes manually merely because they selected these columns.
-
-Do not request expensive includes that are not needed by the configured columns or actions.
-
-** Output mode
-
-Keep the normal link query output flat for completion and column formatting.
-
-~--output outline~ changes the shape of the result output and is intended for hierarchical output, not for providing individual column values.
-
-The package's Org exporter may still construct outline output from the included path information.
-
-Do not maintain separate flat and outline query execution paths solely for these columns.
-
-** Default link columns
-
-Update the configurable link-column defaults to use explicit source and target names where appropriate.
-
-Example:
-
-#+begin_src emacs-lisp
-(setq org-files-db-link-columns
-      '((source-outline-path
-         :width (max 50))
-        (link-description
-         :width (max 40))
-        (target-outline-path
-         :width (max 50))
-        (resolution-status
-         :width (fixed 10))
-        (file-name
-         :width (max 30))))
-#+end_src
-
-The target column need not be part of the built-in default if requesting target information for every link would be undesirable.
-
-It must nevertheless be available as a documented supported column.
-
-** README documentation
-
-Document:
-
-- ~source-outline-path~ as the hierarchy containing the link
-- ~target-outline-path~ as the hierarchy of the resolved target
-- unresolved targets producing an empty target path
-- both columns supporting the standard outline and truncation options
-- required includes being selected automatically by the package
-
-Do not imply that ~--output outline~ is required.
-
-** Acceptance criteria
-
-- Link results support ~source-outline-path~.
-- Link results support ~target-outline-path~.
-- The source path describes where the link occurs.
-- The target path describes the resolved target hierarchy.
-- File roots can be included independently through ~:include-root~.
-- The final heading can be omitted through ~:include-match nil~.
-- Unresolved and external targets produce an empty target path.
-- Configured columns automatically add the required CLI includes.
-- Source and target data are retrieved in one CLI invocation.
-- No per-result target queries are executed.
-- Flat query output remains usable for completion.
-- The columns support separators, widths, and general truncation options.
-- Tests cover nested source headings, nested target headings, file targets, root inclusion, match exclusion, unresolved targets, custom separators, include inference, and simultaneous source and target columns.
-  
 * TODO Add row expansion for tags, effective properties, and keywords
 :PROPERTIES:
 :VISIBILITY: folded
@@ -4631,3 +4386,598 @@ Document the two linked-heading export representations:
 - Tests or documentation checks detect examples that reference removed or renamed options.
   
 * TODO Column Width in %
+
+* TODO Add an action for opening resolved link targets
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Add a reusable action that opens the resolved target of a link result while keeping the existing default action for opening the link source unchanged.
+
+** Existing behaviour
+
+The existing default result action:
+
+#+begin_src emacs-lisp
+org-files-db-actions-open-result
+#+end_src
+
+opens the source file and jumps to the matched result location.
+
+For link results, this means:
+
+- open the file containing the link
+- jump to the link occurrence
+- reveal the surrounding Org context
+
+This behaviour remains unchanged.
+
+The existing function:
+
+#+begin_src emacs-lisp
+org-files-db-actions-follow-heading-link
+#+end_src
+
+operates on heading results and follows a link associated with that heading.
+
+It must not be reused as the implementation for opening the structured target of a link result.
+
+** New public action
+
+Add a new public action:
+
+#+begin_src emacs-lisp
+org-files-db-actions-open-link-target
+#+end_src
+
+The function accepts either:
+
+- the original link result object
+- a propertized completion candidate containing ~org-files-db-result~ metadata
+
+Keep the function interactive so that it can be used as an Embark action.
+
+Do not add an autoload cookie merely because the function is interactive.
+
+** Supported targets
+
+The action uses the structured target data returned for the link result.
+
+For a resolved heading target:
+
+- validate the target file
+- open the target file
+- jump to the target heading
+- reveal the surrounding Org context
+
+For a resolved file target:
+
+- validate the target file
+- open the target file
+- move to an appropriate initial position
+- reveal the file context where useful
+
+The action must use stable structured target information where available, such as:
+
+#+begin_example
+target.file.path
+target.heading.id
+target.heading.custom_id
+target.heading.begin
+target.heading.line
+target.heading.outline_path
+#+end_example
+
+Prefer stable identifiers over positional information where the existing action infrastructure already supports them.
+
+Do not parse the authored raw link target when structured target data is available.
+
+** Unsupported targets
+
+Signal a clear user-facing error when the target is:
+
+- unresolved
+- ambiguous
+- external
+- unsupported
+- missing
+- missing structured target data
+- missing a readable target file
+
+Do not silently fall back to opening the source link.
+
+Do not open the authored raw target as a file path unless the structured result explicitly identifies it as the resolved target.
+
+Example error messages may include:
+
+#+begin_example
+Link target is unresolved
+Link target is ambiguous
+Link target is external
+Link result has no structured target
+Target file does not exist: ...
+Target file is not readable: ...
+#+end_example
+
+Errors should identify the selected result or target where practical.
+
+** Result validation
+
+Add or reuse validation that confirms:
+
+- the selected result is a link result
+- structured target data is present
+- the resolution status permits opening the target
+- the target file path is valid
+- heading target metadata is internally consistent
+
+Private helpers owned only by the actions module use the prefix:
+
+#+begin_example
+org-files-db-actions--*
+#+end_example
+
+Do not add new generic core helpers unless the same functionality is shared by several modules.
+
+Do not call another specialised module's private helper.
+
+** Target navigation
+
+Reuse the shared core navigation infrastructure where possible.
+
+Examples may include:
+
+#+begin_example
+org-files-db--goto-result-location
+org-files-db--result-file
+#+end_example
+
+Extend shared navigation only when the target representation requires functionality that is genuinely useful outside this one action.
+
+For heading targets, choose the strongest available navigation method in a deterministic order.
+
+A possible order is:
+
+1. Org ID
+2. CUSTOM_ID
+3. exact stored position
+4. stored line
+5. outline path fallback
+
+Do not perform an additional CLI query merely to locate a target that is already represented in the result.
+
+If an outline-path fallback is necessary, handle duplicate headings carefully and report ambiguity rather than jumping silently to the wrong heading.
+
+** Configuration context
+
+The original link result retains the effective configuration file that produced it.
+
+The open-target action normally performs no additional ~orgfdb~ operation and therefore does not need to resolve a configuration file merely to open the target.
+
+If the implementation requires a follow-up CLI operation, it must use the result's stored configuration context rather than the current global value.
+
+Do not silently switch to another database.
+
+Avoid a follow-up CLI operation when the structured target already contains enough navigation data.
+
+** Include inference
+
+The action requires structured target data.
+
+Queries that expose this action as an available action must request:
+
+#+begin_example
+--include target
+#+end_example
+
+Do not make the action depend accidentally on the presence of the ~target-outline-path~ column.
+
+Selecting the target-outline-path column already requests target data, but the action must also work when that column is not displayed.
+
+Determine how action-dependent include inference fits into the existing query API.
+
+Possible approaches include:
+
+- associating required includes with registered actions
+- allowing a query invocation to declare additional required includes
+- ensuring the Embark action is only offered when target data is already present
+
+Choose one consistent model.
+
+Do not add a second query execution path.
+
+Do not execute one target query per selected result.
+
+** Embark integration
+
+Add an Embark action map for org-files-db results if the package does not already provide one.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(defvar-keymap org-files-db-embark-result-map
+  :doc "Actions for org-files-db completion results."
+  "o" #'org-files-db-actions-open-result
+  "t" #'org-files-db-actions-open-link-target)
+#+end_src
+
+The exact key bindings may differ if existing package conventions suggest better choices.
+
+The action map should distinguish clearly between:
+
+- opening the matched source result
+- opening the resolved link target
+
+Register the action map only when Embark is available.
+
+Embark remains an optional runtime dependency.
+
+Do not add:
+
+#+begin_src emacs-lisp
+(require 'embark)
+#+end_src
+
+to the main package entry file.
+
+Use delayed registration such as:
+
+#+begin_src emacs-lisp
+(with-eval-after-load 'embark
+  ...)
+#+end_src
+
+or the existing optional-integration pattern in the package.
+
+Do not require ~embark-consult~ for this action.
+
+** Programmatic use
+
+The function remains usable directly from Lisp:
+
+#+begin_src emacs-lisp
+(org-files-db-actions-open-link-target result)
+#+end_src
+
+It must not depend on being invoked through Embark.
+
+A propertized candidate invocation must also work:
+
+#+begin_src emacs-lisp
+(org-files-db-actions-open-link-target candidate)
+#+end_src
+
+where ~candidate~ contains the original result under the ~org-files-db-result~ text property.
+
+** Documentation
+
+Update the README to document:
+
+- the default action opens the matched source location
+- link results also support opening the resolved target
+- heading and file targets are supported
+- unresolved, ambiguous, external, and unsupported targets cannot be opened
+- the target action uses structured target data
+- Embark users receive separate source and target actions
+- Embark remains optional
+- ~embark-consult~ is not required for this package integration
+
+Include a concise example of programmatic invocation.
+
+Update the changelog.
+
+** Tests
+
+Add tests covering:
+
+- opening a resolved heading target
+- opening a resolved file target
+- accepting the original result object
+- accepting a propertized completion candidate
+- jumping by stable heading ID where available
+- falling back to stored target position where appropriate
+- source and target actions opening different locations
+- unresolved targets producing an error
+- ambiguous targets producing an error
+- external targets producing an error
+- unsupported targets producing an error
+- missing structured target data producing an error
+- missing target files producing an error
+- unreadable target files producing an error
+- no additional CLI query for complete structured targets
+- preserved result configuration context for any required follow-up operation
+- target include inference when the action requires target data
+- action operation without the ~target-outline-path~ display column
+- programmatic invocation
+- interactive invocation
+- Embark action registration after Embark loads
+- package loading without Embark installed
+- no dependency on ~embark-consult~
+
+Where practical, verify that the action map contains separate bindings for source and target navigation.
+
+** Implementation order
+
+1. Inspect the current link result and structured target representation.
+2. Define supported heading-target and file-target shapes.
+3. Add target validation helpers in the actions module.
+4. Implement target file extraction.
+5. Implement heading-target navigation.
+6. Add ~org-files-db-actions-open-link-target~.
+7. Add or extend include inference for action-required target data.
+8. Add optional Embark action-map registration.
+9. Add programmatic and interactive tests.
+10. Add unresolved and invalid-target tests.
+11. Update README and changelog.
+12. Run byte compilation, linting, and the complete test suite.
+
+** Acceptance criteria
+
+- ~org-files-db-actions-open-result~ continues to open the matched source location.
+- ~org-files-db-actions-open-link-target~ opens the resolved target of a link result.
+- Heading targets open at the target heading.
+- File targets open the target file.
+- The action accepts result objects and propertized candidates.
+- The action is interactive and usable through Embark.
+- Source and target navigation are exposed as distinct actions.
+- Unresolved, ambiguous, external, unsupported, and incomplete targets produce clear errors.
+- Structured target data is used instead of reparsing the raw authored target.
+- Complete target results do not trigger additional CLI queries.
+- Any required follow-up CLI operation preserves the result configuration context.
+- Target data is available even when ~target-outline-path~ is not displayed.
+- Embark remains optional.
+- ~embark-consult~ is not required.
+- Tests cover source-versus-target behaviour, heading targets, file targets, invalid targets, include inference, programmatic use, interactive use, and optional Embark integration.
+  
+* TODO Add concise user feedback for result actions
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Prevent interactive result actions from exposing complete result objects in the echo area and provide short, useful English confirmation messages instead.
+
+** Problem
+
+Some actions currently return the selected result object or another large internal value.
+
+When invoked interactively, this may expose the complete result structure in the echo area, for example:
+
+#+begin_example
+((org-files-db--config-file . "...")
+ (kind . "heading")
+ (matched . t)
+ ...)
+#+end_example
+
+This output is implementation data and is not useful as interactive feedback.
+
+Actions should finish with a concise confirmation such as:
+
+#+begin_example
+Link opened
+Link target opened
+Result opened
+File renamed
+Link inserted
+#+end_example
+
+** General behaviour
+
+Interactive actions must:
+
+- perform the requested operation
+- display a concise English success message
+- avoid displaying the complete result object
+- avoid displaying internal configuration metadata
+- return ~nil~ unless a meaningful documented programmatic return value is required
+
+Do not use the selected result object itself as the implicit return value of an interactive action.
+
+Do not print or message complete result structures for debugging purposes.
+
+** Opening results
+
+For the default action:
+
+#+begin_src emacs-lisp
+org-files-db-actions-open-result
+#+end_src
+
+use feedback appropriate to the result kind.
+
+Suggested messages:
+
+#+begin_example
+Heading opened
+Link opened
+File opened
+Result opened
+#+end_example
+
+Use the most specific message that can be determined reliably.
+
+For the planned target action:
+
+#+begin_src emacs-lisp
+org-files-db-actions-open-link-target
+#+end_src
+
+use:
+
+#+begin_example
+Link target opened
+#+end_example
+
+Do not include the full target object in the message.
+
+** Other actions
+
+Audit all public functions in ~org-files-db-actions.el~.
+
+Examples include:
+
+#+begin_example
+org-files-db-actions-open-result
+org-files-db-actions-insert-file-link
+org-files-db-actions-insert-heading-link
+org-files-db-actions-follow-heading-link
+org-files-db-actions-rename-file
+org-files-db-actions-rename-file-result
+org-files-db-actions-query-insert-file-link
+org-files-db-actions-query-insert-heading-link
+#+end_example
+
+Add concise success feedback where an interactive user benefits from confirmation.
+
+Possible messages include:
+
+#+begin_example
+File link inserted
+Heading link inserted
+Heading link followed
+File renamed
+#+end_example
+
+Avoid redundant messages when the called Emacs operation already provides clear and sufficient feedback.
+
+Do not emit multiple success messages for one action.
+
+** Error behaviour
+
+Existing validation and error messages remain unchanged unless they expose internal result objects unnecessarily.
+
+On failure:
+
+- signal the existing user-facing error
+- do not emit a success message
+- do not suppress useful error details
+- do not replace a specific error with a generic failure message
+
+Examples:
+
+#+begin_example
+Source file does not exist: ...
+Link target is unresolved
+Target file is not readable: ...
+#+end_example
+
+** Programmatic use
+
+Public actions remain callable directly from Lisp.
+
+Where no documented return value exists, successful programmatic invocation should return ~nil~ after performing the action.
+
+Do not make callers depend on the original result object being returned accidentally.
+
+If an action has an intentional and documented return value, preserve it for non-interactive callers and suppress only accidental interactive echo output.
+
+Where this distinction is needed, use ~called-interactively-p~ rather than maintaining separate action implementations.
+
+** Implementation guidance
+
+Structure actions so that navigation or mutation does not become the final unintentional return expression.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(defun org-files-db-actions-open-result (result)
+  "Open RESULT at its stored location."
+  (interactive ...)
+  (let ((result (org-files-db-actions--result-value result)))
+    (org-files-db-actions--validate-result result)
+    (org-files-db--goto-result-location result)
+    (message "%s opened"
+             (org-files-db-actions--result-kind-label result))
+    nil))
+#+end_src
+
+Use private helpers with the prefix:
+
+#+begin_example
+org-files-db-actions--*
+#+end_example
+
+A helper for selecting a feedback label is appropriate if several actions need it.
+
+Do not add a generic Core helper unless it is shared outside the actions module.
+
+** Message style
+
+Messages must be:
+
+- English
+- short
+- written as completed actions
+- free of trailing full stops
+- free of internal identifiers and raw Lisp structures
+
+Prefer:
+
+#+begin_example
+Link opened
+#+end_example
+
+Avoid:
+
+#+begin_example
+Successfully opened the selected org-files-db link result.
+#+end_example
+
+Avoid including file paths unless they provide important confirmation for an operation such as renaming.
+
+** Embark integration
+
+Actions invoked through Embark must produce the same concise feedback as direct interactive invocation.
+
+Do not make feedback depend on Embark being installed.
+
+Do not require ~embark-consult~.
+
+Ensure that invoking an action through an Embark action map does not expose the selected candidate's complete metadata.
+
+** Tests
+
+Add tests covering:
+
+- opening a heading displays ~Heading opened~
+- opening a link displays ~Link opened~
+- opening a file displays ~File opened~
+- unknown supported result kinds use ~Result opened~
+- opening a link target displays ~Link target opened~
+- inserted file links display concise feedback
+- inserted heading links display concise feedback
+- file rename actions display concise feedback
+- successful actions do not message complete result objects
+- internal ~org-files-db--config-file~ metadata is not displayed
+- successful actions return ~nil~ where no return value is documented
+- errors do not emit success messages
+- direct interactive invocation uses concise feedback
+- Embark invocation uses the same concise feedback
+- programmatic calls continue to perform the requested operation
+
+Stub or spy on ~message~ where appropriate.
+
+Do not make tests depend on the exact printed representation of complete result objects.
+
+** Documentation
+
+Document briefly that interactive actions report concise completion messages.
+
+Do not document internal result values as action return values unless they are intentionally supported.
+
+Update the changelog.
+
+** Acceptance criteria
+
+- Interactive actions no longer expose complete result objects.
+- Internal configuration metadata is not printed after actions.
+- Opening a link reports ~Link opened~.
+- Opening a resolved target reports ~Link target opened~.
+- Other actions provide similarly concise feedback where appropriate.
+- Successful actions return ~nil~ unless they have an intentional documented return value.
+- Errors remain specific and do not emit success messages.
+- Direct and Embark invocation behave consistently.
+- Tests cover messages, return values, error paths, and suppression of internal result output.
+  
+* TODO Ausprobieren: org-files-db-actions-follow-heading-link
+

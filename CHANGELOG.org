@@ -2,6 +2,11 @@
 
 * Unreleased
 
+- =ADDED= Added explicit ~source-outline-path~ and ~target-outline-path~ columns for link results.
+  - Source paths describe the hierarchy containing the link; target paths describe the hierarchy of resolved file or heading targets.
+  - Added per-column and global separator, root, match, width, and truncation options.
+  - Query columns now infer and combine required ~path~ and ~target~ includes in one flat CLI invocation.
+  - Unresolved, ambiguous, external, unsupported, and structurally incomplete targets produce an empty target path.
 - =ADDED= Added per-command and per-view configuration files for query, one-shot search, live search, actions, the setup diagnostic, and Org dynamic blocks.
   - Omitted command options inherit ~org-files-db-config-file~, paths override it, and explicit ~nil~ disables ~--config~ for Lisp entry points.
   - Dynamic blocks accept ~:config-file PATH~ and ~:config-file none~; view-backed blocks use the selected view's configuration.

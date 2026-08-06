@@ -48,21 +48,29 @@
 QUERY is an orgfdb query represented as an Emacs Lisp form or string.
 ACTION receives the selected result object.  When omitted, use
 `org-files-db-query-action'.  When CONFIG-FILE is omitted, inherit
-`org-files-db-config-file'; an explicit nil disables --config for this call."
+`org-files-db-config-file'; an explicit nil disables --config for this call.
+Configured columns automatically request any required path or target context."
   (interactive (list (org-files-db--read-sexp "Query: ") nil nil))
-  (let* ((effective-config-file
+  (let* ((requested-columns columns)
+         (inferred-target (org-files-db-query--target query))
+         (include-columns
+          (or requested-columns
+              (org-files-db--default-columns inferred-target nil)))
+         (includes (org-files-db--column-includes include-columns))
+         (effective-config-file
           (org-files-db--resolve-config-file
            config-file config-file-supplied-p "Query"))
          (response (org-files-db--execute-query
-                    query effective-config-file "Query"))
+                    query effective-config-file "Query" includes))
          (results
           (org-files-db--results-with-config
            (org-files-db--normalize-results response)
            effective-config-file))
          (target (or (org-files-db--response-target response)
-                     (org-files-db-query--target query)))
-         (columns (or columns
-                      (org-files-db--default-columns target results))))
+                     inferred-target))
+         (columns
+          (or requested-columns
+              (org-files-db--default-columns target results))))
     (org-files-db--present-results results columns action "Query result: ")))
 
 (provide 'org-files-db-query)

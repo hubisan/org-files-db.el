@@ -26,7 +26,6 @@
 (require 'cl-lib)
 (require 'org-files-db-core)
 
-(declare-function embark-export "embark")
 (defvar embark-exporters-alist)
 
 (defun org-files-db-export--rebased-heading-link (info)
