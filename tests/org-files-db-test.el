@@ -1,6 +1,21 @@
 ;;; org-files-db-test.el --- Tests for org-files-db -*- lexical-binding: t; -*-
 
-;; SPDX-License-Identifier: GPL-3.0-only
+;; Copyright (C) 2026 Daniel Hubmann
+
+;; This file is not part of GNU Emacs
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
+
+;; This program is distributed in the hope that it will be useful,
+;; but WITHOUT ANY WARRANTY; without even the implied warranty of
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; GNU General Public License for more details.
+
+;; You should have received a copy of the GNU General Public License
+;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 ;;; Code:
 
@@ -975,43 +990,53 @@
               :to-equal t)
       (expect (numberp (plist-get conses :median)) :to-equal t)))
 
-  (it "bounds and restores GC policy for large presentations"
+  (it "temporarily raises and restores a restrictive GC threshold"
     (let ((org-files-db--large-presentation-row-count 1)
           (gc-cons-threshold 800000)
           (gc-cons-percentage 0.1)
           (original-threshold 800000)
-          observed-threshold
-          (collections 0))
+          observed-threshold)
       (cl-letf (((symbol-function 'org-files-db--prepare-presentation-1)
                  (lambda (&rest _)
                    (setq observed-threshold gc-cons-threshold)
                    (make-org-files-db--presentation
                     :timings '(:total 0.0)
-                    :phase-metrics nil)))
-                ((symbol-function 'garbage-collect)
-                 (lambda () (setq collections (1+ collections)) nil)))
+                    :phase-metrics nil))))
         (org-files-db--prepare-presentation '(((title . "Large"))) '((title)))
         (expect observed-threshold
                 :to-be-greater-than original-threshold)
-        (expect collections :to-equal 1)
         (expect gc-cons-threshold :to-equal original-threshold))))
 
-  (it "avoids an unnecessary boundary GC under a generous GC policy"
+  (it "preserves a generous GC policy for large presentations"
     (let ((org-files-db--large-presentation-row-count 1)
           (gc-cons-threshold 800000)
           (gc-cons-percentage 1.0)
-          observed-threshold
-          (collections 0))
+          observed-threshold)
       (cl-letf (((symbol-function 'org-files-db--prepare-presentation-1)
                  (lambda (&rest _)
                    (setq observed-threshold gc-cons-threshold)
                    (make-org-files-db--presentation
                     :timings '(:total 0.0)
-                    :phase-metrics nil)))
-                ((symbol-function 'garbage-collect)
-                 (lambda () (setq collections (1+ collections)) nil)))
+                    :phase-metrics nil))))
         (org-files-db--prepare-presentation '(((title . "Large"))) '((title)))
         (expect observed-threshold :to-equal 800000)
+        (expect gc-cons-threshold :to-equal 800000))))
+
+  (it "does not force a boundary garbage collection"
+    (let ((org-files-db--large-presentation-row-count 1)
+          (gc-cons-threshold 800000)
+          (gc-cons-percentage 0.1)
+          (collections 0))
+      (cl-letf (((symbol-function 'org-files-db--prepare-presentation-1)
+                 (lambda (&rest _)
+                   (make-org-files-db--presentation
+                    :timings '(:total 0.0)
+                    :phase-metrics nil)))
+                ((symbol-function 'garbage-collect)
+                 (lambda ()
+                   (setq collections (1+ collections))
+                   nil)))
+        (org-files-db--prepare-presentation '(((title . "Large"))) '((title)))
         (expect collections :to-equal 0))))
 
   (it "restores GC policy when large presentation preparation fails"
@@ -1552,9 +1577,10 @@
              "search" '("--format" "json" "x")
              (lambda (result error-data)
                (setq value result failure error-data done t))))
-      (while (and (not done) (process-live-p process))
-        (accept-process-output process 0.05))
-      (accept-process-output process 0.05)
+      (let ((deadline (+ (float-time) 2.0)))
+        (while (and (not done) (< (float-time) deadline))
+          (accept-process-output nil 0.05)))
+      (expect done :to-equal t)
       (expect failure :to-equal nil)
       (expect (org-files-db--result-title (car value))
               :to-equal "Search result"))))

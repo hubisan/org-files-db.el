@@ -149,35 +149,54 @@ do not pass the --config option unless a command-specific path is supplied."
 (defun org-files-db--alist-value (object key)
   "Return from OBJECT the value associated with KEY.
 OBJECT may be an alist or hash table, and its keys may be symbols or strings."
-  (let* ((symbol-key (if (symbolp key) key (intern key)))
-         (string-key (if (stringp key) key (symbol-name key))))
-    (cond
-     ((hash-table-p object)
-      (let ((value (gethash symbol-key object org-files-db--missing-key)))
+  (cond
+   ((hash-table-p object)
+    (if (symbolp key)
+        (let ((value (gethash key object org-files-db--missing-key)))
+          (if (eq value org-files-db--missing-key)
+              (gethash (symbol-name key) object)
+            value))
+      (let* ((symbol-key (intern key))
+             (value (gethash symbol-key object org-files-db--missing-key)))
         (if (eq value org-files-db--missing-key)
-            (gethash string-key object)
-          value)))
-     ((listp object)
-      (let ((entry (assq symbol-key object)))
+            (gethash key object)
+          value))))
+   ((listp object)
+    (if (symbolp key)
+        (let ((entry (assq key object)))
+          (if entry
+              (cdr entry)
+            (cdr (assoc (symbol-name key) object #'string=))))
+      (let* ((symbol-key (intern key))
+             (entry (assq symbol-key object)))
         (if entry
             (cdr entry)
-          (cdr (assoc string-key object #'string=)))))
-     (t nil))))
+          (cdr (assoc key object #'string=))))))
+   (t nil)))
 
 (defun org-files-db--has-key-p (object key)
   "Return non-nil when OBJECT contains KEY."
-  (let ((symbol-key (if (symbolp key) key (intern key)))
-        (string-key (if (stringp key) key (symbol-name key))))
-    (cond
-     ((hash-table-p object)
-      (or (not (eq (gethash symbol-key object org-files-db--missing-key)
-                   org-files-db--missing-key))
-          (not (eq (gethash string-key object org-files-db--missing-key)
-                   org-files-db--missing-key))))
-     ((listp object)
-      (or (assq symbol-key object)
-          (assoc string-key object #'string=)))
-     (t nil))))
+  (cond
+   ((hash-table-p object)
+    (if (symbolp key)
+        (or (not (eq (gethash key object org-files-db--missing-key)
+                     org-files-db--missing-key))
+            (not (eq (gethash (symbol-name key) object
+                              org-files-db--missing-key)
+                     org-files-db--missing-key)))
+      (let ((symbol-key (intern key)))
+        (or (not (eq (gethash symbol-key object
+                              org-files-db--missing-key)
+                     org-files-db--missing-key))
+            (not (eq (gethash key object org-files-db--missing-key)
+                     org-files-db--missing-key))))))
+   ((listp object)
+    (if (symbolp key)
+        (or (assq key object)
+            (assoc (symbol-name key) object #'string=))
+      (or (assq (intern key) object)
+          (assoc key object #'string=))))
+   (t nil)))
 
 (defun org-files-db--get (object &rest keys)
   "Return the nested value in OBJECT selected by KEYS."
@@ -1073,7 +1092,7 @@ Return a result-like alist for the target."
 
 (defvar org-files-db--candidate-lookups
   (make-hash-table :test #'eq :weakness 'key)
-  "Weak map from prepared candidate lists to direct result lookup tables.")
+  "Weak map from prepared candidate lists to direct result vectors.")
 
 (cl-defstruct org-files-db--presentation-column
   "Normalized column definition used by one presentation."
@@ -1692,81 +1711,149 @@ Return a result-like alist for the target."
 
 (defun org-files-db--presentation-populate-cells (rows columns)
   "Calculate and cache every displayed cell in ROWS for COLUMNS."
-  (cl-loop for row across rows
-           for source = (org-files-db--presentation-row-source row)
-           for cells = (make-vector (length columns) nil)
-           do (cl-loop for column across columns
-                       for column-index from 0
-                       for value = (funcall
-                                    (org-files-db--presentation-column-extractor
-                                     column)
-                                    source column)
-                       for display = (org-files-db--presentation-display-value
-                                      value)
-                       do (aset
-                           cells column-index
-                           (make-org-files-db--presentation-cell
-                            :logical-value value
-                            :display display
-                            :display-width (string-width display)
-                            :source-face
-                            (org-files-db--presentation-column-source-face
-                             source column))))
-           do (setf (org-files-db--presentation-row-cells row) cells))
+  (let ((row-count (length rows))
+        (column-count (length columns)))
+    (dotimes (row-index row-count)
+      (let* ((row (aref rows row-index))
+             (source (org-files-db--presentation-row-source row))
+             (cells (make-vector column-count nil)))
+        (dotimes (column-index column-count)
+          (let* ((column (aref columns column-index))
+                 (value
+                  (funcall
+                   (org-files-db--presentation-column-extractor column)
+                   source column))
+                 (display (org-files-db--presentation-display-value value)))
+            (aset
+             cells column-index
+             (make-org-files-db--presentation-cell
+              :logical-value value
+              :display display
+              :display-width (string-width display)
+              :source-face
+              (and (> (length display) 0)
+                   (org-files-db--presentation-column-source-face
+                    source column))))))
+        (setf (org-files-db--presentation-row-cells row) cells))))
   rows)
+
+(defun org-files-db--presentation-populate-cells-widths-and-faces
+    (rows columns)
+  "Populate ROWS for COLUMNS and return widths and a sanitized face cache.
+Each displayed value, display width, source face, and final face is calculated
+once.  Width accumulation stops for fixed columns and for maximum-width
+columns as soon as their limit is reached."
+  (let* ((row-count (length rows))
+         (column-count (length columns))
+         (widths (make-vector column-count 1))
+         (width-active (make-vector column-count t))
+         (face-cache (make-hash-table :test #'eq)))
+    (dotimes (column-index column-count)
+      (let ((column (aref columns column-index)))
+        (when (eq (org-files-db--presentation-column-width-kind column)
+                  'fixed)
+          (aset widths column-index
+                (org-files-db--presentation-column-width-limit column))
+          (aset width-active column-index nil))))
+    (dotimes (row-index row-count)
+      (let* ((row (aref rows row-index))
+             (source (org-files-db--presentation-row-source row))
+             (cells (make-vector column-count nil)))
+        (dotimes (column-index column-count)
+          (let* ((column (aref columns column-index))
+                 (value
+                  (funcall
+                   (org-files-db--presentation-column-extractor column)
+                   source column))
+                 (display (org-files-db--presentation-display-value value))
+                 (display-width (string-width display))
+                 (source-face
+                  (and (> (length display) 0)
+                       (org-files-db--presentation-column-source-face
+                        source column)))
+                 (face
+                  (when source-face
+                    (let ((cached
+                           (gethash
+                            source-face face-cache
+                            org-files-db--presentation-uncomputed)))
+                      (if (eq cached org-files-db--presentation-uncomputed)
+                          (let ((sanitized
+                                 (org-files-db--sanitized-face source-face)))
+                            (puthash source-face sanitized face-cache)
+                            sanitized)
+                        cached)))))
+            (aset
+             cells column-index
+             (make-org-files-db--presentation-cell
+              :logical-value value
+              :display display
+              :display-width display-width
+              :source-face source-face
+              :face face))
+            (when (aref width-active column-index)
+              (let ((kind
+                     (org-files-db--presentation-column-width-kind column))
+                    (limit
+                     (org-files-db--presentation-column-width-limit column)))
+                (when (> display-width (aref widths column-index))
+                  (aset widths column-index display-width))
+                (when (and (eq kind 'max)
+                           (>= (aref widths column-index) limit))
+                  (aset widths column-index limit)
+                  (aset width-active column-index nil))))))
+        (setf (org-files-db--presentation-row-cells row) cells)))
+    (cons widths face-cache)))
 
 (defun org-files-db--presentation-calculate-widths (rows columns)
   "Return final shared widths for cached ROWS and normalized COLUMNS."
-  (let ((widths (make-vector (length columns) 1)))
-    (cl-loop for column across columns
-             for column-index from 0
-             for kind = (org-files-db--presentation-column-width-kind column)
-             for limit = (org-files-db--presentation-column-width-limit column)
-             do (if (eq kind 'fixed)
-                    (aset widths column-index limit)
-                  (let ((needed 1)
-                        (row-index 0)
-                        (row-count (length rows)))
-                    (while (and (< row-index row-count)
-                                (not (and (eq kind 'max)
-                                          (>= needed limit))))
-                      (let* ((row (aref rows row-index))
-                             (cell
-                              (aref (org-files-db--presentation-row-cells row)
-                                    column-index)))
-                        (setq needed
-                              (max
-                               needed
-                               (org-files-db--presentation-cell-display-width
-                                cell))))
-                      (setq row-index (1+ row-index)))
-                    (aset widths column-index
-                          (if (eq kind 'max)
-                              (min needed limit)
-                            needed)))))
+  (let* ((column-count (length columns))
+         (row-count (length rows))
+         (widths (make-vector column-count 1)))
+    (dotimes (column-index column-count)
+      (let* ((column (aref columns column-index))
+             (kind (org-files-db--presentation-column-width-kind column))
+             (limit (org-files-db--presentation-column-width-limit column)))
+        (if (eq kind 'fixed)
+            (aset widths column-index limit)
+          (let ((needed 1)
+                (row-index 0)
+                (maximum-p (eq kind 'max)))
+            (while (and (< row-index row-count)
+                        (or (not maximum-p) (< needed limit)))
+              (let* ((row (aref rows row-index))
+                     (cell
+                      (aref (org-files-db--presentation-row-cells row)
+                            column-index))
+                     (cell-width
+                      (org-files-db--presentation-cell-display-width cell)))
+                (when (> cell-width needed)
+                  (setq needed cell-width)))
+              (setq row-index (1+ row-index)))
+            (aset widths column-index
+                  (if maximum-p (min needed limit) needed))))))
     widths))
 
 (defun org-files-db--presentation-prepare-faces (rows)
   "Sanitize distinct source faces once for ROWS and return the face cache."
-  (let ((cache (make-hash-table :test #'eq)))
-    (cl-loop for row across rows
-             for cells = (org-files-db--presentation-row-cells row)
-             do (cl-loop for cell across cells
-                         for source-face =
-                         (org-files-db--presentation-cell-source-face cell)
-                         when source-face
-                         do (let ((face
-                                   (gethash
-                                    source-face cache
-                                    org-files-db--presentation-uncomputed)))
-                              (when (eq face
-                                        org-files-db--presentation-uncomputed)
-                                (setq face
-                                      (org-files-db--sanitized-face source-face))
-                                (puthash source-face face cache))
-                              (setf
-                               (org-files-db--presentation-cell-face cell)
-                               face))))
+  (let ((cache (make-hash-table :test #'eq))
+        (row-count (length rows)))
+    (dotimes (row-index row-count)
+      (let* ((row (aref rows row-index))
+             (cells (org-files-db--presentation-row-cells row))
+             (cell-count (length cells)))
+        (dotimes (cell-index cell-count)
+          (let* ((cell (aref cells cell-index))
+                 (source-face
+                  (org-files-db--presentation-cell-source-face cell)))
+            (when source-face
+              (let ((face
+                     (gethash source-face cache
+                              org-files-db--presentation-uncomputed)))
+                (when (eq face org-files-db--presentation-uncomputed)
+                  (setq face (org-files-db--sanitized-face source-face))
+                  (puthash source-face face cache))
+                (setf (org-files-db--presentation-cell-face cell) face)))))))
     cache))
 
 (defun org-files-db--string-suffix-to-width (string width &optional total-width)
@@ -1829,19 +1916,38 @@ TOTAL-WIDTH may supply the previously calculated display width of STRING."
     (concat (if face (propertize text 'face face) text)
             (make-string padding ?\s))))
 
+(defconst org-files-db--presentation-padding-vector-limit 4096
+  "Largest padding width stored in a direct vector cache.")
+
+(defun org-files-db--presentation-make-padding-cache (widths)
+  "Return an efficient padding cache suitable for presentation WIDTHS."
+  (let ((maximum 0))
+    (dotimes (index (length widths))
+      (setq maximum (max maximum (aref widths index))))
+    (if (<= maximum org-files-db--presentation-padding-vector-limit)
+        (make-vector (1+ maximum) nil)
+      (make-hash-table :test #'eql))))
+
 (defun org-files-db--format-presentation-row (row columns widths)
   "Format cached ROW once using normalized COLUMNS and WIDTHS."
   (car (org-files-db--format-presentation-row-data
-        row columns widths (make-hash-table :test #'eql))))
+        row columns widths
+        (org-files-db--presentation-make-padding-cache widths))))
 
 (defun org-files-db--presentation-padding (width cache)
   "Return WIDTH spaces reused through presentation CACHE."
-  (if (zerop width)
-      ""
+  (cond
+   ((zerop width) "")
+   ((vectorp cache)
+    (or (aref cache width)
+        (let ((padding (make-string width ?\s)))
+          (aset cache width padding)
+          padding)))
+   (t
     (or (gethash width cache)
         (let ((padding (make-string width ?\s)))
           (puthash width padding cache)
-          padding))))
+          padding)))))
 
 (defun org-files-db--format-presentation-row-data
     (row columns widths padding-cache)
@@ -1883,10 +1989,9 @@ COLUMN and WIDTH control formatting, and PADDING-CACHE reuses space strings."
   "Return formatted display and hidden search text for multi-column ROW.
 COLUMNS and WIDTHS control formatting, and PADDING-CACHE reuses space strings."
   (let* ((column-count (length columns))
-         (parts (make-vector column-count nil))
          (cells (org-files-db--presentation-row-cells row))
          (position 0)
-         face-ranges search-values)
+         segments face-ranges search-values)
     (dotimes (column-index column-count)
       (let* ((cell (aref cells column-index))
              (column (aref columns column-index))
@@ -1897,26 +2002,27 @@ COLUMNS and WIDTHS control formatting, and PADDING-CACHE reuses space strings."
              (text
               (org-files-db--truncate-presentation-value
                value value-width width column))
+             (text-length (length text))
              (text-width
               (if (eq text value) value-width (string-width text)))
              (padding-width (max 0 (- width text-width)))
-             (padding
-              (org-files-db--presentation-padding
-               padding-width padding-cache))
-             (part (if (zerop padding-width)
-                       text
-                     (concat text padding)))
              (face (org-files-db--presentation-cell-face cell)))
-        (aset parts column-index part)
-        (when (and face (> (length text) 0))
-          (push (list position (+ position (length text)) face)
+        (push text segments)
+        (when (> padding-width 0)
+          (push
+           (org-files-db--presentation-padding
+            padding-width padding-cache)
+           segments))
+        (when (and face (> text-length 0))
+          (push (list position (+ position text-length) face)
                 face-ranges))
         (when (> value-width width)
           (push value search-values))
-        (setq position
-              (+ position (length part)
-                 (if (< column-index (1- column-count)) 2 0)))))
-    (let ((display (mapconcat #'identity parts "  ")))
+        (setq position (+ position text-length padding-width))
+        (when (< column-index (1- column-count))
+          (push "  " segments)
+          (setq position (+ position 2)))))
+    (let ((display (apply #'concat (nreverse segments))))
       (dolist (range face-ranges)
         (add-text-properties
          (nth 0 range) (nth 1 range) (list 'face (nth 2 range)) display))
@@ -1933,18 +2039,47 @@ COLUMNS and WIDTHS control formatting, and PADDING-CACHE reuses space strings."
   "Return a compact identity suffix for zero-based INDEX."
   (let ((value (1+ index))
         characters)
+    ;; Build the character sequence first.  Mutating a multibyte string with
+    ;; `aset' is unsafe when replacement characters use a different internal
+    ;; byte width, even when both are non-ASCII characters.
     (while (> value 0)
       (push (+ #xe000 (% value org-files-db--candidate-identity-base))
             characters)
       (setq value (/ value org-files-db--candidate-identity-base)))
     (apply #'string #x2063 characters)))
 
+(defun org-files-db--candidate-identity-index (candidate)
+  "Return the zero-based identity encoded at the end of CANDIDATE."
+  (when (stringp candidate)
+    (let* ((end (length candidate))
+           (start end))
+      (while (and (> start 0)
+                  (let ((character (aref candidate (1- start))))
+                    (and (>= character #xe000)
+                         (< character
+                            (+ #xe000 org-files-db--candidate-identity-base)))))
+        (setq start (1- start)))
+      (when (and (< start end)
+                 (> start 0)
+                 (= (aref candidate (1- start)) #x2063))
+        (let ((value 0)
+              (position start))
+          (while (< position end)
+            (setq value
+                  (+ (* value org-files-db--candidate-identity-base)
+                     (- (aref candidate position) #xe000))
+                  position (1+ position)))
+          (and (> value 0) (1- value)))))))
+
 (defun org-files-db--presentation-format-candidates (rows columns widths)
-  "Format ROWS once using COLUMNS and WIDTHS, and return a direct lookup."
-  (let ((lookup (make-hash-table :test #'equal))
-        (padding-cache (make-hash-table :test #'eql))
-        candidates)
-    (dotimes (index (length rows))
+  "Format ROWS once using COLUMNS and WIDTHS, and return a result vector."
+  (let* ((row-count (length rows))
+         (lookup (make-vector row-count nil))
+         (padding-cache
+          (org-files-db--presentation-make-padding-cache widths))
+         (candidates (make-list row-count nil))
+         (candidate-tail candidates))
+    (dotimes (index row-count)
       (let* ((row (aref rows index))
              (result (org-files-db--presentation-row-result row))
              (row-source (org-files-db--presentation-row-row-source row))
@@ -1952,13 +2087,14 @@ COLUMNS and WIDTHS control formatting, and PADDING-CACHE reuses space strings."
               (org-files-db--format-presentation-row-data
                row columns widths padding-cache))
              (display (car formatted))
+             (display-length (length display))
              (candidate
               (concat display
                       (or (cdr formatted) "")
                       (org-files-db--candidate-identity index)))
              (properties
               (list 'org-files-db-result result
-                    'org-files-db-visible-length (length display)
+                    'org-files-db-visible-length display-length
                     'consult--candidate result
                     'rear-nonsticky t)))
         (when row-source
@@ -1970,17 +2106,15 @@ COLUMNS and WIDTHS control formatting, and PADDING-CACHE reuses space strings."
                   'org-files-db-row-source row-source
                   'org-files-db-row-value
                   (org-files-db--presentation-row-row-value row)))))
+        (add-text-properties 0 display-length properties candidate)
         (add-text-properties
-         0 (length display)
-         properties
-         candidate)
-        (add-text-properties
-         (length display) (length candidate)
+         display-length (length candidate)
          '(display "" invisible t)
          candidate)
-        (puthash candidate result lookup)
-        (push candidate candidates)))
-    (cons (nreverse candidates) lookup)))
+        (aset lookup index result)
+        (setcar candidate-tail candidate)
+        (setq candidate-tail (cdr candidate-tail))))
+    (cons candidates lookup)))
 
 (defun org-files-db--elapsed-seconds (started)
   "Return elapsed seconds since floating-point time STARTED."
@@ -2039,17 +2173,14 @@ Set TIMING-VARIABLE and add details to METRICS-VARIABLE."
             (org-files-db--presentation-build-rows sources)))
     (org-files-db--measure-presentation-phase
         :result-value-extraction value-extraction phase-metrics
-      (org-files-db--presentation-populate-cells rows normalized-columns)
+      (pcase-let ((`(,prepared-widths . ,prepared-face-cache)
+                   (org-files-db--presentation-populate-cells-widths-and-faces
+                    rows normalized-columns)))
+        (setq widths prepared-widths
+              face-cache prepared-face-cache))
       nil)
-    (setq widths
-          (org-files-db--measure-presentation-phase
-              :shared-width-calculation width-calculation phase-metrics
-            (org-files-db--presentation-calculate-widths
-             rows normalized-columns)))
-    (setq face-cache
-          (org-files-db--measure-presentation-phase
-              :face-preparation face-preparation phase-metrics
-            (org-files-db--presentation-prepare-faces rows)))
+    (setq width-calculation 0.0
+          face-preparation 0.0)
     (org-files-db--measure-presentation-phase
         :candidate-formatting candidate-formatting phase-metrics
       (pcase-let ((`(,prepared-candidates . ,prepared-lookup)
@@ -2083,9 +2214,9 @@ Set TIMING-VARIABLE and add details to METRICS-VARIABLE."
 
 (defun org-files-db--prepare-presentation (results columns)
   "Eagerly prepare RESULTS for completion using COLUMNS.
-Under a restrictive GC policy, large preparations receive bounded allocation
-headroom followed by one GC so completion does not inherit several pending
-collections from candidate construction."
+Large preparations receive bounded temporary allocation headroom.  Discard
+intermediate source, row, and face-cache references before completion, but do
+not force a full garbage collection on the interactive path."
   (if (< (length results) org-files-db--large-presentation-row-count)
       (org-files-db--prepare-presentation-1 results columns)
     (let* ((bounded-gc-p
@@ -2093,26 +2224,28 @@ collections from candidate construction."
                     org-files-db--large-presentation-gc-threshold)
                  (< gc-cons-percentage 1.0)))
            (started (float-time))
-           (gcs-before (if (boundp 'gcs-done) gcs-done 0))
-           (gc-time-before (if (boundp 'gc-elapsed) gc-elapsed 0.0))
            (gc-cons-threshold
             (if bounded-gc-p
                 org-files-db--large-presentation-gc-threshold
               gc-cons-threshold))
            (presentation
             (org-files-db--prepare-presentation-1 results columns))
-           (boundary-started (float-time)))
+           (boundary-started (float-time))
+           (boundary-gcs-before
+            (if (boundp 'gcs-done) gcs-done 0))
+           (boundary-gc-time-before
+            (if (boundp 'gc-elapsed) gc-elapsed 0.0)))
       (setf (org-files-db--presentation-sources presentation) nil
             (org-files-db--presentation-rows presentation) nil
             (org-files-db--presentation-face-cache presentation) nil)
-      (when bounded-gc-p
-        (garbage-collect))
       (let* ((boundary-time
               (org-files-db--elapsed-seconds boundary-started))
              (boundary-gcs
-              (- (if (boundp 'gcs-done) gcs-done 0) gcs-before))
+              (- (if (boundp 'gcs-done) gcs-done 0)
+                 boundary-gcs-before))
              (boundary-gc-time
-              (- (if (boundp 'gc-elapsed) gc-elapsed 0.0) gc-time-before))
+              (- (if (boundp 'gc-elapsed) gc-elapsed 0.0)
+                 boundary-gc-time-before))
              (timings
               (org-files-db--presentation-timings presentation)))
         (setf (org-files-db--presentation-timings presentation)
@@ -2120,7 +2253,7 @@ collections from candidate construction."
                (plist-put timings :boundary-garbage-collection boundary-time)
                :total (org-files-db--elapsed-seconds started)))
         (setf (org-files-db--presentation-phase-metrics presentation)
-              (append
+              (nconc
                (org-files-db--presentation-phase-metrics presentation)
                (list
                 (list :phase :boundary-garbage-collection
@@ -2134,19 +2267,18 @@ collections from candidate construction."
   "Calculate shared widths for RESULTS and COLUMNS from cached cells."
   (let* ((normalized (org-files-db--normalize-columns columns))
          (sources (org-files-db--presentation-build-sources results))
-         (rows (org-files-db--presentation-build-rows sources)))
-    (org-files-db--presentation-populate-cells rows normalized)
-    (append
-     (org-files-db--presentation-calculate-widths rows normalized)
-     nil)))
+         (rows (org-files-db--presentation-build-rows sources))
+         (prepared
+          (org-files-db--presentation-populate-cells-widths-and-faces
+           rows normalized)))
+    (append (car prepared) nil)))
 
 (defun org-files-db--format-cell (result definition width)
   "Format RESULT column DEFINITION to WIDTH."
   (let* ((columns (org-files-db--normalize-columns (list definition)))
          (sources (org-files-db--presentation-build-sources (list result)))
          (rows (org-files-db--presentation-build-rows sources)))
-    (org-files-db--presentation-populate-cells rows columns)
-    (org-files-db--presentation-prepare-faces rows)
+    (org-files-db--presentation-populate-cells-widths-and-faces rows columns)
     (org-files-db--format-presentation-cell
      (aref (org-files-db--presentation-row-cells (aref rows 0)) 0)
      (aref columns 0)
@@ -2158,8 +2290,7 @@ collections from candidate construction."
          (sources (org-files-db--presentation-build-sources (list result)))
          (rows (org-files-db--presentation-build-rows sources))
          (width-vector (if (vectorp widths) widths (vconcat widths))))
-    (org-files-db--presentation-populate-cells rows normalized)
-    (org-files-db--presentation-prepare-faces rows)
+    (org-files-db--presentation-populate-cells-widths-and-faces rows normalized)
     (org-files-db--format-presentation-row
      (aref rows 0) normalized width-vector)))
 
@@ -2183,26 +2314,23 @@ collections from candidate construction."
   (or (and (stringp selected)
            (> (length selected) 0)
            (get-text-property 0 'org-files-db-result selected))
-      (let* ((lookup
-              (gethash candidates org-files-db--candidate-lookups))
-             (value
-              (and lookup
-                   (gethash selected lookup
-                            org-files-db--presentation-uncomputed))))
-        (unless lookup
-          (setq lookup (make-hash-table :test #'equal))
-          (dolist (candidate candidates)
-            (when-let* ((result
-                         (get-text-property
-                          0 'org-files-db-result candidate)))
-              (puthash candidate result lookup)))
-          (when candidates
-            (puthash candidates lookup org-files-db--candidate-lookups))
-          (setq value
-                (gethash selected lookup
-                         org-files-db--presentation-uncomputed)))
-        (unless (eq value org-files-db--presentation-uncomputed)
-          value))))
+      (when-let* ((index
+                   (org-files-db--candidate-identity-index selected)))
+        (let ((lookup
+               (gethash candidates org-files-db--candidate-lookups)))
+          (unless lookup
+            (setq lookup (make-vector (length candidates) nil))
+            (let ((position 0))
+              (dolist (candidate candidates)
+                (aset lookup position
+                      (and (> (length candidate) 0)
+                           (get-text-property
+                            0 'org-files-db-result candidate)))
+                (setq position (1+ position))))
+            (when candidates
+              (puthash candidates lookup org-files-db--candidate-lookups)))
+          (and (< index (length lookup))
+               (aref lookup index))))))
 
 (defun org-files-db--read-result (results columns &optional prompt)
   "Read one result from RESULTS displayed with COLUMNS using PROMPT."
