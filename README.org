@@ -250,6 +250,8 @@ org-files-db-query--*          private query helper
 org-files-db-search--*         private search helper
 org-files-db-export-*          public export operation
 org-files-db-export--*         private export helper
+org-files-db-benchmark-*       public benchmark command
+org-files-db-benchmark--*      private benchmark helper
 org-files-db--*                shared core helper
 #+end_example
 
@@ -267,7 +269,8 @@ lisp/org-files-db-actions.el  Link, follow, rename, and backlink actions
 lisp/org-files-db-views.el    Named query and search views
 lisp/org-files-db-dblock.el   Org dynamic blocks
 tests/                        Buttercup tests
-benchmarks/                   Synthetic and representative performance checks
+benchmarks/org-files-db-benchmark.el  Performance benchmark module
+benchmarks/fixtures/          Representative benchmark data
 #+end_src
 
 * Development

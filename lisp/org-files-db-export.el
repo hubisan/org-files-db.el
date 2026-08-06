@@ -137,10 +137,14 @@
 
 (defun org-files-db-export--result-outline-nodes (result)
   "Return complete outline path nodes for RESULT."
-  (let ((nodes (copy-sequence
-                (or (org-files-db--result-path-nodes result)
-                    (org-files-db-export--source-outline-nodes result)
-                    nil))))
+  (let* ((source-nodes
+          (or (org-files-db--result-path-nodes result)
+              (org-files-db-export--source-outline-nodes result)
+              nil))
+         (nodes
+          (if (vectorp source-nodes)
+              (append source-nodes nil)
+            (copy-sequence source-nodes))))
     (if (and nodes (org-files-db-export--same-node-p (car (last nodes)) result))
         (setcar (last nodes) result)
       (setq nodes (append nodes (list result))))

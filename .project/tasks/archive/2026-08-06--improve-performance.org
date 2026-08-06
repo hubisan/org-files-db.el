@@ -1,0 +1,137 @@
+#+TITLE: Improve Performance
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-06 Thu 18:58]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Reduce the current presentation time for a real ~outline-path~ query. The current three-run measurement takes 0.894--1.140 seconds and spends 0.484--0.721 seconds in garbage collection.
+
+* Planning
+
+** Problem summary
+
+A real query using ~((outline-path :width (max 80)))~ prepares approximately 10,000 candidates from 534,408 raw path characters. The measured presentation totals are 0.894, 1.107, and 1.140 seconds. Four or five garbage collections account for 0.484--0.721 seconds, leaving a stable non-GC cost of approximately 0.405--0.419 seconds.
+
+The two reported hot phases are result-value extraction at 0.323--0.499 seconds and candidate formatting at 0.565--0.635 seconds, but these phase durations currently include garbage collection. The benchmark does not yet attribute allocation and GC time to individual phases. The final candidates contain 1,079,852 characters: shared-width padding, hidden complete values for 2,407 truncated paths, and unique identities account for much of the increase over the raw paths.
+
+** Goals
+
+- Reduce median presentation latency materially on the same real query, initially targeting at least a 30 percent improvement without moving the pause into completion startup or filtering.
+- Reduce garbage-collection count and elapsed GC time during result extraction and candidate formatting.
+- Reduce avoidable allocation in outline-path extraction and final candidate construction.
+- Keep complete truncated paths searchable.
+- Preserve visible formatting, duplicate candidates, result identity, ordering, faces, standard completion, Consult, Embark actions, and exports.
+- Retain alist and hash-table compatibility behind the shared JSON access functions.
+
+** Non-goals
+
+- Changing the synchronous public query interface.
+- Adding asynchronous queries, caching, streaming, pagination, or worker threads.
+- Optimizing CLI execution or database query planning in this task.
+- Dropping hidden searchable values or original result objects to obtain a misleading speedup.
+- Applying a global or unbounded GC setting.
+
+** Architecture
+
+Keep the single eager presentation pipeline, but make its allocation profile explicit. Add phase-local allocation and GC measurements before changing the hot path. Use the measurements to select among three compatible improvements:
+
+- a bounded, dynamically scoped GC budget for one preparation, accepted only if end-to-end measurement shows that it does not cause an immediate deferred pause when completion opens
+- a compact outline-path extractor that traverses path nodes once and avoids intermediate property lists and list copies while retaining generic alist/hash-table support
+- direct candidate assembly that avoids per-row vectors, face-range lists, redundant concatenations, and other temporary objects where the normalized column shape permits it
+
+Also benchmark JSON arrays represented as lists versus vectors. Nested outline paths contain many array cons cells, so vector arrays may reduce the live heap and GC scanning cost even when alists remain the preferred object representation. Change the production array representation only if parsing, presentation, completion initialization, and memory measurements show a representative overall improvement.
+
+Do not keep parallel legacy and optimized presentation implementations. Any fast path must be expressed through the same normalized columns, rows, metadata, and completion contract.
+
+** Execution plan
+
+1. Extend the real-query benchmark to report row count, candidate characters, phase-local GC count/time, and allocation deltas for extraction, formatting, completion with empty input, and representative filtering.
+2. Record repeated measurements of the supplied real query under the current implementation and calculate medians separately for wall time, GC time, and non-GC time.
+3. Compare the default GC policy with bounded preparation-local thresholds and an explicit boundary collection. Include completion initialization and first filtering in the measurement so deferred GC is visible.
+4. Benchmark list and vector JSON arrays with alist objects through parse, normalization, outline extraction, candidate formatting, completion initialization, total retained data, and GC time.
+5. Replace intermediate outline-data allocation with a measured one-pass representation or formatter. Preserve root inclusion, matched-heading inclusion, custom separators, link source/target paths, missing values, and Unicode.
+6. Reduce candidate-formatting temporaries. Specialize only through compiled column metadata, reuse immutable padding, apply face ranges directly, and avoid building intermediate collections that are immediately concatenated.
+7. Reassess retained presentation sources, cells, and row objects after candidate construction. Release or compact data that completion and Embark do not consume while retaining original results and row-expansion metadata.
+8. Keep only changes that improve the complete real-query median and do not regress synthetic basic/expensive cases or completion filtering.
+9. Add Buttercup regression tests for every representation or lifetime change and for the chosen GC boundary behaviour.
+10. Run ~make ci~, then record before-and-after measurements for the supplied real query and synthetic 1,000-, 10,000-, and 50,000-row cases where practical.
+
+** Risks & assumptions
+
+- The current probe appears to contain approximately 10,000 rows, inferred from the candidate size; the updated benchmark will record the exact count.
+- Raising ~gc-cons-threshold~ can merely postpone a pause. It is acceptable only when completion startup and first filtering remain faster and the setting is restored reliably.
+- Vector JSON arrays affect tags, paths, result envelopes, and direct-array responses; compatibility changes must be made consistently rather than only for outline paths.
+- Removing right padding from the final column could reduce allocation but changes candidate strings and fixed-width semantics, so it is not assumed safe in this task.
+- The original results must remain reachable for actions and Embark, which limits how much live JSON data can be discarded.
+
+** Open questions
+
+None. The supplied real-query measurement is the acceptance baseline.
+
+** Proposed checks
+
+- ~make ci~
+- Run the real query at least five times before and after the change in the same Emacs session and compare medians.
+- Run ~org-files-db-benchmark-run~ for 1,000, 10,000, and, where practical, 50,000 rows.
+- Compare completion with empty input and with a filter matching a full value hidden by truncation.
+- Verify list-array and vector-array parsing for headings, files, links, tags, and nested outline paths.
+- Verify that scoped GC settings are restored on success, user quit, and error.
+
+* Results
+
+** Approach
+
+Reduced allocations in both dominant presentation phases. Static nested result lookups are compiled into direct alist accesses, outline data uses compact cons pairs, JSON nested arrays use vectors, and the one-column case bypasses the general multi-column formatter. Candidate suffixes receive invisibility once after assembly, ordinary candidates no longer retain complete presentation rows, and level faces are reused from a constant vector.
+
+Large presentations receive a 64 MiB dynamically scoped allocation budget when the active interactive GC policy is restrictive. Temporary sources, rows, and face caches are released after candidate construction, followed by one explicit collection before completion begins. Generous user or batch GC policies are respected and do not receive an unnecessary boundary collection. The original threshold is restored on success and error.
+
+The benchmark now records phase-local elapsed time, collection count, GC time, and allocation counters. Real-query reports include row count, candidate characters, presentation subphases, and their allocation and GC summaries. JSON representation measurements compare both list and vector arrays.
+
+All benchmark-specific constants, statistics, synthetic data, allocation counters, and commands are isolated in ~benchmarks/org-files-db-benchmark.el~. Public commands use ~org-files-db-benchmark-*~ and private helpers use ~org-files-db-benchmark--*~. Core does not load the benchmark module and exposes only a neutral optional presentation-allocation callback.
+
+** Changed files
+
+- ~lisp/org-files-db-core.el~
+- ~lisp/org-files-db-export.el~
+- ~tests/org-files-db-test.el~
+- ~benchmarks/org-files-db-benchmark.el~
+- ~CHANGELOG.org~
+- ~README.org~
+- ~Eask~
+- ~.project/tasks/todo.org~
+- ~.project/tasks/2026-08-06--improve-performance.org~
+
+** Checks performed
+
+- Checked balanced delimiters in every changed Emacs Lisp file.
+- Ran ~make compile~ without warnings.
+- Ran the focused Buttercup suite while iterating.
+- Ran synthetic presentation benchmarks for 1,000, 10,000, and 50,000 results with basic and expensive columns.
+- Ran a five-iteration 10,000-row one-column benchmark with 2,407 deliberately truncated long outline paths under generous and restrictive GC policies.
+- Ran ~make ci~, including packaging, installation, compilation, package-lint, checkdoc, indent-lint, relint, and Buttercup.
+- Byte-compiled and linted ~benchmarks/org-files-db-benchmark.el~ independently, and ran its complete 100--50,000-row report after the module separation.
+- Verified that loading the package does not load the benchmark feature and that no former ~org-files-db--benchmark-*~ helper remains.
+
+** Test results
+
+~make ci~ passes after the benchmark-module separation. Buttercup ran 112 specifications with zero failures.
+
+The 10,000-row long-outline benchmark produced 1,275,682 candidate characters. Under the generous batch policy, median total presentation time was 0.180 seconds with no GC; extraction was 0.105 seconds, formatting 0.064 seconds, empty completion 0.006 seconds, and representative filtering 0.051 seconds. The comparable staged implementation had measured approximately 0.201 seconds, so the optimized hot path is about 10 percent faster without relying on GC changes.
+
+Under a restrictive interactive policy, median total presentation time was 0.217 seconds. Each run performed exactly one boundary collection with a 0.039-second median instead of collecting within extraction or formatting. Extraction allocated 142,414 conses and formatting allocated 313,959 conses per median run, approximately 47 and 45 percent fewer than the first instrumented versions of those phases.
+
+Three-iteration synthetic medians for basic and expensive columns were 0.021/0.039 seconds at 1,000 rows, 0.226/0.393 seconds at 10,000 rows, and 1.102/1.859 seconds at 50,000 rows. Representative filtering medians were 0.003/0.005, 0.029/0.046, and 0.135/0.216 seconds respectively.
+
+** Blockers
+
+The user's real database and long-lived Emacs heap are not available in the build environment, so the supplied 0.894--1.140 second real-query baseline cannot be remeasured here. The updated ~org-files-db-benchmark-query~ command is ready for the acceptance run in that same Emacs session.
+
+** Follow-ups
+
+- Reload or reinstall the package, then run ~org-files-db-benchmark-query~ at least five times with the original query and configuration.
+- Compare its presentation median, phase-local GC table, and total GC time with the supplied baseline.

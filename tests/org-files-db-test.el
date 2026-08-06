@@ -7,6 +7,7 @@
 (require 'buttercup)
 (require 'cl-lib)
 (require 'org-files-db)
+(require 'org-files-db-benchmark)
 
 (defvar org-files-db-test--directory nil)
 (defvar org-files-db-test--executable nil)
@@ -228,6 +229,42 @@
              '((target . "headings") (results . nil)))
             :to-equal nil))
 
+  (it "uses compact vectors for nested production JSON arrays"
+    (let* ((response
+            (org-files-db--parse-json
+             (concat
+              "{\"results\":[{\"kind\":\"heading\","
+              "\"title\":\"Child\",\"all_tags\":[\"one\",\"two\"],"
+              "\"node_path\":[{\"kind\":\"heading\","
+              "\"title\":\"Child\"}]}]}")))
+           (results (org-files-db--normalize-results response))
+           (result (car results)))
+      (expect (listp results) :to-equal t)
+      (expect (vectorp (org-files-db--get result 'all_tags)) :to-equal t)
+      (expect (vectorp (org-files-db--get result 'node_path)) :to-equal t)
+      (expect (org-files-db--column-value result '(tags))
+              :to-equal "one,two")
+      (expect (org-files-db--column-value result '(outline-path))
+              :to-equal "Child")))
+
+  (it "distinguishes present nil values from missing alist keys"
+    (let ((result '((todo_keyword . nil)
+                    ("priority" . "A"))))
+      (expect (org-files-db--alist-value result 'todo_keyword) :to-equal nil)
+      (expect (not (null (org-files-db--has-key-p result 'todo_keyword)))
+              :to-equal t)
+      (expect (org-files-db--alist-value result 'priority) :to-equal "A")
+      (expect (org-files-db--has-key-p result 'missing) :to-equal nil)))
+
+  (it "distinguishes present nil values from missing hash-table keys"
+    (let ((result (make-hash-table :test #'equal)))
+      (puthash 'todo_keyword nil result)
+      (puthash "priority" "A" result)
+      (expect (org-files-db--alist-value result 'todo_keyword) :to-equal nil)
+      (expect (org-files-db--has-key-p result 'todo_keyword) :to-equal t)
+      (expect (org-files-db--alist-value result 'priority) :to-equal "A")
+      (expect (org-files-db--has-key-p result 'missing) :to-equal nil)))
+
   (it "distinguishes command and usage failures"
     (expect (org-files-db--call "fail" nil)
             :to-throw 'org-files-db-cli-error)
@@ -377,6 +414,25 @@
       (expect (length (org-files-db--normalize-results response)) :to-equal 1))))
 
 (describe "per-command configuration"
+  (it "attaches configuration without copying a fresh result alist"
+    (let* ((result '((kind . "heading") (title . "Shared")))
+           (configured (org-files-db--result-with-config result "/tmp/db.toml")))
+      (expect (eq (cdr configured) result) :to-equal t)
+      (expect (org-files-db--get configured org-files-db--result-config-key)
+              :to-equal "/tmp/db.toml")))
+
+  (it "replaces existing configuration metadata without duplicates"
+    (let* ((result `((,org-files-db--result-config-key . "/tmp/old.toml")
+                     (kind . "heading")))
+           (configured (org-files-db--result-with-config result "/tmp/new.toml")))
+      (expect (org-files-db--get configured org-files-db--result-config-key)
+              :to-equal "/tmp/new.toml")
+      (expect (length (seq-filter
+                       (lambda (entry)
+                         (eq (car entry) org-files-db--result-config-key))
+                       configured))
+              :to-equal 1)))
+
   (it "lets query calls inherit, override, and disable the global configuration"
     (let* ((global (org-files-db-test--write-file
                     "query-global.toml" "db_path='global'\n"))
@@ -488,6 +544,23 @@
                            ((kind . "heading") (title . "Child")))))))
       (expect (org-files-db--outline-path result)
               :to-equal "Parent » Child")))
+
+  (it "extracts root and heading path data in source order"
+    (expect
+     (org-files-db--path-data
+      '("Loose"
+        ((kind . "root") (title . "File"))
+        ((title . "Implicit"))
+        ((kind . "heading") (title . "Explicit"))))
+     :to-equal '("File" "Loose" "Implicit" "Explicit")))
+
+  (it "extracts outline data from vector paths"
+    (expect
+     (org-files-db--path-data
+      ["Loose"
+       ((kind . "root") (title . "File"))
+       ((kind . "heading") (title . "Explicit"))])
+     :to-equal '("File" "Loose" "Explicit")))
 
   (it "does not duplicate a matched file root"
     (let ((result
@@ -613,6 +686,13 @@
       (expect text :to-match "…")
       (expect text :to-match "heading 3$")))
 
+  (it "preserves Unicode display widths in suffix truncation"
+    (expect (org-files-db--string-suffix-to-width "A東京" 3)
+            :to-equal "京")
+    (expect (string-width
+             (org-files-db--string-suffix-to-width "東京A" 3))
+            :to-equal 3))
+
   (it "keeps original result objects on candidates"
     (let* ((result '((kind . "heading") (title . "Example")))
            (candidate (car (org-files-db--make-candidates
@@ -622,21 +702,43 @@
       (expect (get-text-property 0 'consult--candidate candidate)
               :to-equal result)))
 
-  (it "attaches prepared row metadata directly to candidates"
+  (it "does not retain full rows on ordinary candidates"
     (let* ((result '((kind . "heading") (title . "Metadata")))
            (presentation
             (org-files-db--prepare-presentation (list result) '((title))))
-           (row (aref (org-files-db--presentation-rows presentation) 0))
            (candidate
             (car (org-files-db--presentation-candidates presentation))))
-      (expect (eq (get-text-property
-                   0 'org-files-db-presentation-row candidate)
-                  row)
-              :to-equal t)
-      (expect (org-files-db--presentation-row-original-position row)
-              :to-equal 0)
-      (expect (eq (org-files-db--presentation-row-result row) result)
-              :to-equal t)))
+      (expect (get-text-property
+               0 'org-files-db-presentation-row candidate)
+              :to-equal nil)
+      (expect (get-text-property 0 'org-files-db-result candidate)
+              :to-equal result)))
+
+  (it "retains metadata for row-expanded candidates"
+    (let* ((result '((kind . "heading") (title . "Metadata")))
+           (columns (org-files-db--normalize-columns '((title))))
+           (sources (org-files-db--presentation-build-sources (list result)))
+           (rows (org-files-db--presentation-build-rows sources))
+           (row (aref rows 0)))
+      (setf (org-files-db--presentation-row-row-source row) 'tags
+            (org-files-db--presentation-row-row-value row) "project")
+      (org-files-db--presentation-populate-cells rows columns)
+      (org-files-db--presentation-prepare-faces rows)
+      (let* ((widths
+              (org-files-db--presentation-calculate-widths rows columns))
+             (candidate
+              (car
+               (car
+                (org-files-db--presentation-format-candidates
+                 rows columns widths)))))
+        (expect (eq (get-text-property
+                     0 'org-files-db-presentation-row candidate)
+                    row)
+                :to-equal t)
+        (expect (get-text-property 0 'org-files-db-row-source candidate)
+                :to-equal 'tags)
+        (expect (get-text-property 0 'org-files-db-row-value candidate)
+                :to-equal "project"))))
 
   (it "does not display internal configuration metadata by default"
     (let* ((config (org-files-db-test--write-file
@@ -716,6 +818,17 @@
                    (error "Filtering must reuse formatted candidates"))))
         (expect (length (all-completions "Alpha" table)) :to-equal 1)
         (expect (length (all-completions "Beta" table)) :to-equal 1))))
+
+  (it "formats complete rows without creating propertized cell copies"
+    (cl-letf (((symbol-function 'org-files-db--format-presentation-cell)
+               (lambda (&rest _)
+                 (error "Candidate rows must be assembled directly"))))
+      (let ((candidates
+             (org-files-db--make-candidates
+              '(((title . "Alpha") (level . 2)))
+              '((title :width (fixed 10))))))
+        (expect (org-files-db-test--candidate-visible (car candidates))
+                :to-equal "Alpha     "))))
 
   (it "keeps complete untruncated column values searchable"
     (let* ((result '((title . "Visible prefix and hidden needle")))
@@ -831,19 +944,85 @@
 
   (it "reports repeatable presentation benchmark phases"
     (let* ((summary
-            (org-files-db--benchmark-presentation
+            (org-files-db-benchmark--presentation
              '(((title . "Überblick"))
                ((title . "東京")))
              '((title :width auto))
              :iterations 2))
            (phases (plist-get summary :phases))
            (formatting
-            (cdr (assq :candidate-formatting phases))))
+            (cdr (assq :candidate-formatting phases)))
+           (completion
+            (cdr (assq :completion-filter phases)))
+           (metrics
+            (cdr (assq :result-value-extraction
+                       (plist-get summary :phase-metrics))))
+           (conses
+            (cdr (assq :conses (plist-get metrics :allocation)))))
       (expect (plist-get summary :result-count) :to-equal 2)
       (expect (plist-get summary :iterations) :to-equal 2)
+      (expect (numberp (plist-get summary :garbage-collection-time))
+              :to-equal t)
+      (expect (numberp (plist-get summary :candidate-characters))
+              :to-equal t)
       (expect (numberp (plist-get formatting :minimum)) :to-equal t)
       (expect (numberp (plist-get formatting :median)) :to-equal t)
-      (expect (numberp (plist-get formatting :maximum)) :to-equal t)))
+      (expect (numberp (plist-get formatting :maximum)) :to-equal t)
+      (expect (numberp (plist-get completion :median)) :to-equal t)
+      (expect (numberp
+               (plist-get
+                (plist-get metrics :garbage-collection-time) :median))
+              :to-equal t)
+      (expect (numberp (plist-get conses :median)) :to-equal t)))
+
+  (it "bounds and restores GC policy for large presentations"
+    (let ((org-files-db--large-presentation-row-count 1)
+          (gc-cons-threshold 800000)
+          (gc-cons-percentage 0.1)
+          (original-threshold 800000)
+          observed-threshold
+          (collections 0))
+      (cl-letf (((symbol-function 'org-files-db--prepare-presentation-1)
+                 (lambda (&rest _)
+                   (setq observed-threshold gc-cons-threshold)
+                   (make-org-files-db--presentation
+                    :timings '(:total 0.0)
+                    :phase-metrics nil)))
+                ((symbol-function 'garbage-collect)
+                 (lambda () (setq collections (1+ collections)) nil)))
+        (org-files-db--prepare-presentation '(((title . "Large"))) '((title)))
+        (expect observed-threshold
+                :to-be-greater-than original-threshold)
+        (expect collections :to-equal 1)
+        (expect gc-cons-threshold :to-equal original-threshold))))
+
+  (it "avoids an unnecessary boundary GC under a generous GC policy"
+    (let ((org-files-db--large-presentation-row-count 1)
+          (gc-cons-threshold 800000)
+          (gc-cons-percentage 1.0)
+          observed-threshold
+          (collections 0))
+      (cl-letf (((symbol-function 'org-files-db--prepare-presentation-1)
+                 (lambda (&rest _)
+                   (setq observed-threshold gc-cons-threshold)
+                   (make-org-files-db--presentation
+                    :timings '(:total 0.0)
+                    :phase-metrics nil)))
+                ((symbol-function 'garbage-collect)
+                 (lambda () (setq collections (1+ collections)) nil)))
+        (org-files-db--prepare-presentation '(((title . "Large"))) '((title)))
+        (expect observed-threshold :to-equal 800000)
+        (expect collections :to-equal 0))))
+
+  (it "restores GC policy when large presentation preparation fails"
+    (let ((org-files-db--large-presentation-row-count 1)
+          (original-threshold gc-cons-threshold))
+      (cl-letf (((symbol-function 'org-files-db--prepare-presentation-1)
+                 (lambda (&rest _) (error "preparation failed"))))
+        (expect
+         (org-files-db--prepare-presentation '(((title . "Large"))) '((title)))
+         :to-throw 'error)
+        (expect gc-cons-threshold :to-equal original-threshold))))
 
   (it "preserves mapped JSON fields in normalized columns"
     (let ((result
@@ -865,6 +1044,13 @@
                       (link-path "notes.org")))
         (expect (org-files-db--column-value result (list (car case)))
                 :to-equal (cadr case)))))
+
+  (it "formats common string lists and scalar values without general format"
+    (expect (org-files-db--presentation-display-value '("one" "two"))
+            :to-equal "one,two")
+    (expect (org-files-db--presentation-display-value 42) :to-equal "42")
+    (expect (org-files-db--presentation-display-value 'ready)
+            :to-equal "ready"))
 
   (it "keeps hash-table JSON compatible with shared result access"
     (let ((result

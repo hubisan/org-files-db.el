@@ -125,7 +125,7 @@ The diagnostic command must not rebuild or modify the database.
 - ~org-files-db-check-setup~ detects common configuration problems.
 - Tests cover executable resolution, configuration arguments, JSON parsing, stderr, exit codes, missing files, and process cancellation.
   
-* REVIEW Define query command
+* DONE Define query command
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -1224,1511 +1224,18 @@ Per command geht, pro View noch prüfen.
 
 [[./archive/2026-08-06--add-link-outline-path-columns.org][Task details]]
 
-* TODO Add row expansion for tags, effective properties, and keywords
+* DONE Optimize large query result handling
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Allow one heading or file result to produce one displayed row per tag, effective property, or keyword.
+[[./archive/2026-08-06--optimize-large-query-result-handling.org][Task details]]
 
-Currently, multi-valued fields are formatted as one combined column value. Provide a shared row-expansion mechanism instead of implementing separate presentation paths for tags, properties, and keywords.
+* DONE Improve performance
 
-** Row-source option
+[[./archive/2026-08-06--improve-performance.org][Task details]]
 
-Add an optional ~:row-source~ keyword to query execution:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings (tags "project"))
- '((tag :width (max 30))
-   (outline-path :width (max 60))
-   (file-name :width (max 30)))
- nil
- :row-source 'tags)
-#+end_src
-
-Supported values are:
-
-- ~nil~: one displayed row per query result
-- ~tags~: one displayed row per tag
-- ~effective-properties~: one displayed row per effective property
-- ~keywords~: one displayed row per keyword
-
-The default is ~nil~, preserving the current behaviour.
-
-A result containing three tags therefore produces three completion candidates.
-
-Ordinary result columns such as ~outline-path~, ~file-name~, and ~title~ are repeated for every expanded row.
-
-** Tags
-
-With:
-
-#+begin_src emacs-lisp
-:row-source 'tags
-#+end_src
-
-provide the singular column:
-
-#+begin_src emacs-lisp
-(tag)
-#+end_src
-
-Example source heading:
-
-#+begin_src org
-,* Example :project:emacs:active:
-#+end_src
-
-Example rows:
-
-#+begin_example
-project  Example  notes.org
-emacs    Example  notes.org
-active   Example  notes.org
-#+end_example
-
-The existing plural ~tags~ column may continue to display all tags together when no row expansion is requested.
-
-The singular ~tag~ column is valid only with ~:row-source tags~.
-
-Preserve the tag order returned by ~orgfdb~.
-
-Do not add or remove Org tag delimiters unless explicitly configured as part of column formatting.
-
-** Effective properties
-
-With:
-
-#+begin_src emacs-lisp
-:row-source 'effective-properties
-#+end_src
-
-provide the columns:
-
-#+begin_src emacs-lisp
-(property-name)
-(property-value)
-#+end_src
-
-Example effective properties:
-
-#+begin_example
-CATEGORY=work
-OWNER=Daniel
-STATUS=active
-#+end_example
-
-Example rows:
-
-#+begin_example
-CATEGORY  work
-OWNER     Daniel
-STATUS    active
-#+end_example
-
-Each effective property name and its resolved value form one row.
-
-The query command must automatically request:
-
-#+begin_src sh
---include effective_properties
-#+end_src
-
-Users must not need to specify this include manually.
-
-Effective properties represent the resolved values used by query matching. They must not be confused with raw property rows.
-
-If the CLI representation does not provide a stable order, sort effective properties by property name for deterministic output.
-
-** Keywords
-
-With:
-
-#+begin_src emacs-lisp
-:row-source 'keywords
-#+end_src
-
-provide the columns:
-
-#+begin_src emacs-lisp
-(keyword-name)
-(keyword-value)
-#+end_src
-
-Example keywords:
-
-#+begin_src org
-,#+TITLE: Example
-,#+FILETAGS: :project:
-,#+CATEGORY: work
-#+end_src
-
-Example rows:
-
-#+begin_example
-TITLE     Example
-FILETAGS  :project:
-CATEGORY  work
-#+end_example
-
-The query command must automatically request:
-
-#+begin_src sh
---include keywords
-#+end_src
-
-Users must not need to specify this include manually.
-
-Preserve duplicate keyword entries when they are returned separately by ~orgfdb~.
-
-Preserve source order when the CLI provides it. Otherwise, use a deterministic order without merging entries.
-
-** Views
-
-Allow predefined query views to configure ~:row-source~:
-
-#+begin_src emacs-lisp
-(setq org-files-db-views
-      '(("heading-tags"
-         :command query
-         :query (headings)
-         :row-source tags
-         :columns
-         ((tag :width (max 30))
-          (outline-path :width (max 60))
-          (file-name :width (max 30))))
-
-        ("effective-properties"
-         :command query
-         :query (headings)
-         :row-source effective-properties
-         :columns
-         ((property-name :width (max 30))
-          (property-value :width (max 60))
-          (outline-path :width (max 60))))
-
-        ("file-keywords"
-         :command query
-         :query (files)
-         :row-source keywords
-         :columns
-         ((keyword-name :width (max 30))
-          (keyword-value :width (max 60))
-          (file-name :width (max 30))))))
-#+end_src
-
-Query views pass ~:row-source~ to ~org-files-db-query~.
-
-They must not implement a separate expansion or completion path.
-
-** Dynamic blocks
-
-Allow direct query blocks to define ~:row-source~:
-
-#+begin_src org
-,#+BEGIN: org-files-db-query :query "(headings)" :row-source tags :layout flat
-,#+END:
-#+end_src
-
-Views referenced by dynamic blocks inherit their configured ~:row-source~.
-
-Supported dynamic-block values are:
-
-- ~tags~
-- ~effective-properties~
-- ~keywords~
-
-An absent value keeps the normal one-row-per-result behaviour.
-
-** Candidate representation
-
-Keep the matched query result separate from the expanded row data.
-
-Conceptually, each displayed candidate contains:
-
-#+begin_example
-original result
-row-source
-row value
-formatted columns
-#+end_example
-
-Selecting an expanded row continues to execute the configured action on the original heading or file result.
-
-Existing actions such as opening a result, inserting a link, or renaming a file must continue to work without modification.
-
-The row metadata is used for formatting and exporting but must not replace or mutate the original query result.
-
-** Empty collections
-
-When a result has no entries for the selected row source, it produces no displayed rows.
-
-Examples:
-
-- a heading without tags produces no rows for ~:row-source tags~
-- a result without effective properties produces no property rows
-- a result without keywords produces no keyword rows
-
-Do not create an artificial empty row.
-
-A future option may add empty rows if a concrete use case requires them.
-
-** Column validation
-
-Validate singular row columns against the selected row source:
-
-- ~tag~ requires ~:row-source tags~
-- ~property-name~ and ~property-value~ require ~:row-source effective-properties~
-- ~keyword-name~ and ~keyword-value~ require ~:row-source keywords~
-
-Report a clear error for incompatible combinations.
-
-Do not allow multiple row sources in one invocation.
-
-In particular, do not create Cartesian products between tags, properties, and keywords.
-
-** Include inference
-
-Infer required CLI includes from ~:row-source~:
-
-#+begin_example
-tags                  → no additional include when tags are already part of the result
-effective-properties  → effective_properties
-keywords              → keywords
-#+end_example
-
-Combine inferred includes with includes required by configured columns and actions.
-
-Use one ~orgfdb~ invocation for the complete result set.
-
-** Width and truncation
-
-Expanded row columns support the same width and truncation options as all other columns:
-
-#+begin_src emacs-lisp
-(tag
- :width (max 20)
- :truncate (:position right :marker "…"))
-
-(property-value
- :width (fixed 40)
- :truncate (:position middle :marker "…"))
-#+end_src
-
-Shared column widths are calculated across all expanded rows, not separately for each original result.
-
-** Embark export
-
-~embark-export~ must preserve the currently filtered expanded rows.
-
-It must not collapse several tag, property, or keyword rows back into one result.
-
-For flat export:
-
-- produce one exported entry per expanded row
-- retain a link to the original heading or file
-- include the singular row value in the exported description
-
-For outline export:
-
-- preserve the original file and heading hierarchy
-- group expanded rows below their matched result where necessary
-- avoid repeating identical ancestor hierarchy for every row
-
-The exact presentation may reuse the configured columns, but every expanded row must remain distinguishable.
-
-** Supported result kinds
-
-Initial support applies to:
-
-- heading results
-- file results
-- synthetic file-root results where the corresponding data is available
-
-Reject row expansion for link results unless a later feature explicitly defines whether source or target metadata should be expanded.
-
-Search-result support may be added only when the search CLI output provides the required structured data and includes.
-
-** README documentation
-
-Document:
-
-- the purpose of ~:row-source~
-- one row per tag
-- one row per effective property
-- one row per keyword
-- the singular columns available for each mode
-- views and dynamic-block examples
-- empty collections producing no rows
-- automatic include inference
-- the difference between aggregate ~tags~ and singular ~tag~
-
-Avoid describing the feature as JSON expansion or exposing internal candidate structures.
-
-** Acceptance criteria
-
-- Query results can expand to one row per tag.
-- Query results can expand to one row per effective property.
-- Query results can expand to one row per keyword.
-- Normal columns are repeated for every expanded row.
-- ~tag~, ~property-name~, ~property-value~, ~keyword-name~, and ~keyword-value~ are supported.
-- Effective properties automatically request ~effective_properties~.
-- Keywords automatically request ~keywords~.
-- Only one row source can be active per invocation.
-- No Cartesian products are created.
-- Empty collections produce no rows.
-- Existing result actions continue to receive the original matched result.
-- Views pass their row source to the generic query function.
-- Dynamic blocks support direct and view-provided row sources.
-- Embark export preserves individual expanded rows.
-- Width and truncation are calculated across all expanded rows.
-- Tests cover multiple tags, no tags, effective-property ordering, keyword duplicates, empty collections, include inference, column validation, views, dynamic blocks, filtering, actions, flat export, outline export, and non-ASCII values.
-
-* TODO Add configurable result sorting
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Allow query and search results to be sorted by one or more user-facing columns before they are presented, exported, or rendered in dynamic blocks.
-
-Sorting must reuse the shared result-presentation pipeline and must not introduce separate query, completion, or rendering paths.
-
-** Public syntax
-
-Add an optional ~:sort~ argument to query and search commands.
-
-Example:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings (not (done)))
- '((todo-keyword)
-   (priority :width (fixed 3))
-   (outline-path :width (max 80))
-   (file-name :width (max 30)))
- nil
- :sort
- '((priority :direction asc :missing last)
-   (outline-path :direction asc)))
-#+end_src
-
-Search example:
-
-#+begin_src emacs-lisp
-(org-files-db-search
- "quarterly report"
- nil
- nil
- :scope 'all
- :sort
- '((rank :direction asc)
-   (title :direction asc)))
-#+end_src
-
-~:sort nil~ preserves the order returned by ~orgfdb~.
-
-Each sort specification has the form:
-
-#+begin_src emacs-lisp
-(COLUMN
- :direction asc
- :missing last
- :case-fold t)
-#+end_src
-
-Supported options are:
-
-- ~:direction asc~ sorts in ascending order.
-- ~:direction desc~ sorts in descending order.
-- ~:missing first~ places missing values before non-missing values.
-- ~:missing last~ places missing values after non-missing values.
-- ~:case-fold t~ compares textual values without case distinctions.
-- ~:case-fold nil~ compares textual values with case distinctions.
-
-Defaults are:
-
-#+begin_example
-direction   asc
-missing     last
-case-fold   t
-#+end_example
-
-Allow multiple sort keys. Later keys are used only when all earlier keys compare equally.
-
-** Supported sort columns
-
-Sorting uses the same public column names as result presentation.
-
-Examples include:
-
-- ~title~
-- ~todo-keyword~
-- ~todo-type~
-- ~priority~
-- ~outline-path~
-- ~source-outline-path~
-- ~target-outline-path~
-- ~tags~
-- ~file-title~
-- ~file-name~
-- ~file-path~
-- ~line-number~
-- ~scheduled-raw~
-- ~deadline-raw~
-- ~closed-raw~
-- ~link-type~
-- ~link-target~
-- ~link-description~
-- ~resolution-status~
-- ~rank~
-
-A sort column does not need to be displayed.
-
-Example:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings)
- '((title)
-   (file-name :width (max 30)))
- nil
- :sort
- '((priority :direction asc)
-   (title :direction asc)))
-#+end_src
-
-Here ~priority~ controls the ordering without appearing as a visible column.
-
-Do not expose arbitrary internal JSON fields as supported sort keys. Sortable columns must use the documented public column API.
-
-** Comparison semantics
-
-Use type-aware comparison.
-
-*** Text
-
-Textual columns are compared as strings.
-
-With the default ~:case-fold t~, values differing only by case compare equally for the current sort key.
-
-Use the original result order as the final tie-breaker so sorting remains stable.
-
-*** Numbers
-
-Numeric columns such as ~line-number~ and ~rank~ are compared numerically rather than as strings.
-
-For example:
-
-#+begin_example
-2
-10
-100
-#+end_example
-
-must not be ordered as:
-
-#+begin_example
-10
-100
-2
-#+end_example
-
-*** Priority
-
-Org priorities use their natural order.
-
-Ascending order means:
-
-#+begin_example
-A
-B
-C
-#+end_example
-
-Missing priorities follow the configured ~:missing~ behaviour.
-
-*** Timestamps
-
-Planning columns such as:
-
-- ~scheduled-raw~
-- ~deadline-raw~
-- ~closed-raw~
-
-are compared chronologically.
-
-Parse each timestamp at most once per presentation.
-
-Invalid or absent timestamps are treated as missing values and follow the configured ~:missing~ behaviour.
-
-*** Outline paths
-
-~outline-path~, ~source-outline-path~, and ~target-outline-path~ are compared using their complete untruncated path values.
-
-Display truncation must not affect sorting.
-
-Custom separators affect presentation only and must not change the logical path order.
-
-*** Tags
-
-The aggregate ~tags~ column is compared using its complete tag collection, not its truncated display value.
-
-When row expansion is active with:
-
-#+begin_src emacs-lisp
-:row-source 'tags
-#+end_src
-
-the singular ~tag~ column sorts by the individual expanded tag.
-
-** Sorting and cached presentation rows
-
-Integrate sorting with the optimized presentation pipeline.
-
-Conceptually:
-
-#+begin_example
-results
-→ normalized column and sort specifications
-→ cached presentation rows
-→ cached sort keys
-→ stable sorting
-→ shared-width calculation
-→ formatted completion candidates
-#+end_example
-
-Calculate every sort key at most once per presentation row.
-
-When a sort key uses the same value as a displayed column, reuse the already cached value.
-
-Do not call the general column extractor again during individual comparisons.
-
-A comparison function may be called many times by the sorting algorithm, so it must compare already normalized cached values.
-
-Do not sort using truncated, padded, propertized, or otherwise formatted candidate strings.
-
-** Stable ordering
-
-Sorting must be stable.
-
-When all configured sort keys compare equally, preserve the original order returned by ~orgfdb~.
-
-Store the original result position in the presentation row and use it as the final tie-breaker when necessary.
-
-This ensures deterministic handling of:
-
-- duplicate titles
-- identical file names
-- equal priorities
-- missing values
-- row-expanded values with the same text
-
-** Row expansion
-
-Sorting applies after row expansion.
-
-Example:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings)
- '((tag)
-   (outline-path :width (max 60)))
- nil
- :row-source 'tags
- :sort
- '((tag :direction asc)
-   (outline-path :direction asc)))
-#+end_src
-
-This sorts individual tag rows rather than only their original heading results.
-
-The singular row columns are valid only with their matching row source:
-
-- ~tag~ with ~tags~
-- ~property-name~ and ~property-value~ with ~effective-properties~
-- ~keyword-name~ and ~keyword-value~ with ~keywords~
-
-Do not create separate sorting implementations for expanded rows.
-
-** Defaults by result type
-
-Provide configurable default sorting:
-
-#+begin_src emacs-lisp
-(defcustom org-files-db-heading-sort nil
-  "Default sorting for heading query results."
-  :type '(repeat sexp)
-  :group 'org-files-db)
-
-(defcustom org-files-db-file-sort nil
-  "Default sorting for file query results."
-  :type '(repeat sexp)
-  :group 'org-files-db)
-
-(defcustom org-files-db-link-sort nil
-  "Default sorting for link query results."
-  :type '(repeat sexp)
-  :group 'org-files-db)
-
-(defcustom org-files-db-search-sort nil
-  "Default sorting for full-text search results."
-  :type '(repeat sexp)
-  :group 'org-files-db)
-#+end_src
-
-All defaults are ~nil~, preserving the CLI order.
-
-This is especially important for search results, where the default CLI order represents search relevance.
-
-An explicit command-specific ~:sort~ overrides the corresponding global default.
-
-An explicitly supplied ~nil~ preserves the CLI order for that invocation even when a global default is configured.
-
-The implementation must distinguish an omitted ~:sort~ argument from an explicitly supplied ~nil~.
-
-** Views
-
-Allow query and search views to define ~:sort~:
-
-#+begin_src emacs-lisp
-(setq org-files-db-views
-      '(("next-actions"
-         :command query
-         :query (headings (not (done)))
-         :sort
-         ((priority :direction asc :missing last)
-          (deadline-raw :direction asc :missing last)
-          (outline-path :direction asc))
-         :columns
-         ((todo-keyword)
-          (priority :width (fixed 3))
-          (deadline-raw :width (max 20))
-          (outline-path :width (max 80))))
-
-        ("recent-search"
-         :command search
-         :expression "org-files-db"
-         :sort
-         ((title :direction asc))
-         :columns
-         ((title)
-          (file-name :width (max 30))))))
-#+end_src
-
-View-specific sorting overrides the corresponding global default.
-
-A view without ~:sort~ inherits the default for its result type.
-
-An explicit ~:sort nil~ preserves the order returned by ~orgfdb~.
-
-Views continue to delegate to ~org-files-db-query~ or ~org-files-db-search~.
-
-** Dynamic blocks
-
-Allow direct dynamic blocks to specify sorting:
-
-#+begin_src org
-,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :sort "((priority :direction asc) (outline-path :direction asc))" :layout flat
-,#+END:
-#+end_src
-
-Parse the sort expression safely with ~read-eval~ disabled.
-
-Dynamic blocks referencing a view inherit that view's sorting.
-
-Exported and rendered entries must follow the same order as interactive completion.
-
-** Embark export
-
-~embark-export~ preserves the current sorted candidate order.
-
-It must not:
-
-- restore the original CLI order
-- sort candidates alphabetically through the completion framework
-- recalculate sort keys
-- reorder equal candidates unexpectedly
-
-Keep the completion metadata sorting functions set to ~identity~ where required so the prepared order remains authoritative.
-
-For outline export, preserve the requested sort order where it does not conflict with the required ancestor hierarchy.
-
-Matched siblings within the same generated hierarchy must follow the configured sorting.
-
-** Performance
-
-Sorting approximately 10,000 prepared rows must remain practical.
-
-To avoid repeated work:
-
-- normalize sort specifications once
-- extract every sort key once
-- parse timestamps once
-- reuse displayed column values where possible
-- compare cached scalar values
-- avoid allocating new strings inside comparison functions
-- preserve the original position as a numeric tie-breaker
-
-Add sorting benchmarks for approximately:
-
-- 1,000 rows
-- 10,000 rows
-- multiple text keys
-- numeric keys
-- timestamp keys
-- row-expanded tag values
-
-Measure sorting separately from JSON parsing, row preparation, width calculation, and candidate formatting.
-
-** Validation
-
-Report clear errors for:
-
-- unknown sort columns
-- malformed sort specifications
-- unsupported directions
-- unsupported missing-value positions
-- non-boolean ~:case-fold~ values
-- singular row columns without the corresponding row source
-- sort columns unavailable for the selected result type
-
-Include the affected command or view name where available.
-
-** README documentation
-
-Document:
-
-- sorting by one or more columns
-- ascending and descending order
-- missing-value placement
-- case-sensitive and case-insensitive text sorting
-- sort columns not needing to be displayed
-- per-command sorting
-- per-view sorting
-- global defaults by result type
-- search preserving relevance order when no sort is configured
-- row-expanded sorting
-- dynamic-block sorting
-
-Use practical examples rather than implementation details.
-
-** Acceptance criteria
-
-- Query results can be sorted by one or more columns.
-- Search results can be sorted without changing their default relevance order.
-- Sort columns do not need to be displayed.
-- Text, numeric, priority, timestamp, and outline-path values use appropriate comparisons.
-- Missing values can be placed first or last.
-- Ascending and descending ordering are supported.
-- Text comparison supports configurable case folding.
-- Sorting uses complete untruncated values.
-- Every sort key is calculated at most once per presentation row.
-- Sorting reuses cached displayed values where possible.
-- Equal rows preserve their original CLI order.
-- Row-expanded tags, properties, and keywords can be sorted.
-- Views and dynamic blocks support sorting.
-- Embark export preserves the configured ordering.
-- Existing result actions continue to receive their original result objects.
-- Tests cover all comparison types, multiple keys, missing values, explicit ~nil~, global defaults, view overrides, row expansion, duplicate values, stable ordering, Embark export, and non-ASCII text.
-- Benchmarks document sorting performance for approximately 1,000 and 10,000 rows.
-  
-* REVIEW Optimize large query result handling
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-[[./2026-08-06--optimize-large-query-result-handling.org][Task details]]
-
-Goal: Make synchronous queries returning 10,000 or more results fast enough that the completion interface appears promptly and filtering remains effectively instant.
-
-Keep the existing synchronous public interface.
-
-Do not add asynchronous query commands, Emacs Lisp worker threads, streaming, pagination, or lazy result loading as part of this task.
-
-Follow the same general performance model used successfully by Vulpea:
-
-#+begin_example
-database or CLI results
-→ build each display candidate once
-→ associate it directly with the original result
-→ pass the prepared candidates to completion
-#+end_example
-
-The optimized ~org-files-db~ pipeline additionally needs shared-width handling:
-
-#+begin_example
-orgfdb response
-→ parse once
-→ normalize column specifications once
-→ calculate each required result value once
-→ calculate each displayed cell once
-→ calculate shared widths from cached cells
-→ format each candidate once
-→ open completion
-#+end_example
-
-Once completion opens, filtering and redisplay must reuse the already prepared candidate strings without invoking result extraction, column formatting, width calculation, or face processing again.
-
-** Expected user experience
-
-A call such as:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings)
- '((todo-keyword)
-   (title)
-   (file-name :width (max 30))))
-#+end_src
-
-waits synchronously until the complete result set has been prepared.
-
-After preparation:
-
-- the completion interface appears promptly
-- typing filters the prepared candidate strings
-- redisplay does not rebuild columns or candidates
-- selecting a result remains immediate
-- actions and Embark receive the original result object
-
-Do not introduce a separate asynchronous command or require users to choose between synchronous and asynchronous execution.
-
-** Establish a performance baseline
-
-Add repeatable benchmarks for result sets containing approximately:
-
-- 100 results
-- 1,000 results
-- 10,000 results
-- 50,000 results where practical
-
-Measure these phases independently:
-
-- CLI execution
-- JSON parsing
-- column-specification normalization
-- result-value extraction
-- presentation-row construction
-- sort-key preparation when sorting is enabled
-- shared-width calculation
-- face preparation
-- candidate formatting
-- completion-frontend initialization
-- total time until the minibuffer is usable
-
-Use representative columns:
-
-#+begin_src emacs-lisp
-'((todo-keyword)
-  (title)
-  (file-name :width (max 30)))
-#+end_src
-
-Also benchmark more expensive columns:
-
-#+begin_src emacs-lisp
-'((todo-keyword)
-  (priority :width (fixed 3))
-  (outline-path :width (max 80))
-  (tags)
-  (file-name :width (max 30)))
-#+end_src
-
-Use:
-
-- synthetic result objects for deterministic regression benchmarks
-- at least one captured representative ~orgfdb~ response
-- duplicate titles and file names
-- non-ASCII text
-- nested outline paths
-- missing values
-
-Record baseline results before changing the implementation.
-
-Do not optimize only according to total command duration.
-
-Identify whether the dominant cost comes from:
-
-- ~orgfdb~
-- JSON parsing
-- repeated result access
-- repeated column calculation
-- width calculation
-- face handling
-- string allocation
-- candidate construction
-- completion initialization
-
-** Benchmark JSON representations
-
-Compare JSON parsing with:
-
-#+begin_src emacs-lisp
-:object-type 'alist
-#+end_src
-
-and:
-
-#+begin_src emacs-lisp
-:object-type 'hash-table
-#+end_src
-
-Measure:
-
-- parsing time
-- repeated direct field access
-- repeated nested field access
-- complete presentation preparation
-- garbage collection
-- memory use where practical
-
-Do not switch to hash tables merely because individual lookups have better theoretical complexity.
-
-Hash tables create additional objects and may increase parsing time and memory use.
-
-Change the JSON representation only when the complete representative benchmark shows a meaningful overall improvement.
-
-Keep all JSON access behind shared access functions so the chosen representation remains an internal implementation detail.
-
-** Normalize column specifications once
-
-Compile each configured column into an internal presentation specification before processing results.
-
-Conceptually:
-
-#+begin_src emacs-lisp
-(cl-defstruct org-files-db--presentation-column
-  name
-  extractor
-  width-kind
-  width-limit
-  truncate-position
-  truncate-marker
-  face-function
-  outline-options)
-#+end_src
-
-The exact representation may differ.
-
-Each normalized specification should contain everything required to process its cells without repeatedly inspecting the original property list.
-
-Resolve and validate once per invocation:
-
-- column name
-- value extractor
-- width mode
-- width limit
-- truncation position
-- truncation marker
-- outline separator
-- root inclusion
-- matched-heading inclusion
-- face selection
-- required CLI includes
-
-Avoid repeated ~pcase~, ~plist-get~, and validation inside the result loop.
-
-** Extract shared result values once
-
-Vulpea uses compact ~cl-defstruct~ note objects and direct accessors such as:
-
-#+begin_src emacs-lisp
-(vulpea-note-title note)
-(vulpea-note-path note)
-(vulpea-note-tags note)
-#+end_src
-
-Do not repeatedly traverse raw nested alists for every displayed column.
-
-Build a compact presentation source containing only values required by the current invocation.
-
-Conceptually:
-
-#+begin_src emacs-lisp
-(cl-defstruct org-files-db--presentation-source
-  result
-  kind
-  title
-  file-path
-  file-name
-  line-number
-  heading-level
-  todo-keyword
-  todo-type
-  priority
-  tags
-  outline-path
-  source-outline-path
-  target-outline-path)
-#+end_src
-
-The exact fields may differ.
-
-Only calculate values required by:
-
-- displayed columns
-- configured sort keys
-- row expansion
-- presentation metadata
-
-Do not eagerly normalize every possible result field.
-
-Several columns depending on the same value must reuse the normalized value.
-
-Examples:
-
-- ~file-name~ reuses the already extracted ~file-path~
-- ~outline-path~ is constructed once
-- aggregate tags are formatted once
-- title lookup is not repeated for display, searching, sorting, and export
-
-Keep the original result object unchanged.
-
-Actions continue to receive the original result rather than the normalized presentation source.
-
-** Build cached presentation rows
-
-Represent every visible row explicitly.
-
-Conceptually:
-
-#+begin_src emacs-lisp
-(cl-defstruct org-files-db--presentation-row
-  result
-  source
-  original-position
-  row-source
-  row-value
-  cells
-  sort-keys
-  candidate)
-#+end_src
-
-A normal result creates one presentation row.
-
-Tag, property, and keyword expansion may create several rows sharing the same presentation source and original result.
-
-Each cached cell contains at least:
-
-#+begin_example
-logical value
-display string
-display width
-source face
-#+end_example
-
-The preparation pipeline becomes:
-
-#+begin_example
-raw results
-→ presentation sources
-→ row expansion
-→ cached presentation rows
-→ cached sort keys
-→ stable sorting
-→ shared-width calculation
-→ candidate formatting
-#+end_example
-
-Calculate each displayed value at most once per presentation row.
-
-Do not call the general column extractor again during width calculation or candidate formatting.
-
-** Calculate widths from cached cells
-
-Calculate final shared widths from cached display widths.
-
-For ~(fixed N)~:
-
-- use ~N~ directly
-- do not scan cell widths to determine the column width
-- still calculate each cell once because its value is needed for display and filtering
-
-For ~(max N)~:
-
-- track the largest cached display width
-- stop updating the width accumulator once it reaches ~N~
-- continue preparing remaining cells because they are still required as candidates
-
-For ~auto~:
-
-- inspect all cached display widths
-- preserve exact existing behaviour
-- do not estimate or sample
-
-Avoid creating a temporary list of all widths before reducing it.
-
-Do not use a pattern such as:
-
-#+begin_src emacs-lisp
-(apply #'max
-       (mapcar #'string-width values))
-#+end_src
-
-Update width accumulators directly while rows are prepared or through one allocation-free pass over cached cells.
-
-** Format every candidate exactly once
-
-Vulpea constructs each completion candidate once:
-
-#+begin_src emacs-lisp
-(cons (vulpea-select-describe note) note)
-#+end_src
-
-Follow the same principle.
-
-After final shared widths are known, build one complete completion string per presentation row.
-
-The candidate contains:
-
-- truncated and padded column text
-- faces
-- searchable column values
-- an invisible unique identity where required
-- a direct reference to the original result
-- row-expansion metadata where applicable
-
-Do not:
-
-- rebuild candidates during filtering
-- rebuild candidates during redisplay
-- recalculate columns in an annotation function
-- recalculate columns in an affixation function
-- recalculate result metadata through completion callbacks
-
-Filtering must operate on already prepared candidate strings.
-
-All configured visible values must remain searchable.
-
-The internal uniqueness component must not be visible and must not meaningfully affect filtering.
-
-** Keep the completion representation simple
-
-Use an eager representation comparable to:
-
-#+begin_example
-formatted candidate string → original result
-#+end_example
-
-Prefer attaching the original result and row metadata directly to the candidate through text properties when this remains compatible with standard completion and Embark.
-
-For example, the equivalent of:
-
-#+begin_src emacs-lisp
-(get-text-property 0 'org-files-db-result candidate)
-#+end_src
-
-is preferable to repeatedly searching a large association list.
-
-Avoid a lookup implementation such as:
-
-#+begin_src emacs-lisp
-(cdr (assoc selected candidates))
-#+end_src
-
-for large result collections.
-
-A linear lookup through 10,000 candidates must not occur during:
-
-- preview
-- redisplay
-- selection
-- Embark actions
-- Embark export
-
-The selected representation must support:
-
-- identical visible candidate text
-- stable individual identity
-- direct access to the original result
-- row-expansion metadata
-- standard completion
-- Embark actions
-- Embark export
-
-** Cache sanitized faces
-
-Do not call ~face-attribute~ for every displayed cell.
-
-Create a presentation-local cache:
-
-#+begin_src emacs-lisp
-(make-hash-table :test #'eq)
-#+end_src
-
-For each distinct source face:
-
-- sanitize it once
-- cache the resulting property list
-- reuse it for every matching cell
-
-Typical faces include:
-
-- ~org-todo~
-- ~org-done~
-- ~org-priority~
-- ~org-tag~
-- ~org-date~
-- ~org-level-1~ through ~org-level-8~
-
-Use a presentation-local cache so later invocations observe theme changes.
-
-Do not globally cache complete formatted candidates or cells.
-
-** Reduce temporary allocation
-
-Avoid unnecessary temporary objects in hot paths.
-
-In particular:
-
-- do not create a list of all cell widths before reducing it
-- do not repeatedly derive a file name from the same path
-- do not repeatedly join the same outline components
-- do not repeatedly format the same tags
-- do not repeatedly convert the same scalar value to text
-- do not rebuild searchable strings during filtering
-- do not repeatedly sanitize the same face
-- do not repeatedly inspect column property lists
-- do not allocate strings inside sort comparison functions
-- do not copy result objects solely for presentation
-
-Use vectors or compact structs for fixed-size cell collections if benchmarks show a measurable advantage.
-
-Prefer understandable code over speculative micro-optimization.
-
-** Completion frontend comparison
-
-Benchmark the same completely prepared candidate collection with:
-
-- standard ~completing-read~
-- ~consult--read~ when Consult is available
-
-Begin this benchmark only after all candidate strings have been constructed.
-
-This separates presentation-preparation cost from completion-frontend initialization and filtering cost.
-
-When testing Consult:
-
-- pass already formatted candidate strings
-- do not perform column formatting through annotations
-- do not perform result lookup through repeated linear ~assoc~
-- disable Consult sorting when CLI or configured result order is authoritative
-- preserve duplicate candidates through their internal identity
-- do not enable previews during the core performance benchmark
-
-Conceptually:
-
-#+begin_src emacs-lisp
-(consult--read
- candidates
- :sort nil
- ...)
-#+end_src
-
-Vulpea uses:
-
-#+begin_src emacs-lisp
-:sort t
-#+end_src
-
-because its note selector allows Consult to control ordering.
-
-Do not copy this behaviour for ~org-files-db~ when the authoritative order comes from:
-
-- ~orgfdb~
-- search relevance
-- configured sorting
-- row expansion
-
-Do not add Consult as a requirement for normal query completion merely for performance reasons.
-
-Consult integration remains optional.
-
-The implementation must remain fast with standard completion.
-
-** Preserve prepared ordering
-
-Completion must preserve the order established before the minibuffer opens.
-
-This may be:
-
-- CLI order
-- search relevance order
-- configured result sorting
-- expanded-row sorting
-
-Use identity sorting metadata where necessary.
-
-Do not let the completion framework alphabetically reorder candidates unless explicitly requested by a future user option.
-
-Candidate filtering must not modify the authoritative result order.
-
-** Profiling and benchmark helpers
-
-Add an internal helper that prepares results without opening the minibuffer.
-
-Conceptually:
-
-#+begin_src emacs-lisp
-(org-files-db--benchmark-presentation
- results
- columns
- &rest options)
-#+end_src
-
-Return or report timings for:
-
-- column normalization
-- result-value extraction
-- row construction
-- sort-key extraction
-- sorting
-- width calculation
-- face preparation
-- candidate formatting
-- total preparation
-
-Also provide a way to benchmark already prepared candidates with the supported completion frontends.
-
-Keep benchmark helpers internal.
-
-Document how to profile a real invocation with:
-
-#+begin_example
-M-x profiler-start
-M-x profiler-report
-#+end_example
-
-Where practical, use repeated measurements rather than one run and report:
-
-- minimum
-- median
-- maximum
-- garbage collections
-
-** Preserve synchronous execution
-
-Keep the public interface synchronous:
-
-#+begin_src emacs-lisp
-(org-files-db-query QUERY COLUMNS &optional ACTION ...)
-#+end_src
-
-The command continues to:
-
-- invoke ~orgfdb~
-- wait for the complete response
-- parse all results
-- prepare all candidates
-- open completion
-- call the selected action
-
-Do not add:
-
-- ~org-files-db-query-async~
-- an ~:async~ view option
-- background completion appearing later
-- Emacs Lisp worker threads
-- duplicate ~orgfdb~ processes
-- chunked UI updates
-- lazy candidate formatting
-- streaming requirements
-- pagination requirements
-
-Reconsider these approaches only if the optimized eager pipeline remains insufficient after measurement.
-
-** Shared presentation pipeline
-
-Use one presentation implementation for:
-
-- heading queries
-- file queries
-- link queries
-- one-shot search
-- query views
-- search views
-- Embark export
-- dynamic-block rendering where applicable
-- row-expanded tags, properties, and keywords
-- configured sorting
-
-Do not keep separate old and optimized presentation implementations.
-
-Views and dynamic blocks continue to delegate through the normal query and search interfaces.
-
-** Embark and actions
-
-Optimization must not change externally visible behaviour.
-
-- Selecting a candidate calls the configured action with the original result.
-- Embark actions receive the correct original result.
-- ~embark-export~ preserves the currently filtered and prepared candidate order.
-- Duplicate visible candidates remain individually selectable.
-- Insert-link actions continue to work.
-- Follow-link actions continue to work.
-- Rename actions continue to work.
-- Result configuration context remains available.
-- Row-expanded candidates retain original result and row metadata.
-
-Embark export must not reconstruct query results from candidate text.
-
-** Implementation plan
-
-Implement and measure in this order:
-
-1. Add benchmarks for the current implementation.
-2. Separate CLI, JSON, presentation, and completion timings.
-3. Benchmark standard completion and Consult using already prepared candidates.
-4. Normalize column specifications once.
-5. Extract only required result-level values.
-6. Build presentation rows with cached cell strings and display widths.
-7. Calculate shared widths from cached cells.
-8. Format every candidate once.
-9. Attach result identity and row metadata without linear lookup.
-10. Cache sanitized faces per presentation.
-11. Remove temporary allocation identified by profiling.
-12. Integrate row expansion with the same presentation-row structure.
-13. Integrate sorting using cached logical values.
-14. Benchmark alists and hash tables using the complete pipeline.
-15. Change JSON representation only when justified by results.
-16. Remove the previous duplicate presentation path.
-17. Run all regression tests.
-18. Record before-and-after benchmark results.
-
-Do not combine speculative optimizations before recording the baseline.
-
-** Acceptance criteria
-
-- The public query interface remains synchronous.
-- No additional asynchronous query command is introduced.
-- A query returning approximately 10,000 headings opens completion substantially faster than before.
-- Filtering after completion opens remains effectively instant.
-- Every displayed column value is calculated at most once per presentation row.
-- Frequently reused result-level values are extracted at most once where practical.
-- Width calculation reuses cached display widths.
-- Candidate formatting reuses cached cell strings.
-- Every completion candidate is formatted exactly once.
-- Completion filtering does not invoke result extraction or column formatting.
-- Fixed-width columns do not perform unnecessary width comparisons.
-- Maximum-width accumulators stop updating after reaching their cap.
-- Automatic widths preserve exact existing behaviour.
-- Sanitized face attributes are calculated once per distinct face and presentation.
-- No repeated linear lookup through all candidates occurs during selection, preview, or export.
-- All configured column values remain searchable.
-- Prepared result order is preserved.
-- Duplicate visible candidates remain individually selectable.
-- Result actions receive the original result object.
-- Embark export retains original result and row metadata.
-- Row expansion uses the same cached presentation-row structure.
-- Sorting compares cached logical values rather than formatted strings.
-- Alist and hash-table JSON representations are benchmarked before changing the parser.
-- Standard completion remains supported without Consult.
-- Tests cover cached values, width modes, face caching, duplicate candidates, order preservation, actions, Embark metadata, row metadata, sorting metadata, non-ASCII values, Unicode display widths, and truncation.
-- Benchmarks document before-and-after results for approximately 1,000 and 10,000 rows.
-
- * TODO Add generation-aware asynchronous pre-caching for predefined views
+* TODO Add generation-aware asynchronous pre-caching for predefined views
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -4002,7 +2509,817 @@ This task does not implement:
 - Raw JSON, temporary buffers, failed results, and obsolete generations are not retained.
 - Background failures preserve previous successful entries without presenting them as current.
 - Tests cover unchanged, patch, rebuild, database replacement, async publication, restricted queries, file notifications, limits, force refresh, and stale-worker rejection.
-- Benchmarks document cold, warm, patched, and fully rebuilt behaviour for representative result sizes. 
+- Benchmarks document cold, warm, patched, and fully rebuilt behaviour for representative result sizes.
+
+* TODO Add row expansion for tags, effective properties, and keywords
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Allow one heading or file result to produce one displayed row per tag, effective property, or keyword.
+
+Currently, multi-valued fields are formatted as one combined column value. Provide a shared row-expansion mechanism instead of implementing separate presentation paths for tags, properties, and keywords.
+
+** Row-source option
+
+Add an optional ~:row-source~ keyword to query execution:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (tags "project"))
+ '((tag :width (max 30))
+   (outline-path :width (max 60))
+   (file-name :width (max 30)))
+ nil
+ :row-source 'tags)
+#+end_src
+
+Supported values are:
+
+- ~nil~: one displayed row per query result
+- ~tags~: one displayed row per tag
+- ~effective-properties~: one displayed row per effective property
+- ~keywords~: one displayed row per keyword
+
+The default is ~nil~, preserving the current behaviour.
+
+A result containing three tags therefore produces three completion candidates.
+
+Ordinary result columns such as ~outline-path~, ~file-name~, and ~title~ are repeated for every expanded row.
+
+** Tags
+
+With:
+
+#+begin_src emacs-lisp
+:row-source 'tags
+#+end_src
+
+provide the singular column:
+
+#+begin_src emacs-lisp
+(tag)
+#+end_src
+
+Example source heading:
+
+#+begin_src org
+,* Example :project:emacs:active:
+#+end_src
+
+Example rows:
+
+#+begin_example
+project  Example  notes.org
+emacs    Example  notes.org
+active   Example  notes.org
+#+end_example
+
+The existing plural ~tags~ column may continue to display all tags together when no row expansion is requested.
+
+The singular ~tag~ column is valid only with ~:row-source tags~.
+
+Preserve the tag order returned by ~orgfdb~.
+
+Do not add or remove Org tag delimiters unless explicitly configured as part of column formatting.
+
+** Effective properties
+
+With:
+
+#+begin_src emacs-lisp
+:row-source 'effective-properties
+#+end_src
+
+provide the columns:
+
+#+begin_src emacs-lisp
+(property-name)
+(property-value)
+#+end_src
+
+Example effective properties:
+
+#+begin_example
+CATEGORY=work
+OWNER=Daniel
+STATUS=active
+#+end_example
+
+Example rows:
+
+#+begin_example
+CATEGORY  work
+OWNER     Daniel
+STATUS    active
+#+end_example
+
+Each effective property name and its resolved value form one row.
+
+The query command must automatically request:
+
+#+begin_src sh
+--include effective_properties
+#+end_src
+
+Users must not need to specify this include manually.
+
+Effective properties represent the resolved values used by query matching. They must not be confused with raw property rows.
+
+If the CLI representation does not provide a stable order, sort effective properties by property name for deterministic output.
+
+** Keywords
+
+With:
+
+#+begin_src emacs-lisp
+:row-source 'keywords
+#+end_src
+
+provide the columns:
+
+#+begin_src emacs-lisp
+(keyword-name)
+(keyword-value)
+#+end_src
+
+Example keywords:
+
+#+begin_src org
+,#+TITLE: Example
+,#+FILETAGS: :project:
+,#+CATEGORY: work
+#+end_src
+
+Example rows:
+
+#+begin_example
+TITLE     Example
+FILETAGS  :project:
+CATEGORY  work
+#+end_example
+
+The query command must automatically request:
+
+#+begin_src sh
+--include keywords
+#+end_src
+
+Users must not need to specify this include manually.
+
+Preserve duplicate keyword entries when they are returned separately by ~orgfdb~.
+
+Preserve source order when the CLI provides it. Otherwise, use a deterministic order without merging entries.
+
+** Views
+
+Allow predefined query views to configure ~:row-source~:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("heading-tags"
+         :command query
+         :query (headings)
+         :row-source tags
+         :columns
+         ((tag :width (max 30))
+          (outline-path :width (max 60))
+          (file-name :width (max 30))))
+
+        ("effective-properties"
+         :command query
+         :query (headings)
+         :row-source effective-properties
+         :columns
+         ((property-name :width (max 30))
+          (property-value :width (max 60))
+          (outline-path :width (max 60))))
+
+        ("file-keywords"
+         :command query
+         :query (files)
+         :row-source keywords
+         :columns
+         ((keyword-name :width (max 30))
+          (keyword-value :width (max 60))
+          (file-name :width (max 30))))))
+#+end_src
+
+Query views pass ~:row-source~ to ~org-files-db-query~.
+
+They must not implement a separate expansion or completion path.
+
+** Dynamic blocks
+
+Allow direct query blocks to define ~:row-source~:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :query "(headings)" :row-source tags :layout flat
+,#+END:
+#+end_src
+
+Views referenced by dynamic blocks inherit their configured ~:row-source~.
+
+Supported dynamic-block values are:
+
+- ~tags~
+- ~effective-properties~
+- ~keywords~
+
+An absent value keeps the normal one-row-per-result behaviour.
+
+** Candidate representation
+
+Keep the matched query result separate from the expanded row data.
+
+Conceptually, each displayed candidate contains:
+
+#+begin_example
+original result
+row-source
+row value
+formatted columns
+#+end_example
+
+Selecting an expanded row continues to execute the configured action on the original heading or file result.
+
+Existing actions such as opening a result, inserting a link, or renaming a file must continue to work without modification.
+
+The row metadata is used for formatting and exporting but must not replace or mutate the original query result.
+
+** Empty collections
+
+When a result has no entries for the selected row source, it produces no displayed rows.
+
+Examples:
+
+- a heading without tags produces no rows for ~:row-source tags~
+- a result without effective properties produces no property rows
+- a result without keywords produces no keyword rows
+
+Do not create an artificial empty row.
+
+A future option may add empty rows if a concrete use case requires them.
+
+** Column validation
+
+Validate singular row columns against the selected row source:
+
+- ~tag~ requires ~:row-source tags~
+- ~property-name~ and ~property-value~ require ~:row-source effective-properties~
+- ~keyword-name~ and ~keyword-value~ require ~:row-source keywords~
+
+Report a clear error for incompatible combinations.
+
+Do not allow multiple row sources in one invocation.
+
+In particular, do not create Cartesian products between tags, properties, and keywords.
+
+** Include inference
+
+Infer required CLI includes from ~:row-source~:
+
+#+begin_example
+tags                  → no additional include when tags are already part of the result
+effective-properties  → effective_properties
+keywords              → keywords
+#+end_example
+
+Combine inferred includes with includes required by configured columns and actions.
+
+Use one ~orgfdb~ invocation for the complete result set.
+
+** Width and truncation
+
+Expanded row columns support the same width and truncation options as all other columns:
+
+#+begin_src emacs-lisp
+(tag
+ :width (max 20)
+ :truncate (:position right :marker "…"))
+
+(property-value
+ :width (fixed 40)
+ :truncate (:position middle :marker "…"))
+#+end_src
+
+Shared column widths are calculated across all expanded rows, not separately for each original result.
+
+** Embark export
+
+~embark-export~ must preserve the currently filtered expanded rows.
+
+It must not collapse several tag, property, or keyword rows back into one result.
+
+For flat export:
+
+- produce one exported entry per expanded row
+- retain a link to the original heading or file
+- include the singular row value in the exported description
+
+For outline export:
+
+- preserve the original file and heading hierarchy
+- group expanded rows below their matched result where necessary
+- avoid repeating identical ancestor hierarchy for every row
+
+The exact presentation may reuse the configured columns, but every expanded row must remain distinguishable.
+
+** Supported result kinds
+
+Initial support applies to:
+
+- heading results
+- file results
+- synthetic file-root results where the corresponding data is available
+
+Reject row expansion for link results unless a later feature explicitly defines whether source or target metadata should be expanded.
+
+Search-result support may be added only when the search CLI output provides the required structured data and includes.
+
+** README documentation
+
+Document:
+
+- the purpose of ~:row-source~
+- one row per tag
+- one row per effective property
+- one row per keyword
+- the singular columns available for each mode
+- views and dynamic-block examples
+- empty collections producing no rows
+- automatic include inference
+- the difference between aggregate ~tags~ and singular ~tag~
+
+Avoid describing the feature as JSON expansion or exposing internal candidate structures.
+
+** Acceptance criteria
+
+- Query results can expand to one row per tag.
+- Query results can expand to one row per effective property.
+- Query results can expand to one row per keyword.
+- Normal columns are repeated for every expanded row.
+- ~tag~, ~property-name~, ~property-value~, ~keyword-name~, and ~keyword-value~ are supported.
+- Effective properties automatically request ~effective_properties~.
+- Keywords automatically request ~keywords~.
+- Only one row source can be active per invocation.
+- No Cartesian products are created.
+- Empty collections produce no rows.
+- Existing result actions continue to receive the original matched result.
+- Views pass their row source to the generic query function.
+- Dynamic blocks support direct and view-provided row sources.
+- Embark export preserves individual expanded rows.
+- Width and truncation are calculated across all expanded rows.
+- Tests cover multiple tags, no tags, effective-property ordering, keyword duplicates, empty collections, include inference, column validation, views, dynamic blocks, filtering, actions, flat export, outline export, and non-ASCII values.
+
+* TODO Add configurable result sorting
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Allow query and search results to be sorted by one or more user-facing columns before they are presented, exported, or rendered in dynamic blocks.
+
+Sorting must reuse the shared result-presentation pipeline and must not introduce separate query, completion, or rendering paths.
+
+** Public syntax
+
+Add an optional ~:sort~ argument to query and search commands.
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (not (done)))
+ '((todo-keyword)
+   (priority :width (fixed 3))
+   (outline-path :width (max 80))
+   (file-name :width (max 30)))
+ nil
+ :sort
+ '((priority :direction asc :missing last)
+   (outline-path :direction asc)))
+#+end_src
+
+Search example:
+
+#+begin_src emacs-lisp
+(org-files-db-search
+ "quarterly report"
+ nil
+ nil
+ :scope 'all
+ :sort
+ '((rank :direction asc)
+   (title :direction asc)))
+#+end_src
+
+~:sort nil~ preserves the order returned by ~orgfdb~.
+
+Each sort specification has the form:
+
+#+begin_src emacs-lisp
+(COLUMN
+ :direction asc
+ :missing last
+ :case-fold t)
+#+end_src
+
+Supported options are:
+
+- ~:direction asc~ sorts in ascending order.
+- ~:direction desc~ sorts in descending order.
+- ~:missing first~ places missing values before non-missing values.
+- ~:missing last~ places missing values after non-missing values.
+- ~:case-fold t~ compares textual values without case distinctions.
+- ~:case-fold nil~ compares textual values with case distinctions.
+
+Defaults are:
+
+#+begin_example
+direction   asc
+missing     last
+case-fold   t
+#+end_example
+
+Allow multiple sort keys. Later keys are used only when all earlier keys compare equally.
+
+** Supported sort columns
+
+Sorting uses the same public column names as result presentation.
+
+Examples include:
+
+- ~title~
+- ~todo-keyword~
+- ~todo-type~
+- ~priority~
+- ~outline-path~
+- ~source-outline-path~
+- ~target-outline-path~
+- ~tags~
+- ~file-title~
+- ~file-name~
+- ~file-path~
+- ~line-number~
+- ~scheduled-raw~
+- ~deadline-raw~
+- ~closed-raw~
+- ~link-type~
+- ~link-target~
+- ~link-description~
+- ~resolution-status~
+- ~rank~
+
+A sort column does not need to be displayed.
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings)
+ '((title)
+   (file-name :width (max 30)))
+ nil
+ :sort
+ '((priority :direction asc)
+   (title :direction asc)))
+#+end_src
+
+Here ~priority~ controls the ordering without appearing as a visible column.
+
+Do not expose arbitrary internal JSON fields as supported sort keys. Sortable columns must use the documented public column API.
+
+** Comparison semantics
+
+Use type-aware comparison.
+
+*** Text
+
+Textual columns are compared as strings.
+
+With the default ~:case-fold t~, values differing only by case compare equally for the current sort key.
+
+Use the original result order as the final tie-breaker so sorting remains stable.
+
+*** Numbers
+
+Numeric columns such as ~line-number~ and ~rank~ are compared numerically rather than as strings.
+
+For example:
+
+#+begin_example
+2
+10
+100
+#+end_example
+
+must not be ordered as:
+
+#+begin_example
+10
+100
+2
+#+end_example
+
+*** Priority
+
+Org priorities use their natural order.
+
+Ascending order means:
+
+#+begin_example
+A
+B
+C
+#+end_example
+
+Missing priorities follow the configured ~:missing~ behaviour.
+
+*** Timestamps
+
+Planning columns such as:
+
+- ~scheduled-raw~
+- ~deadline-raw~
+- ~closed-raw~
+
+are compared chronologically.
+
+Parse each timestamp at most once per presentation.
+
+Invalid or absent timestamps are treated as missing values and follow the configured ~:missing~ behaviour.
+
+*** Outline paths
+
+~outline-path~, ~source-outline-path~, and ~target-outline-path~ are compared using their complete untruncated path values.
+
+Display truncation must not affect sorting.
+
+Custom separators affect presentation only and must not change the logical path order.
+
+*** Tags
+
+The aggregate ~tags~ column is compared using its complete tag collection, not its truncated display value.
+
+When row expansion is active with:
+
+#+begin_src emacs-lisp
+:row-source 'tags
+#+end_src
+
+the singular ~tag~ column sorts by the individual expanded tag.
+
+** Sorting and cached presentation rows
+
+Integrate sorting with the optimized presentation pipeline.
+
+Conceptually:
+
+#+begin_example
+results
+→ normalized column and sort specifications
+→ cached presentation rows
+→ cached sort keys
+→ stable sorting
+→ shared-width calculation
+→ formatted completion candidates
+#+end_example
+
+Calculate every sort key at most once per presentation row.
+
+When a sort key uses the same value as a displayed column, reuse the already cached value.
+
+Do not call the general column extractor again during individual comparisons.
+
+A comparison function may be called many times by the sorting algorithm, so it must compare already normalized cached values.
+
+Do not sort using truncated, padded, propertized, or otherwise formatted candidate strings.
+
+** Stable ordering
+
+Sorting must be stable.
+
+When all configured sort keys compare equally, preserve the original order returned by ~orgfdb~.
+
+Store the original result position in the presentation row and use it as the final tie-breaker when necessary.
+
+This ensures deterministic handling of:
+
+- duplicate titles
+- identical file names
+- equal priorities
+- missing values
+- row-expanded values with the same text
+
+** Row expansion
+
+Sorting applies after row expansion.
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings)
+ '((tag)
+   (outline-path :width (max 60)))
+ nil
+ :row-source 'tags
+ :sort
+ '((tag :direction asc)
+   (outline-path :direction asc)))
+#+end_src
+
+This sorts individual tag rows rather than only their original heading results.
+
+The singular row columns are valid only with their matching row source:
+
+- ~tag~ with ~tags~
+- ~property-name~ and ~property-value~ with ~effective-properties~
+- ~keyword-name~ and ~keyword-value~ with ~keywords~
+
+Do not create separate sorting implementations for expanded rows.
+
+** Defaults by result type
+
+Provide configurable default sorting:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-heading-sort nil
+  "Default sorting for heading query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-file-sort nil
+  "Default sorting for file query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-link-sort nil
+  "Default sorting for link query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-search-sort nil
+  "Default sorting for full-text search results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+#+end_src
+
+All defaults are ~nil~, preserving the CLI order.
+
+This is especially important for search results, where the default CLI order represents search relevance.
+
+An explicit command-specific ~:sort~ overrides the corresponding global default.
+
+An explicitly supplied ~nil~ preserves the CLI order for that invocation even when a global default is configured.
+
+The implementation must distinguish an omitted ~:sort~ argument from an explicitly supplied ~nil~.
+
+** Views
+
+Allow query and search views to define ~:sort~:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("next-actions"
+         :command query
+         :query (headings (not (done)))
+         :sort
+         ((priority :direction asc :missing last)
+          (deadline-raw :direction asc :missing last)
+          (outline-path :direction asc))
+         :columns
+         ((todo-keyword)
+          (priority :width (fixed 3))
+          (deadline-raw :width (max 20))
+          (outline-path :width (max 80))))
+
+        ("recent-search"
+         :command search
+         :expression "org-files-db"
+         :sort
+         ((title :direction asc))
+         :columns
+         ((title)
+          (file-name :width (max 30))))))
+#+end_src
+
+View-specific sorting overrides the corresponding global default.
+
+A view without ~:sort~ inherits the default for its result type.
+
+An explicit ~:sort nil~ preserves the order returned by ~orgfdb~.
+
+Views continue to delegate to ~org-files-db-query~ or ~org-files-db-search~.
+
+** Dynamic blocks
+
+Allow direct dynamic blocks to specify sorting:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :sort "((priority :direction asc) (outline-path :direction asc))" :layout flat
+,#+END:
+#+end_src
+
+Parse the sort expression safely with ~read-eval~ disabled.
+
+Dynamic blocks referencing a view inherit that view's sorting.
+
+Exported and rendered entries must follow the same order as interactive completion.
+
+** Embark export
+
+~embark-export~ preserves the current sorted candidate order.
+
+It must not:
+
+- restore the original CLI order
+- sort candidates alphabetically through the completion framework
+- recalculate sort keys
+- reorder equal candidates unexpectedly
+
+Keep the completion metadata sorting functions set to ~identity~ where required so the prepared order remains authoritative.
+
+For outline export, preserve the requested sort order where it does not conflict with the required ancestor hierarchy.
+
+Matched siblings within the same generated hierarchy must follow the configured sorting.
+
+** Performance
+
+Sorting approximately 10,000 prepared rows must remain practical.
+
+To avoid repeated work:
+
+- normalize sort specifications once
+- extract every sort key once
+- parse timestamps once
+- reuse displayed column values where possible
+- compare cached scalar values
+- avoid allocating new strings inside comparison functions
+- preserve the original position as a numeric tie-breaker
+
+Add sorting benchmarks for approximately:
+
+- 1,000 rows
+- 10,000 rows
+- multiple text keys
+- numeric keys
+- timestamp keys
+- row-expanded tag values
+
+Measure sorting separately from JSON parsing, row preparation, width calculation, and candidate formatting.
+
+** Validation
+
+Report clear errors for:
+
+- unknown sort columns
+- malformed sort specifications
+- unsupported directions
+- unsupported missing-value positions
+- non-boolean ~:case-fold~ values
+- singular row columns without the corresponding row source
+- sort columns unavailable for the selected result type
+
+Include the affected command or view name where available.
+
+** README documentation
+
+Document:
+
+- sorting by one or more columns
+- ascending and descending order
+- missing-value placement
+- case-sensitive and case-insensitive text sorting
+- sort columns not needing to be displayed
+- per-command sorting
+- per-view sorting
+- global defaults by result type
+- search preserving relevance order when no sort is configured
+- row-expanded sorting
+- dynamic-block sorting
+
+Use practical examples rather than implementation details.
+
+** Acceptance criteria
+
+- Query results can be sorted by one or more columns.
+- Search results can be sorted without changing their default relevance order.
+- Sort columns do not need to be displayed.
+- Text, numeric, priority, timestamp, and outline-path values use appropriate comparisons.
+- Missing values can be placed first or last.
+- Ascending and descending ordering are supported.
+- Text comparison supports configurable case folding.
+- Sorting uses complete untruncated values.
+- Every sort key is calculated at most once per presentation row.
+- Sorting reuses cached displayed values where possible.
+- Equal rows preserve their original CLI order.
+- Row-expanded tags, properties, and keywords can be sorted.
+- Views and dynamic blocks support sorting.
+- Embark export preserves the configured ordering.
+- Existing result actions continue to receive their original result objects.
+- Tests cover all comparison types, multiple keys, missing values, explicit ~nil~, global defaults, view overrides, row expansion, duplicate values, stable ordering, Embark export, and non-ASCII text.
+- Benchmarks document sorting performance for approximately 1,000 and 10,000 rows.
   
 * TODO Improve user-facing README documentation
 :PROPERTIES:
@@ -4982,4 +4299,3 @@ Update the changelog.
 - Tests cover messages, return values, error paths, and suppression of internal result output.
   
 * TODO Ausprobieren: org-files-db-actions-follow-heading-link
-

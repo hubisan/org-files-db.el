@@ -6,6 +6,7 @@
   - Column definitions, result values, display cells, widths, faces, and candidates are now prepared once per invocation and reused throughout completion.
   - Fixed widths avoid width scans, capped widths stop scanning after reaching their limit, and face attributes are cached per presentation.
   - Candidate selection now uses direct metadata lookup while preserving duplicate visible candidates, original result objects, CLI order, and searchable untruncated values.
+  - Large presentations now reduce outline-path and candidate allocation, use compact nested JSON arrays, release temporary row data, and avoid repeated garbage collections during completion preparation.
   - Added repeatable synthetic and representative benchmarks for presentation phases, completion frontend initialization, and alist versus hash-table JSON parsing.
 - =ADDED= Added explicit ~source-outline-path~ and ~target-outline-path~ columns for link results.
   - Source paths describe the hierarchy containing the link; target paths describe the hierarchy of resolved file or heading targets.

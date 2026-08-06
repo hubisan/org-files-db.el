@@ -153,11 +153,15 @@ OBJECT may be an alist or hash table, and its keys may be symbols or strings."
          (string-key (if (stringp key) key (symbol-name key))))
     (cond
      ((hash-table-p object)
-      (or (gethash symbol-key object)
-          (gethash string-key object)))
+      (let ((value (gethash symbol-key object org-files-db--missing-key)))
+        (if (eq value org-files-db--missing-key)
+            (gethash string-key object)
+          value)))
      ((listp object)
-      (or (alist-get symbol-key object)
-          (alist-get string-key object nil nil #'string=)))
+      (let ((entry (assq symbol-key object)))
+        (if entry
+            (cdr entry)
+          (cdr (assoc string-key object #'string=)))))
      (t nil))))
 
 (defun org-files-db--has-key-p (object key)
@@ -179,6 +183,15 @@ OBJECT may be an alist or hash table, and its keys may be symbols or strings."
   "Return the nested value in OBJECT selected by KEYS."
   (dolist (key keys object)
     (setq object (org-files-db--alist-value object key))))
+
+(cl-define-compiler-macro org-files-db--get (&whole _form object &rest keys)
+  "Compile static KEYS in FORM without allocating a rest argument list."
+  (if (null keys)
+      object
+    (let ((expression object))
+      (dolist (key keys expression)
+        (setq expression
+              `(org-files-db--alist-value ,expression ,key))))))
 
 (defun org-files-db--kind (result)
   "Return RESULT kind as a symbol."
@@ -309,12 +322,13 @@ Return a plist containing :status, :stdout, and :stderr."
         stdout
       (org-files-db--signal-cli-error status stderr))))
 
-(defun org-files-db--parse-json-as (text object-type)
-  "Parse JSON TEXT using OBJECT-TYPE and list arrays."
+(defun org-files-db--parse-json-as (text object-type &optional array-type)
+  "Parse JSON TEXT using OBJECT-TYPE and ARRAY-TYPE.
+ARRAY-TYPE defaults to `list'."
   (condition-case err
       (json-parse-string text
                          :object-type object-type
-                         :array-type 'list
+                         :array-type (or array-type 'list)
                          :null-object nil
                          :false-object nil)
     (error
@@ -323,8 +337,9 @@ Return a plist containing :status, :stdout, and :stderr."
                            (error-message-string err)))))))
 
 (defun org-files-db--parse-json (text)
-  "Parse JSON TEXT into alists and lists."
-  (org-files-db--parse-json-as text 'alist))
+  "Parse JSON TEXT into alists with vector arrays."
+  (let ((parsed (org-files-db--parse-json-as text 'alist 'array)))
+    (if (vectorp parsed) (append parsed nil) parsed)))
 
 (defun org-files-db--call (command arguments)
   "Run orgfdb COMMAND with ARGUMENTS and parse its JSON output."
@@ -528,7 +543,13 @@ supplied nil disables --config.  ORIGIN identifies validation errors."
   (cond
    ((null response) nil)
    ((org-files-db--has-key-p response 'results)
-    (org-files-db--get response 'results))
+    (let ((results (org-files-db--get response 'results)))
+      (if (vectorp results) (append results nil) results)))
+   ((and (vectorp response)
+         (or (zerop (length response))
+             (let ((first (aref response 0)))
+               (or (listp first) (hash-table-p first)))))
+    (append response nil))
    ((and (listp response)
          (or (listp (car response))
              (hash-table-p (car response))))
@@ -545,9 +566,11 @@ supplied nil disables --config.  ORIGIN identifies validation errors."
       (puthash org-files-db--result-config-key config-file copy)
       copy))
    ((listp result)
-    (cons (cons org-files-db--result-config-key config-file)
-          (assq-delete-all org-files-db--result-config-key
-                           (copy-sequence result))))
+    (let ((entry (assq org-files-db--result-config-key result)))
+      (cons (cons org-files-db--result-config-key config-file)
+            (if entry
+                (delq entry (copy-sequence result))
+              result))))
    (t
     (signal 'org-files-db-error
             (list "Cannot attach configuration context to malformed result")))))
@@ -895,27 +918,27 @@ Return a result-like alist for the target."
 
 (defun org-files-db--path-root-title (nodes)
   "Return the file/root title represented by NODES."
-  (when-let* ((root
-               (seq-find
-                (lambda (node)
-                  (and (or (listp node) (hash-table-p node))
-                       (memq (org-files-db--kind node) '(file root))))
-                nodes)))
-    (org-files-db--node-title root)))
+  (car (org-files-db--path-data nodes)))
 
 (defun org-files-db--path-heading-titles (nodes)
   "Return heading titles represented by NODES."
-  (delq nil
-        (mapcar
-         (lambda (node)
-           (let* ((object-p (or (listp node) (hash-table-p node)))
-                  (kind (and object-p (org-files-db--kind node))))
-             (when (or (stringp node)
-                       (eq kind 'heading)
-                       (and object-p (null kind)))
-               (let ((title (org-files-db--node-title node)))
-                 (unless (string-empty-p title) title)))))
-         nodes)))
+  (cdr (org-files-db--path-data nodes)))
+
+(defun org-files-db--path-data (nodes)
+  "Return the root title and heading titles represented by NODES."
+  (let (root headings)
+    (seq-doseq (node nodes)
+      (let* ((object-p (or (listp node) (hash-table-p node)))
+             (kind (and object-p (org-files-db--kind node))))
+        (when (and (null root) (memq kind '(file root)))
+          (setq root (org-files-db--node-title node)))
+        (when (or (stringp node)
+                  (eq kind 'heading)
+                  (and object-p (null kind)))
+          (let ((title (org-files-db--node-title node)))
+            (unless (string-empty-p title)
+              (push title headings))))))
+    (cons root (nreverse headings))))
 
 (defun org-files-db--append-heading-title (headings title)
   "Append TITLE to HEADINGS unless it is already the final component."
@@ -926,20 +949,24 @@ Return a result-like alist for the target."
 
 (defun org-files-db--outline-data (root headings)
   "Return normalized outline data for ROOT and HEADINGS."
-  (list :root (and (stringp root) (not (string-empty-p root)) root)
-        :headings (delq nil headings)))
+  (cons (and (stringp root) (not (string-empty-p root)) root)
+        (delq nil headings)))
 
 (defun org-files-db--generic-outline-data (result)
   "Return generic outline data for RESULT."
   (let* ((nodes (or (org-files-db--result-path-nodes result) nil))
-         (root (org-files-db--path-root-title nodes))
-         (headings (org-files-db--path-heading-titles nodes)))
+         (path-data (org-files-db--path-data nodes))
+         (root (car path-data))
+         (headings (cdr path-data)))
     (unless headings
       (let ((title (org-files-db--result-title result)))
         (setq headings (list title))
         (when (equal root title)
           (setq root nil))))
-    (org-files-db--outline-data root headings)))
+    (if (and (eq root (car path-data))
+             (eq headings (cdr path-data)))
+        path-data
+      (org-files-db--outline-data root headings))))
 
 (defun org-files-db--source-outline-data (result)
   "Return source outline data for link RESULT."
@@ -951,14 +978,15 @@ Return a result-like alist for the target."
               (org-files-db--get source 'source_path)
               (org-files-db--get result 'node_path)
               nil))
-         (headings (org-files-db--path-heading-titles nodes))
+         (path-data (org-files-db--path-data nodes))
+         (headings (cdr path-data))
          (heading-title
           (or (org-files-db--get heading 'title)
               (when (eq (org-files-db--kind source) 'heading)
                 (org-files-db--get source 'title))))
          (root
           (or (org-files-db--get source 'file 'title)
-              (org-files-db--path-root-title nodes))))
+              (car path-data))))
     (org-files-db--outline-data
      root
      (org-files-db--append-heading-title headings heading-title))))
@@ -981,11 +1009,12 @@ Return a result-like alist for the target."
                 (org-files-db--get target 'outline_path)
                 (org-files-db--get target 'node_path)
                 nil))
-           (headings (org-files-db--path-heading-titles nodes))
+           (path-data (org-files-db--path-data nodes))
+           (headings (cdr path-data))
            (heading-title (org-files-db--get heading 'title))
            (root
             (or (org-files-db--get file 'title)
-                (org-files-db--path-root-title nodes))))
+                (car path-data))))
       (when (or file heading nodes)
         (org-files-db--outline-data
          root
@@ -996,8 +1025,8 @@ Return a result-like alist for the target."
   (if (null data)
       ""
     (let* ((options (org-files-db--outline-options definition))
-           (headings (copy-sequence (plist-get data :headings)))
-           (root (plist-get data :root))
+           (headings (cdr data))
+           (root (car data))
            (include-root (plist-get options :include-root))
            (include-match (plist-get options :include-match)))
       (unless include-match
@@ -1026,11 +1055,17 @@ Return a result-like alist for the target."
 
 (defun org-files-db--format-list-value (value)
   "Format list VALUE as a compact string."
-  (string-join
-   (mapcar (lambda (item)
-             (if (stringp item) item (format "%s" item)))
-           value)
-   ","))
+  (if (seq-every-p #'stringp value)
+      (string-join (if (vectorp value) (append value nil) value) ",")
+    (string-join
+     (mapcar (lambda (item)
+               (cond
+                ((stringp item) item)
+                ((numberp item) (number-to-string item))
+                ((symbolp item) (symbol-name item))
+                (t (format "%s" item))))
+             value)
+     ",")))
 
 (defconst org-files-db--presentation-uncomputed
   (make-symbol "org-files-db-presentation-uncomputed")
@@ -1105,7 +1140,14 @@ Return a result-like alist for the target."
   face-cache
   candidates
   lookup
-  timings)
+  timings
+  phase-metrics)
+
+(defconst org-files-db--large-presentation-row-count 5000
+  "Minimum result count for bounded large-presentation GC handling.")
+
+(defconst org-files-db--large-presentation-gc-threshold (* 64 1024 1024)
+  "Minimum temporary GC threshold used while preparing large result sets.")
 
 (defmacro org-files-db--presentation-source-cached
     (source accessor &rest body)
@@ -1429,17 +1471,16 @@ Return a result-like alist for the target."
   "Format outline DATA using normalized presentation COLUMN."
   (if (null data)
       ""
-    (let ((headings (copy-sequence (plist-get data :headings)))
-          (root (plist-get data :root)))
+    (let ((headings (cdr data))
+          (root (car data)))
       (unless (org-files-db--presentation-column-outline-include-match column)
         (setq headings (butlast headings)))
       (string-join
-       (append
-        (when (and
-               (org-files-db--presentation-column-outline-include-root column)
-               root)
-          (list root))
-        headings)
+       (if (and
+            (org-files-db--presentation-column-outline-include-root column)
+            root)
+           (cons root headings)
+         headings)
        (org-files-db--presentation-column-outline-separator column)))))
 
 (defun org-files-db--presentation-extract-todo-keyword (source _column)
@@ -1560,21 +1601,25 @@ Return a result-like alist for the target."
       'org-done
     'org-todo))
 
+(defconst org-files-db--level-faces
+  [org-level-1 org-level-2 org-level-3 org-level-4
+               org-level-5 org-level-6 org-level-7 org-level-8]
+  "Org heading faces indexed by zero-based presentation level.")
+
 (defun org-files-db--presentation-level-face (source _column)
-  "Return the `outline-level' face for SOURCE."
-  (let ((level
-         (max 1
-              (min 8
-                   (or (org-files-db--presentation-source-level source)
-                       1)))))
-    (intern (format "org-level-%d" level))))
+  "Return the Org outline level face for SOURCE."
+  (let ((level (or (org-files-db--presentation-source-level source) 1)))
+    (aref org-files-db--level-faces (1- (max 1 (min 8 level))))))
 
 (defun org-files-db--presentation-display-value (value)
   "Return logical VALUE as a compact display string."
   (cond
    ((null value) "")
-   ((listp value) (org-files-db--format-list-value value))
+   ((or (listp value) (vectorp value))
+    (org-files-db--format-list-value value))
    ((stringp value) value)
+   ((numberp value) (number-to-string value))
+   ((symbolp value) (symbol-name value))
    (t (format "%s" value))))
 
 (defun org-files-db--column-value (result definition)
@@ -1724,20 +1769,12 @@ Return a result-like alist for the target."
                                face))))
     cache))
 
-(defun org-files-db--string-suffix-to-width (string width)
-  "Return the longest suffix of STRING whose display width is at most WIDTH."
-  (let ((position (length string))
-        (used 0)
-        done)
-    (while (and (> position 0) (not done))
-      (let* ((previous (1- position))
-             (character-width
-              (string-width (substring string previous position))))
-        (if (> (+ used character-width) width)
-            (setq done t)
-          (setq used (+ used character-width)
-                position previous))))
-    (substring string position)))
+(defun org-files-db--string-suffix-to-width (string width &optional total-width)
+  "Return the longest suffix of STRING whose display width is at most WIDTH.
+TOTAL-WIDTH may supply the previously calculated display width of STRING."
+  (let ((total-width (or total-width (string-width string))))
+    (truncate-string-to-width
+     string total-width (max 0 (- total-width width)))))
 
 (defun org-files-db--truncate-presentation-value
     (value value-width width column)
@@ -1758,11 +1795,13 @@ Return a result-like alist for the target."
           (pcase position
             ('left
              (concat marker
-                     (org-files-db--string-suffix-to-width value available)))
+                     (org-files-db--string-suffix-to-width
+                      value available value-width)))
             ('middle
              (concat (truncate-string-to-width value left-width)
                      marker
-                     (org-files-db--string-suffix-to-width value right-width)))
+                     (org-files-db--string-suffix-to-width
+                      value right-width value-width)))
             (_
              (concat (truncate-string-to-width value available)
                      marker))))))))
@@ -1792,72 +1831,152 @@ Return a result-like alist for the target."
 
 (defun org-files-db--format-presentation-row (row columns widths)
   "Format cached ROW once using normalized COLUMNS and WIDTHS."
+  (car (org-files-db--format-presentation-row-data
+        row columns widths (make-hash-table :test #'eql))))
+
+(defun org-files-db--presentation-padding (width cache)
+  "Return WIDTH spaces reused through presentation CACHE."
+  (if (zerop width)
+      ""
+    (or (gethash width cache)
+        (let ((padding (make-string width ?\s)))
+          (puthash width padding cache)
+          padding))))
+
+(defun org-files-db--format-presentation-row-data
+    (row columns widths padding-cache)
+  "Return formatted display and hidden search text for prepared ROW.
+COLUMNS and WIDTHS describe the table, and PADDING-CACHE reuses space strings."
+  (let ((column-count (length columns)))
+    (if (= column-count 1)
+        (org-files-db--format-single-presentation-row-data
+         row (aref columns 0) (aref widths 0) padding-cache)
+      (org-files-db--format-multiple-presentation-row-data
+       row columns widths padding-cache))))
+
+(defun org-files-db--format-single-presentation-row-data
+    (row column width padding-cache)
+  "Return formatted display and hidden search text for one-column ROW.
+COLUMN and WIDTH control formatting, and PADDING-CACHE reuses space strings."
+  (let* ((cell (aref (org-files-db--presentation-row-cells row) 0))
+         (value (org-files-db--presentation-cell-display cell))
+         (value-width (org-files-db--presentation-cell-display-width cell))
+         (text
+          (org-files-db--truncate-presentation-value
+           value value-width width column))
+         (text-width (if (eq text value) value-width (string-width text)))
+         (padding-width (max 0 (- width text-width)))
+         (display
+          (concat text
+                  (org-files-db--presentation-padding
+                   padding-width padding-cache)))
+         (face (org-files-db--presentation-cell-face cell)))
+    (when (and face (> (length text) 0))
+      (add-text-properties 0 (length text) (list 'face face) display))
+    (cons
+     display
+     (when (> value-width width)
+       (concat "\u2063" value)))))
+
+(defun org-files-db--format-multiple-presentation-row-data
+    (row columns widths padding-cache)
+  "Return formatted display and hidden search text for multi-column ROW.
+COLUMNS and WIDTHS control formatting, and PADDING-CACHE reuses space strings."
   (let* ((column-count (length columns))
          (parts (make-vector column-count nil))
-         (cells (org-files-db--presentation-row-cells row)))
+         (cells (org-files-db--presentation-row-cells row))
+         (position 0)
+         face-ranges search-values)
     (dotimes (column-index column-count)
-      (aset parts column-index
-            (org-files-db--format-presentation-cell
-             (aref cells column-index)
-             (aref columns column-index)
-             (aref widths column-index))))
-    (mapconcat #'identity parts "  ")))
+      (let* ((cell (aref cells column-index))
+             (column (aref columns column-index))
+             (width (aref widths column-index))
+             (value (org-files-db--presentation-cell-display cell))
+             (value-width
+              (org-files-db--presentation-cell-display-width cell))
+             (text
+              (org-files-db--truncate-presentation-value
+               value value-width width column))
+             (text-width
+              (if (eq text value) value-width (string-width text)))
+             (padding-width (max 0 (- width text-width)))
+             (padding
+              (org-files-db--presentation-padding
+               padding-width padding-cache))
+             (part (if (zerop padding-width)
+                       text
+                     (concat text padding)))
+             (face (org-files-db--presentation-cell-face cell)))
+        (aset parts column-index part)
+        (when (and face (> (length text) 0))
+          (push (list position (+ position (length text)) face)
+                face-ranges))
+        (when (> value-width width)
+          (push value search-values))
+        (setq position
+              (+ position (length part)
+                 (if (< column-index (1- column-count)) 2 0)))))
+    (let ((display (mapconcat #'identity parts "  ")))
+      (dolist (range face-ranges)
+        (add-text-properties
+         (nth 0 range) (nth 1 range) (list 'face (nth 2 range)) display))
+      (cons
+       display
+       (when search-values
+         (concat "\u2063"
+                 (mapconcat #'identity (nreverse search-values) "\u2063")))))))
 
 (defconst org-files-db--candidate-identity-base #x1900
   "Number of Unicode private-use characters used for candidate identities.")
 
-(defun org-files-db--presentation-search-suffix (row widths)
-  "Return hidden untruncated search text for prepared ROW and WIDTHS."
-  (let ((cells (org-files-db--presentation-row-cells row))
-        values)
-    (dotimes (index (length cells))
-      (let ((cell (aref cells index)))
-        (when (> (org-files-db--presentation-cell-display-width cell)
-                 (aref widths index))
-          (push (org-files-db--presentation-cell-display cell) values))))
-    (when values
-      (propertize
-       (concat "\u2063" (mapconcat #'identity (nreverse values) "\u2063"))
-       'display ""
-       'invisible t))))
-
 (defun org-files-db--candidate-identity (index)
-  "Return a compact hidden identity suffix for zero-based INDEX."
+  "Return a compact identity suffix for zero-based INDEX."
   (let ((value (1+ index))
         characters)
     (while (> value 0)
       (push (+ #xe000 (% value org-files-db--candidate-identity-base))
             characters)
       (setq value (/ value org-files-db--candidate-identity-base)))
-    (propertize
-     (apply #'string #x2063 characters)
-     'display ""
-     'invisible t)))
+    (apply #'string #x2063 characters)))
 
 (defun org-files-db--presentation-format-candidates (rows columns widths)
   "Format ROWS once using COLUMNS and WIDTHS, and return a direct lookup."
   (let ((lookup (make-hash-table :test #'equal))
+        (padding-cache (make-hash-table :test #'eql))
         candidates)
     (dotimes (index (length rows))
       (let* ((row (aref rows index))
              (result (org-files-db--presentation-row-result row))
-             (display
-              (org-files-db--format-presentation-row row columns widths))
+             (row-source (org-files-db--presentation-row-row-source row))
+             (formatted
+              (org-files-db--format-presentation-row-data
+               row columns widths padding-cache))
+             (display (car formatted))
              (candidate
               (concat display
-                      (or (org-files-db--presentation-search-suffix row widths) "")
-                      (org-files-db--candidate-identity index))))
+                      (or (cdr formatted) "")
+                      (org-files-db--candidate-identity index)))
+             (properties
+              (list 'org-files-db-result result
+                    'org-files-db-visible-length (length display)
+                    'consult--candidate result
+                    'rear-nonsticky t)))
+        (when row-source
+          (setq properties
+                (append
+                 properties
+                 (list
+                  'org-files-db-presentation-row row
+                  'org-files-db-row-source row-source
+                  'org-files-db-row-value
+                  (org-files-db--presentation-row-row-value row)))))
         (add-text-properties
-         0 (length candidate)
-         (list 'org-files-db-result result
-               'org-files-db-visible-length (length display)
-               'org-files-db-presentation-row row
-               'org-files-db-row-source
-               (org-files-db--presentation-row-row-source row)
-               'org-files-db-row-value
-               (org-files-db--presentation-row-row-value row)
-               'consult--candidate result
-               'rear-nonsticky t)
+         0 (length display)
+         properties
+         candidate)
+        (add-text-properties
+         (length display) (length candidate)
+         '(display "" invisible t)
          candidate)
         (puthash candidate result lookup)
         (push candidate candidates)))
@@ -1867,41 +1986,77 @@ Return a result-like alist for the target."
   "Return elapsed seconds since floating-point time STARTED."
   (- (float-time) started))
 
-(defun org-files-db--prepare-presentation (results columns)
-  "Eagerly prepare RESULTS for completion using COLUMNS."
+(defvar org-files-db--presentation-allocation-metrics-function nil
+  "Optional function used to measure presentation allocation.
+The function is called without arguments to return a starting snapshot and
+with that snapshot after each measured phase to return its allocation data.")
+
+(defmacro org-files-db--measure-presentation-phase
+    (phase timing-variable metrics-variable &rest body)
+  "Measure PHASE while evaluating BODY.
+Set TIMING-VARIABLE and add details to METRICS-VARIABLE."
+  (declare (indent 3) (debug t))
+  `(let* ((started (float-time))
+          (gcs-before (if (boundp 'gcs-done) gcs-done 0))
+          (gc-time-before (if (boundp 'gc-elapsed) gc-elapsed 0.0))
+          (allocation-function
+           org-files-db--presentation-allocation-metrics-function)
+          (allocation-before
+           (and allocation-function (funcall allocation-function))))
+     (prog1 (progn ,@body)
+       (setq ,timing-variable (org-files-db--elapsed-seconds started))
+       (push
+        (list :phase ,phase
+              :elapsed ,timing-variable
+              :garbage-collections
+              (- (if (boundp 'gcs-done) gcs-done 0) gcs-before)
+              :garbage-collection-time
+              (- (if (boundp 'gc-elapsed) gc-elapsed 0.0) gc-time-before)
+              :allocation
+              (and allocation-before
+                   (funcall allocation-function allocation-before)))
+        ,metrics-variable))))
+
+(defun org-files-db--prepare-presentation-1 (results columns)
+  "Eagerly prepare RESULTS for completion using COLUMNS without GC policy."
   (let ((total-started (float-time))
         normalized-columns sources rows widths face-cache candidates lookup
         column-normalization source-construction row-construction
         value-extraction width-calculation face-preparation
-        candidate-formatting)
-    (let ((started (float-time)))
-      (setq normalized-columns (org-files-db--normalize-columns columns)
-            column-normalization (org-files-db--elapsed-seconds started)))
-    (let ((started (float-time)))
-      (setq sources (org-files-db--presentation-build-sources results)
-            source-construction (org-files-db--elapsed-seconds started)))
-    (let ((started (float-time)))
-      (setq rows (org-files-db--presentation-build-rows sources)
-            row-construction (org-files-db--elapsed-seconds started)))
-    (let ((started (float-time)))
+        candidate-formatting phase-metrics)
+    (setq normalized-columns
+          (org-files-db--measure-presentation-phase
+              :column-normalization column-normalization phase-metrics
+            (org-files-db--normalize-columns columns)))
+    (setq sources
+          (org-files-db--measure-presentation-phase
+              :presentation-source-construction
+              source-construction phase-metrics
+            (org-files-db--presentation-build-sources results)))
+    (setq rows
+          (org-files-db--measure-presentation-phase
+              :presentation-row-construction row-construction phase-metrics
+            (org-files-db--presentation-build-rows sources)))
+    (org-files-db--measure-presentation-phase
+        :result-value-extraction value-extraction phase-metrics
       (org-files-db--presentation-populate-cells rows normalized-columns)
-      (setq value-extraction (org-files-db--elapsed-seconds started)))
-    (let ((started (float-time)))
-      (setq widths
+      nil)
+    (setq widths
+          (org-files-db--measure-presentation-phase
+              :shared-width-calculation width-calculation phase-metrics
             (org-files-db--presentation-calculate-widths
-             rows normalized-columns)
-            width-calculation (org-files-db--elapsed-seconds started)))
-    (let ((started (float-time)))
-      (setq face-cache (org-files-db--presentation-prepare-faces rows)
-            face-preparation (org-files-db--elapsed-seconds started)))
-    (let ((started (float-time)))
+             rows normalized-columns)))
+    (setq face-cache
+          (org-files-db--measure-presentation-phase
+              :face-preparation face-preparation phase-metrics
+            (org-files-db--presentation-prepare-faces rows)))
+    (org-files-db--measure-presentation-phase
+        :candidate-formatting candidate-formatting phase-metrics
       (pcase-let ((`(,prepared-candidates . ,prepared-lookup)
                    (org-files-db--presentation-format-candidates
                     rows normalized-columns widths)))
         (setq candidates prepared-candidates
-              lookup prepared-lookup
-              candidate-formatting
-              (org-files-db--elapsed-seconds started))))
+              lookup prepared-lookup)))
     (when candidates
       (puthash candidates lookup org-files-db--candidate-lookups))
     (make-org-files-db--presentation
@@ -1912,6 +2067,7 @@ Return a result-like alist for the target."
      :face-cache face-cache
      :candidates candidates
      :lookup lookup
+     :phase-metrics (nreverse phase-metrics)
      :timings
      (list :column-normalization column-normalization
            :presentation-source-construction source-construction
@@ -1922,7 +2078,57 @@ Return a result-like alist for the target."
            :shared-width-calculation width-calculation
            :face-preparation face-preparation
            :candidate-formatting candidate-formatting
+           :boundary-garbage-collection 0.0
            :total (org-files-db--elapsed-seconds total-started)))))
+
+(defun org-files-db--prepare-presentation (results columns)
+  "Eagerly prepare RESULTS for completion using COLUMNS.
+Under a restrictive GC policy, large preparations receive bounded allocation
+headroom followed by one GC so completion does not inherit several pending
+collections from candidate construction."
+  (if (< (length results) org-files-db--large-presentation-row-count)
+      (org-files-db--prepare-presentation-1 results columns)
+    (let* ((bounded-gc-p
+            (and (< gc-cons-threshold
+                    org-files-db--large-presentation-gc-threshold)
+                 (< gc-cons-percentage 1.0)))
+           (started (float-time))
+           (gcs-before (if (boundp 'gcs-done) gcs-done 0))
+           (gc-time-before (if (boundp 'gc-elapsed) gc-elapsed 0.0))
+           (gc-cons-threshold
+            (if bounded-gc-p
+                org-files-db--large-presentation-gc-threshold
+              gc-cons-threshold))
+           (presentation
+            (org-files-db--prepare-presentation-1 results columns))
+           (boundary-started (float-time)))
+      (setf (org-files-db--presentation-sources presentation) nil
+            (org-files-db--presentation-rows presentation) nil
+            (org-files-db--presentation-face-cache presentation) nil)
+      (when bounded-gc-p
+        (garbage-collect))
+      (let* ((boundary-time
+              (org-files-db--elapsed-seconds boundary-started))
+             (boundary-gcs
+              (- (if (boundp 'gcs-done) gcs-done 0) gcs-before))
+             (boundary-gc-time
+              (- (if (boundp 'gc-elapsed) gc-elapsed 0.0) gc-time-before))
+             (timings
+              (org-files-db--presentation-timings presentation)))
+        (setf (org-files-db--presentation-timings presentation)
+              (plist-put
+               (plist-put timings :boundary-garbage-collection boundary-time)
+               :total (org-files-db--elapsed-seconds started)))
+        (setf (org-files-db--presentation-phase-metrics presentation)
+              (append
+               (org-files-db--presentation-phase-metrics presentation)
+               (list
+                (list :phase :boundary-garbage-collection
+                      :elapsed boundary-time
+                      :garbage-collections boundary-gcs
+                      :garbage-collection-time boundary-gc-time
+                      :allocation nil))))
+        presentation))))
 
 (defun org-files-db--column-widths (results columns)
   "Calculate shared widths for RESULTS and COLUMNS from cached cells."
@@ -2002,10 +2208,9 @@ Return a result-like alist for the target."
   "Read one result from RESULTS displayed with COLUMNS using PROMPT."
   (unless results
     (user-error "The query returned no results"))
-  (let* ((presentation
-          (org-files-db--prepare-presentation results columns))
-         (candidates
-          (org-files-db--presentation-candidates presentation))
+  (let* ((candidates
+          (org-files-db--presentation-candidates
+           (org-files-db--prepare-presentation results columns)))
          (selected
           (completing-read
            (or prompt "Result: ")
@@ -2033,70 +2238,6 @@ Return a result-like alist for the target."
   (let ((result (org-files-db--read-result results columns prompt)))
     (funcall (or action org-files-db-query-action) result)
     result))
-
-(defconst org-files-db--benchmark-phases
-  '(:column-normalization
-    :presentation-source-construction
-    :presentation-row-construction
-    :result-value-extraction
-    :sort-key-preparation
-    :sorting
-    :shared-width-calculation
-    :face-preparation
-    :candidate-formatting
-    :total)
-  "Presentation timing phases reported by benchmark helpers.")
-
-(defun org-files-db--benchmark-phase-summary (runs phase)
-  "Return timing statistics for PHASE across benchmark RUNS."
-  (let* ((values
-          (sort
-           (mapcar (lambda (run) (plist-get run phase)) runs)
-           #'<))
-         (count (length values))
-         (middle (/ count 2))
-         (median
-          (if (cl-oddp count)
-              (nth middle values)
-            (/ (+ (nth (1- middle) values)
-                  (nth middle values))
-               2.0))))
-    (list :minimum (car values)
-          :median median
-          :maximum (car (last values)))))
-
-(cl-defun org-files-db--benchmark-presentation
-    (results columns &key (iterations 5))
-  "Benchmark eager presentation of RESULTS with COLUMNS.
-Return minimum, median, and maximum timings across ITERATIONS without opening
-completion."
-  (unless (and (integerp iterations) (> iterations 0))
-    (user-error "Benchmark iterations must be a positive integer"))
-  (let ((gc-before (if (boundp 'gcs-done)
-                       (symbol-value 'gcs-done)
-                     0))
-        runs)
-    (dotimes (_ iterations)
-      (push
-       (org-files-db--presentation-timings
-        (org-files-db--prepare-presentation results columns))
-       runs))
-    (setq runs (nreverse runs))
-    (list :result-count (length results)
-          :column-count (length columns)
-          :iterations iterations
-          :garbage-collections
-          (- (if (boundp 'gcs-done)
-                 (symbol-value 'gcs-done)
-               0)
-             gc-before)
-          :phases
-          (mapcar
-           (lambda (phase)
-             (cons phase
-                   (org-files-db--benchmark-phase-summary runs phase)))
-           org-files-db--benchmark-phases)
-          :runs runs)))
 
 ;;;###autoload
 (cl-defun org-files-db-check-setup
