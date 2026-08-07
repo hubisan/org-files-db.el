@@ -143,6 +143,11 @@ do not pass the --config option unless a command-specific path is supplied."
 (defvar org-files-db-query-history nil
   "Minibuffer history for orgfdb query expressions.")
 
+(defvar org-files-db--source-mutated-hook nil
+  "Hook run after package-controlled Org source mutations.
+Each function receives the effective configuration file and a list of affected
+paths.  A nil configuration identifies an invocation without --config.")
+
 (defconst org-files-db--missing-key (make-symbol "org-files-db-missing-key")
   "Sentinel used to distinguish missing JSON object keys from nil values.")
 
@@ -283,8 +288,8 @@ supplied nil disables --config.  ORIGIN identifies validation errors."
       (kill-buffer buffer)))
   (process-put process 'org-files-db-buffers nil))
 
-(defun org-files-db--run-process (arguments)
-  "Run orgfdb synchronously with ARGUMENTS.
+(defun org-files-db--run-process (arguments &optional input)
+  "Run orgfdb synchronously with ARGUMENTS and optional standard INPUT.
 Return a plist containing :status, :stdout, and :stderr."
   (let* ((program (org-files-db--resolve-executable))
          (stdout (generate-new-buffer " *org-files-db-stdout*"))
@@ -302,6 +307,9 @@ Return a plist containing :status, :stdout, and :stderr."
                  :coding '(utf-8-unix . utf-8-unix)
                  :noquery t
                  :sentinel #'ignore))
+          (when input
+            (process-send-string process input)
+            (process-send-eof process))
           (while (process-live-p process)
             (accept-process-output process 0.05))
           (list :status (process-exit-status process)
@@ -331,9 +339,9 @@ Return a plist containing :status, :stdout, and :stderr."
               'org-files-db-cli-error)
             data)))
 
-(defun org-files-db--call-raw (arguments)
-  "Run orgfdb with ARGUMENTS and return stdout."
-  (pcase-let* ((result (org-files-db--run-process arguments))
+(defun org-files-db--call-raw (arguments &optional input)
+  "Run orgfdb with ARGUMENTS and optional standard INPUT, returning stdout."
+  (pcase-let* ((result (org-files-db--run-process arguments input))
                (status (plist-get result :status))
                (stdout (plist-get result :stdout))
                (stderr (plist-get result :stderr)))
@@ -360,10 +368,10 @@ ARRAY-TYPE defaults to `list'."
   (let ((parsed (org-files-db--parse-json-as text 'alist 'array)))
     (if (vectorp parsed) (append parsed nil) parsed)))
 
-(defun org-files-db--call (command arguments)
-  "Run orgfdb COMMAND with ARGUMENTS and parse its JSON output."
+(defun org-files-db--call (command arguments &optional input)
+  "Run orgfdb COMMAND with ARGUMENTS and optional INPUT, parsing JSON output."
   (org-files-db--parse-json
-   (org-files-db--call-raw (cons command arguments))))
+   (org-files-db--call-raw (cons command arguments) input)))
 
 (defun org-files-db--process-sentinel (process event)
   "Handle completion of asynchronous orgfdb PROCESS with EVENT."
@@ -516,6 +524,36 @@ INCLUDES lists additional result context requested from orgfdb."
      "query"
      (org-files-db--query-arguments
       query effective-config-file origin includes))))
+
+(cl-defun org-files-db--execute-query-restricted
+    (query files &optional (config-file nil config-file-supplied-p)
+           origin includes)
+  "Execute QUERY restricted to canonical owning FILES.
+CONFIG-FILE, ORIGIN, and INCLUDES have the same meaning as in
+`org-files-db--execute-query'.  FILES is encoded as one JSON array on standard
+input and does not alter the query expression."
+  (unless (and (listp files)
+               (seq-every-p
+                (lambda (file)
+                  (and (stringp file) (not (string-empty-p file))))
+                files))
+    (user-error "Restricted query files must be a list of non-empty strings"))
+  (let* ((effective-config-file
+          (org-files-db--resolve-config-file
+           config-file config-file-supplied-p origin))
+         (base
+          (org-files-db--query-arguments
+           query effective-config-file origin includes))
+         (query-text (car (last base)))
+         (arguments
+          (append (butlast base)
+                  '("--restrict-files-json" "-")
+                  (list query-text)))
+         (input
+          (concat
+           (json-serialize (vconcat (delete-dups (copy-sequence files))))
+           "\n")))
+    (org-files-db--call "query" arguments input)))
 
 (defun org-files-db--validate-search-scope (scope)
   "Return validated search SCOPE."
@@ -2332,20 +2370,26 @@ not force a full garbage collection on the interactive path."
           (and (< index (length lookup))
                (aref lookup index))))))
 
+(defun org-files-db--read-presentation (presentation &optional prompt)
+  "Read one result from prepared PRESENTATION using PROMPT."
+  (let ((candidates (org-files-db--presentation-candidates presentation)))
+    (unless candidates
+      (user-error "The query returned no results"))
+    (let ((selected
+           (completing-read
+            (or prompt "Result: ")
+            (org-files-db--completion-table candidates)
+            nil t)))
+      (or (org-files-db--candidate-result selected candidates)
+          (user-error "Selected result is no longer available")))))
+
 (defun org-files-db--read-result (results columns &optional prompt)
   "Read one result from RESULTS displayed with COLUMNS using PROMPT."
   (unless results
     (user-error "The query returned no results"))
-  (let* ((candidates
-          (org-files-db--presentation-candidates
-           (org-files-db--prepare-presentation results columns)))
-         (selected
-          (completing-read
-           (or prompt "Result: ")
-           (org-files-db--completion-table candidates)
-           nil t)))
-    (or (org-files-db--candidate-result selected candidates)
-        (user-error "Selected result is no longer available"))))
+  (org-files-db--read-presentation
+   (org-files-db--prepare-presentation results columns)
+   prompt))
 
 (defun org-files-db--default-columns (target results)
   "Return default columns for TARGET and RESULTS."
@@ -2361,11 +2405,79 @@ not force a full garbage collection on the interactive path."
        ('link org-files-db-link-columns)
        (_ org-files-db-heading-columns)))))
 
-(defun org-files-db--present-results (results columns action &optional prompt)
-  "Present RESULTS in COLUMNS, then apply ACTION using PROMPT."
-  (let ((result (org-files-db--read-result results columns prompt)))
+(defun org-files-db--query-target (query)
+  "Infer the orgfdb query target from QUERY."
+  (let* ((form (if (stringp query)
+                   (condition-case nil
+                       (let ((read-eval nil))
+                         (car (read-from-string query)))
+                     (error nil))
+                 query))
+         (head (car-safe form)))
+    (if (memq head '(headings links files)) head 'headings)))
+
+(defun org-files-db--fetch-query (query columns config-file &optional origin)
+  "Fetch QUERY using COLUMNS and effective CONFIG-FILE.
+Return a plist containing normalized :results, :columns, :target, and
+:includes.  ORIGIN identifies configuration and CLI errors."
+  (let* ((requested-columns columns)
+         (inferred-target (org-files-db--query-target query))
+         (initial-columns
+          (or requested-columns
+              (org-files-db--default-columns inferred-target nil)))
+         (normalized-columns
+          (org-files-db--normalize-columns initial-columns))
+         (includes (org-files-db--column-includes normalized-columns))
+         (response
+          (org-files-db--execute-query
+           query config-file (or origin "Query") includes))
+         (results
+          (org-files-db--results-with-config
+           (org-files-db--normalize-results response)
+           config-file))
+         (target (or (org-files-db--response-target response)
+                     inferred-target))
+         (final-columns
+          (if (or requested-columns (eq target inferred-target))
+              normalized-columns
+            (org-files-db--normalize-columns
+             (org-files-db--default-columns target results)))))
+    (list :results results
+          :columns final-columns
+          :target target
+          :includes includes)))
+
+(defun org-files-db--fetch-search
+    (expression columns scope config-file &optional origin)
+  "Fetch EXPRESSION using COLUMNS, SCOPE, and effective CONFIG-FILE.
+Return a plist containing normalized :results and :columns.  ORIGIN identifies
+configuration and CLI errors."
+  (let* ((response
+          (org-files-db--execute-search
+           expression scope config-file (or origin "Search")))
+         (results
+          (org-files-db--results-with-config
+           (org-files-db--normalize-results response)
+           config-file))
+         (normalized-columns
+          (org-files-db--normalize-columns
+           (or columns
+               (org-files-db--default-columns 'search results)))))
+    (list :results results
+          :columns normalized-columns
+          :scope scope)))
+
+(defun org-files-db--present-presentation (presentation action &optional prompt)
+  "Present prepared PRESENTATION, then apply ACTION using PROMPT."
+  (let ((result (org-files-db--read-presentation presentation prompt)))
     (funcall (or action org-files-db-query-action) result)
     result))
+
+(defun org-files-db--present-results (results columns action &optional prompt)
+  "Present RESULTS in COLUMNS, then apply ACTION using PROMPT."
+  (org-files-db--present-presentation
+   (org-files-db--prepare-presentation results columns)
+   action prompt))
 
 ;;;###autoload
 (cl-defun org-files-db-check-setup

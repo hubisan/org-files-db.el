@@ -1,0 +1,116 @@
+#+TITLE: Add generation-aware asynchronous pre-caching for predefined views
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-07 Fri 01:27]
+#+TASK_COMPLETED: [2026-08-07 Fri 02:47]
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Implement the active task ~Add generation-aware asynchronous pre-caching for predefined views~ in one pass and return only changed or new files as a ZIP archive.
+
+* Planning
+
+** Problem summary
+
+Large predefined views currently execute ~orgfdb~, parse JSON, prepare rows, calculate widths, and format completion candidates on every invocation. The Rust CLI now exposes authoritative database identity, generation, change-journal, and file-restricted query interfaces that can support a correct in-memory prepared-view cache.
+
+** Goals
+
+- Add opt-in ~:pre-cache t~ support for predefined query and search views.
+- Reuse prepared candidates only when ~database_id~ and ~generation~ still match.
+- Patch complete structural query views from authoritative affected-file sets.
+- Rebuild search and unsafe query views completely.
+- Build background replacements with ~async.el~ and publish them only after final state and token validation.
+- Add force-refresh, refresh, clear, limits, LRU eviction, idle prewarming, polling, optional file notification, failure recording, and package-mutation staleness.
+- Keep direct query and search calls fresh and uncached.
+
+** Non-goals
+
+- Persistent caches across Emacs restarts.
+- Direct SQLite access.
+- Rust schema changes.
+- Selective FTS ranking updates.
+- Stale-while-refresh display.
+- New row-expansion or sorting semantics that are not already implemented.
+
+** Architecture
+
+- Add ~org-files-db-cache.el~ for cache entries, state parsing, patching, worker lifecycle, timers, watchers, limits, and diagnostics.
+- Keep public view commands in ~org-files-db-views.el~ and delegate cache work to the cache module.
+- Refactor query and search orchestration into shared fetch helpers reusable by public commands and cache workers.
+- Extend the shared core process layer with optional stdin for restricted structural queries and add presentation-reading helpers.
+- Use an internal source-mutation hook in core so actions can mark relevant caches potentially stale without introducing module cycles.
+- Return plain serializable result data from async workers and reconstruct theme-sensitive presentation state in the main Emacs process.
+
+** Execution plan
+
+1. Extend core process and presentation APIs.
+2. Add shared query/search fetch helpers.
+3. Implement cache structures, state parsers, keys, freshness, synchronous publication, and warm reuse.
+4. Implement restricted-query patching and rebuild fallback.
+5. Implement async queue, refresh tokens, final generation checks, idle prewarming, polling, and optional file notifications.
+6. Add LRU limits, explicit cache commands, failures, and source-mutation staleness.
+7. Update actions, dependencies, package entry point, tests, README, changelog, benchmarks, and task status.
+8. Run all available static checks and package tests where the environment permits.
+
+** Risks & assumptions
+
+- The documented ~status~, ~changes~, and ~--restrict-files-json -~ contracts are treated as authoritative.
+- Optional database-path fields are accepted from status output; when absent, automatic refresh uses polling rather than guessing a SQLite path.
+- Current package versions do not yet implement configurable sorting or row expansion; cache keys include those view properties and patch safety rejects unsupported active forms.
+- Default structural query order is reconstructed by canonical owning path and source position during patch merge; uncertain or incomplete ownership falls back to a full rebuild.
+
+** Open questions
+
+None. Missing optional database-path output is handled through polling as allowed by the task.
+
+** Proposed checks
+
+- ~make ci~
+- Buttercup cache parser, freshness, patch, worker, limits, force-refresh, and compatibility tests.
+- Static namespace, dependency-cycle, parentheses, and archive-content checks if Emacs/Eask are unavailable.
+
+* Results
+
+** Approach
+
+- Added a dedicated in-memory cache module for predefined query and search views that opt in with ~:pre-cache t~.
+- Used ~orgfdb status~ database identity and committed generation as the authoritative freshness signal.
+- Added complete synchronous publication, warm prepared-candidate reuse, forced refresh, cache clearing, conservative limits, LRU eviction, idle prewarming, fallback polling, and optional debounced SQLite file notifications.
+- Added authoritative ~orgfdb changes~ handling and file-restricted structural query patches that remove all rows owned by upserted or deleted paths, rerun only upsert paths, merge independent logical rows, recalculate widths, and reformat the complete replacement before atomic publication.
+- Added one-at-a-time ~async.el~ workers for full rebuilds and restricted patches. Workers return serializable logical rows; the main process reapplies theme-sensitive faces and validates database identity, generation, cache key, view token, and refresh token immediately before publication.
+- Kept direct ~org-files-db-query~ and ~org-files-db-search~ calls fresh and uncached.
+- Added package-controlled source-mutation staleness notifications for identifier creation and file rename operations.
+
+** Changed files
+
+- Added ~lisp/org-files-db-cache.el~.
+- Updated the core process and presentation APIs, query and search fetch helpers, predefined view wrappers, action mutation notifications, package entry point, Eask dependencies, tests, benchmarks, README, changelog, and active task index.
+
+** Checks performed
+
+- Verified balanced Emacs Lisp delimiters and strings across all package, test, and benchmark files with a static scanner.
+- Verified the top-level module dependency graph is acyclic.
+- Verified changed Emacs Lisp files use the required complete GPL header and contain no SPDX shorthand.
+- Verified no direct SQLite access was introduced.
+- Verified no duplicate function definitions or unresolved project-owned call targets were introduced by static inspection.
+- Verified the complete diff with whitespace checks.
+- Verified the changed-file archive contents and byte identity after packaging.
+
+** Test results
+
+- Added deterministic Buttercup coverage for status and changes parsing, freshness, warm reuse, force refresh, restricted-query stdin, patching, rebuild fallback, database isolation, source mutation, limits, LRU, in-use replacement publication, async tokens, worker serialization, final generation checks, file notifications, polling, and one-worker concurrency.
+- Added cache benchmarks for cold preparation, warm lookup, warm completion filtering, logical worker preparation, worker-result serialization transfer, main-process publication, patching, complete rebuilding, and estimated retained memory.
+- ~make ci~ could not be executed in this environment because Emacs and Eask are unavailable.
+
+** Blockers
+
+- Runtime byte compilation, linting, Buttercup execution, and package checks require the user's local Emacs/Eask environment.
+
+** Follow-ups
+
+- Run ~make ci~ after copying the archive into the repository.
+- File notifications activate only when ~orgfdb status~ exposes a canonical absolute database path; polling remains the correct fallback otherwise.

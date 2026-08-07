@@ -76,7 +76,21 @@
         org-files-db-config-file nil
         org-files-db-views nil
         org-files-db-export-layout 'flat
-        org-files-db-export-linked-heading-style 'preserve))
+        org-files-db-export-linked-heading-style 'preserve
+        org-files-db-cache--queue nil
+        org-files-db-cache--current-worker nil
+        org-files-db-cache--current-job nil
+        org-files-db-cache--refresh-counter 0)
+  (dolist (table (list org-files-db-cache--entries
+                       org-files-db-cache--view-keys
+                       org-files-db-cache--index-states
+                       org-files-db-cache--skipped
+                       org-files-db-cache--failures
+                       org-files-db-cache--status-failures
+                       org-files-db-cache--refresh-tokens
+                       org-files-db-cache--watchers
+                       org-files-db-cache--debounce-timers))
+    (clrhash table)))
 
 (after-each
   (let ((root (and org-files-db-test--directory
@@ -105,6 +119,7 @@
     (expect (featurep 'org-files-db-search) :to-equal t)
     (expect (featurep 'org-files-db-export) :to-equal t)
     (expect (featurep 'org-files-db-actions) :to-equal t)
+    (expect (featurep 'org-files-db-cache) :to-equal t)
     (expect (featurep 'org-files-db-views) :to-equal t)
     (expect (featurep 'org-files-db-dblock) :to-equal t)))
 
@@ -130,7 +145,11 @@
   (it "uses the views module prefix for public view operations"
     (dolist (function '(org-files-db-views-get
                         org-files-db-views-query
-                        org-files-db-views-search))
+                        org-files-db-views-search
+                        org-files-db-views-refresh-cache
+                        org-files-db-views-refresh-all-caches
+                        org-files-db-views-clear-cache
+                        org-files-db-views-clear-all-caches))
       (expect (fboundp function) :to-equal t)))
 
   (it "does not retain obsolete pre-release public names"
@@ -177,6 +196,7 @@
   (it "uses the owning module prefix for specialized definitions"
     (dolist (entry
              '(("org-files-db-actions" "org-files-db-actions-")
+               ("org-files-db-cache" "org-files-db-cache-")
                ("org-files-db-views" "org-files-db-views-")
                ("org-files-db-query" "org-files-db-query--"
                 org-files-db-query)
@@ -1192,6 +1212,809 @@
               :to-equal t)
       (expect (plist-get (nthcdr 3 search-arguments) :config-file)
               :to-equal nil))))
+
+(describe "generation-aware predefined-view caching"
+  (before-each
+    (setq org-files-db-views
+          '(("cached"
+             :command query
+             :pre-cache t
+             :query (headings)
+             :columns ((title :width (max 40))))
+            ("cached-search"
+             :command search
+             :pre-cache t
+             :expression "sqlite"
+             :scope title
+             :columns ((title :width (max 40)))))))
+
+  (it "rejects invalid pre-cache values"
+    (setq org-files-db-views
+          '(("bad" :command query :pre-cache yes :query (headings))))
+    (expect (org-files-db-views--validate) :to-throw 'user-error))
+
+  (it "parses authoritative status output without hard-coding schema versions"
+    (expect
+     (org-files-db-cache--normalize-index-state
+      '((schema_version . 27)
+        (database_id . "db-one")
+        (generation . 42)
+        (last_changed_at . "2026-08-07T00:00:00Z")
+        (database_path . "/tmp/index.sqlite")))
+     :to-equal
+     '(:schema-version 27
+       :database-id "db-one"
+       :generation 42
+       :last-changed-at "2026-08-07T00:00:00Z"
+       :database-path "/tmp/index.sqlite")))
+
+  (it "rejects malformed status output"
+    (expect
+     (org-files-db-cache--normalize-index-state
+      '((schema_version . 12) (generation . 1)))
+     :to-throw 'org-files-db-error))
+
+  (it "rejects non-canonical database paths from status output"
+    (expect
+     (org-files-db-cache--normalize-index-state
+      '((schema_version . 12)
+        (database_id . "db-one")
+        (generation . 1)
+        (database_path . "relative.sqlite")))
+     :to-throw 'org-files-db-error))
+
+  (it "normalizes unchanged, patch, and rebuild changes"
+    (dolist (case '(("unchanged" . unchanged)
+                    ("patch" . patch)
+                    ("rebuild" . rebuild)))
+      (let ((changes
+             (org-files-db-cache--normalize-changes
+              `((schema_version . 12)
+                (database_id . "db-one")
+                (from_generation . 4)
+                (to_generation . 5)
+                (oldest_available_generation . 0)
+                (cache_action . ,(car case))
+                (complete . t)
+                (reason . nil)
+                (upsert_files . ["/tmp/a.org" "/tmp/a.org"])
+                (deleted_files . ["/tmp/old.org"]))
+              "db-one" 4)))
+        (expect (plist-get changes :cache-action) :to-equal (cdr case))
+        (expect (plist-get changes :upsert-files)
+                :to-equal '("/tmp/a.org"))
+        (expect (plist-get changes :deleted-files)
+                :to-equal '("/tmp/old.org")))))
+
+  (it "rejects unsupported cache actions and database mismatches"
+    (let ((response
+           '((schema_version . 12)
+             (database_id . "db-one")
+             (from_generation . 4)
+             (to_generation . 5)
+             (oldest_available_generation . 0)
+             (cache_action . "unknown")
+             (complete . t)
+             (reason . nil)
+             (upsert_files . [])
+             (deleted_files . []))))
+      (expect (org-files-db-cache--normalize-changes response "db-one" 4)
+              :to-throw 'org-files-db-error)
+      (let ((valid (copy-tree response)))
+        (setcdr (assq 'cache_action valid) "patch")
+        (expect (org-files-db-cache--normalize-changes valid "other" 4)
+                :to-throw 'org-files-db-error))))
+
+  (it "sends restricted structural query paths through JSON stdin"
+    (let (seen-command seen-arguments seen-input)
+      (cl-letf (((symbol-function 'org-files-db--call)
+                 (lambda (command arguments &optional input)
+                   (setq seen-command command
+                         seen-arguments arguments
+                         seen-input input)
+                   '((target . "headings") (results . [])))))
+        (org-files-db--execute-query-restricted
+         '(headings) '("/tmp/a.org" "/tmp/a.org" "/tmp/b with space.org")
+         nil "Test" '(path)))
+      (expect seen-command :to-equal "query")
+      (expect (not (null (member "--restrict-files-json" seen-arguments)))
+              :to-equal t)
+      (expect (not (null (member "-" seen-arguments))) :to-equal t)
+      (expect
+       (org-files-db--parse-json-as seen-input 'alist 'list)
+       :to-equal '("/tmp/a.org" "/tmp/b with space.org"))))
+
+  (it "uses a prepared cache for an unchanged database generation"
+    (let* ((view (org-files-db-views-get "cached"))
+           (state '(:schema-version 12 :database-id "db-one" :generation 7))
+           (result '((kind . "heading")
+                     (title . "Cached")
+                     (location . ((file_path . "/tmp/a.org")
+                                  (line . 1)
+                                  (byte_start . 0)))))
+           (fetches 0)
+           (presentations 0))
+      (cl-letf (((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config) state))
+                ((symbol-function 'org-files-db-cache--fetch-view)
+                 (lambda (_view _config)
+                   (setq fetches (1+ fetches))
+                   (list :results (list result)
+                         :columns (org-files-db--normalize-columns '((title))))))
+                ((symbol-function 'org-files-db--present-presentation)
+                 (lambda (&rest _)
+                   (setq presentations (1+ presentations))
+                   result)))
+        (org-files-db-cache-present-view view nil #'ignore "Result: ")
+        (org-files-db-cache-present-view view nil #'ignore "Result: "))
+      (expect fetches :to-equal 1)
+      (expect presentations :to-equal 2)
+      (expect (not (null (org-files-db-cache--entry-for-view "cached")))
+              :to-equal t)))
+
+  (it "force refresh bypasses an otherwise valid prepared entry"
+    (let* ((view (org-files-db-views-get "cached"))
+           (state '(:schema-version 12 :database-id "db-one" :generation 7))
+           (result '((kind . "heading")
+                     (title . "Cached")
+                     (location . ((file_path . "/tmp/a.org")
+                                  (line . 1)
+                                  (byte_start . 0)))))
+           (fetches 0))
+      (cl-letf (((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config) state))
+                ((symbol-function 'org-files-db-cache--fetch-view)
+                 (lambda (_view _config)
+                   (setq fetches (1+ fetches))
+                   (list :results (list result)
+                         :columns (org-files-db--normalize-columns '((title))))))
+                ((symbol-function 'org-files-db--present-presentation)
+                 (lambda (&rest _) result)))
+        (org-files-db-cache-present-view view nil #'ignore "Result: ")
+        (org-files-db-cache-present-view view nil #'ignore "Result: " t))
+      (expect fetches :to-equal 2)))
+
+  (it "delegates pre-cached query views to the cache layer"
+    (let (arguments)
+      (cl-letf (((symbol-function 'org-files-db-cache-present-view)
+                 (lambda (&rest args) (setq arguments args))))
+        (org-files-db-views-query "cached" :force-refresh t))
+      (expect (car arguments) :to-equal (org-files-db-views-get "cached"))
+      (expect (car (last arguments)) :to-equal t)))
+
+  (it "delegates pre-cached search views to the cache layer"
+    (let (arguments)
+      (cl-letf (((symbol-function 'org-files-db-cache-present-view)
+                 (lambda (&rest args) (setq arguments args))))
+        (org-files-db-views-search "cached-search"))
+      (expect (car arguments)
+              :to-equal (org-files-db-views-get "cached-search"))))
+
+  (it "classifies only complete owned structural query views as patch safe"
+    (let* ((view (org-files-db-views-get "cached"))
+           (results
+            '(((kind . "heading")
+               (title . "Owned")
+               (location . ((file_path . "/tmp/a.org"))))))
+           (columns (org-files-db--normalize-columns '((title))))
+           (entry
+            (make-org-files-db-cache--entry
+             :complete-p t
+             :results results
+             :columns columns
+             :presentation
+             (org-files-db-cache--prepare results columns))))
+      (expect (org-files-db-cache--patch-safe-p view entry) :to-equal t)
+      (setf (org-files-db-cache--entry-results entry)
+            '(((kind . "heading"))))
+      (expect (org-files-db-cache--patch-safe-p view entry) :to-equal nil)
+      (setf (org-files-db-cache--entry-results entry) results)
+      (setf (org-files-db--presentation-rows
+             (org-files-db-cache--entry-presentation entry))
+            nil)
+      (expect (org-files-db-cache--patch-safe-p view entry) :to-equal nil)
+      (setf (org-files-db-cache--entry-presentation entry)
+            (org-files-db-cache--prepare results columns))
+      (setcdr view (plist-put (cdr view) :limit 5))
+      (expect (org-files-db-cache--patch-safe-p view entry) :to-equal nil)))
+
+  (it "patches upsert and deleted owning files without retaining old rows"
+    (let* ((entry
+            (make-org-files-db-cache--entry
+             :results
+             '(((kind . "heading") (title . "A old")
+                (location . ((file_path . "/tmp/a.org") (line . 1))))
+               ((kind . "heading") (title . "B")
+                (location . ((file_path . "/tmp/b.org") (line . 1))))
+               ((kind . "heading") (title . "Deleted")
+                (location . ((file_path . "/tmp/old.org") (line . 1)))))))
+           (patched
+            (org-files-db-cache--apply-patch-results
+             entry '("/tmp/a.org") '("/tmp/old.org")
+             '(((kind . "heading") (title . "A new")
+                (location . ((file_path . "/tmp/a.org") (line . 2))))))))
+      (expect (mapcar #'org-files-db--result-title patched)
+              :to-equal '("A new" "B"))))
+
+  (it "keeps search views on complete rebuild refreshes"
+    (let* ((view (org-files-db-views-get "cached-search"))
+           (state '(:database-id "db-one" :generation 2))
+           refresh-type)
+      (cl-letf (((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config) state))
+                ((symbol-function 'org-files-db-cache--request-full-refresh)
+                 (lambda (&rest _)
+                   (setq refresh-type 'full))))
+        (org-files-db-cache--request-refresh view nil t))
+      (expect refresh-type :to-equal 'full)))
+
+  (it "invalidates only cache entries for the changed database"
+    (let ((left
+           (make-org-files-db-cache--entry
+            :config-file "/tmp/left.toml" :database-id "left"
+            :stale-p nil))
+          (right
+           (make-org-files-db-cache--entry
+            :config-file "/tmp/right.toml" :database-id "right"
+            :stale-p nil))
+          (org-files-db-views nil))
+      (puthash "left" left org-files-db-cache--entries)
+      (puthash "right" right org-files-db-cache--entries)
+      (org-files-db-cache--handle-state-change
+       "/tmp/left.toml"
+       '(:database-id "left" :generation 1)
+       '(:database-id "left" :generation 2))
+      (expect (org-files-db-cache--entry-stale-p left) :to-equal t)
+      (expect (org-files-db-cache--entry-stale-p right) :to-equal nil)))
+
+  (it "does not invalidate another configuration when one database is replaced"
+    (let ((replaced
+           (make-org-files-db-cache--entry
+            :config-file "/tmp/replaced.toml" :database-id "old-db"
+            :stale-p nil))
+          (unchanged
+           (make-org-files-db-cache--entry
+            :config-file "/tmp/unchanged.toml" :database-id "old-db"
+            :stale-p nil)))
+      (puthash "replaced" replaced org-files-db-cache--entries)
+      (puthash "unchanged" unchanged org-files-db-cache--entries)
+      (org-files-db-cache--handle-state-change
+       "/tmp/replaced.toml"
+       '(:database-id "old-db" :generation 9)
+       '(:database-id "new-db" :generation 0))
+      (expect (org-files-db-cache--entry-stale-p replaced) :to-equal t)
+      (expect (org-files-db-cache--entry-stale-p unchanged) :to-equal nil)))
+
+  (it "marks package-controlled source mutations stale until generation advances"
+    (let ((entry
+           (make-org-files-db-cache--entry
+            :config-file "/tmp/config.toml"
+            :stale-p nil
+            :source-dirty-p nil)))
+      (puthash "entry" entry org-files-db-cache--entries)
+      (org-files-db-cache--mark-source-mutated
+       "/tmp/config.toml" '("/tmp/a.org"))
+      (expect (org-files-db-cache--entry-stale-p entry) :to-equal t)
+      (expect (org-files-db-cache--entry-source-dirty-p entry) :to-equal t)))
+
+  (it "does not republish a source-dirty cache before generation advances"
+    (let* ((view (org-files-db-views-get "cached"))
+           (state '(:database-id "db-one" :generation 4))
+           (entry
+            (make-org-files-db-cache--entry
+             :view-name "cached"
+             :config-file nil
+             :database-id "db-one"
+             :generation 4
+             :stale-p t
+             :source-dirty-p t)))
+      (puthash "dirty" entry org-files-db-cache--entries)
+      (puthash "cached" "dirty" org-files-db-cache--view-keys)
+      (cl-letf (((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config) state)))
+        (expect (org-files-db-cache-refresh-view view nil nil)
+                :to-throw 'user-error))))
+
+  (it "treats no-config mutations as one independent configuration"
+    (let ((without-config
+           (make-org-files-db-cache--entry
+            :config-file nil :stale-p nil :source-dirty-p nil))
+          (configured
+           (make-org-files-db-cache--entry
+            :config-file "/tmp/config.toml"
+            :stale-p nil :source-dirty-p nil)))
+      (puthash "without" without-config org-files-db-cache--entries)
+      (puthash "configured" configured org-files-db-cache--entries)
+      (org-files-db-cache--mark-source-mutated nil '("/tmp/a.org"))
+      (expect (org-files-db-cache--entry-stale-p without-config) :to-equal t)
+      (expect (org-files-db-cache--entry-stale-p configured) :to-equal nil)))
+
+  (it "does not retain automatically oversized views"
+    (let* ((org-files-db-views-pre-cache-max-results 1)
+           (view (org-files-db-views-get "cached"))
+           (state '(:database-id "db-one" :generation 1))
+           (results
+            '(((kind . "heading") (title . "One"))
+              ((kind . "heading") (title . "Two"))))
+           (columns (org-files-db--normalize-columns '((title))))
+           (presentation (org-files-db-cache--prepare results columns)))
+      (expect
+       (org-files-db-cache--publish
+        view nil state results columns presentation 1)
+       :to-equal nil)
+      (expect (org-files-db-cache--entry-for-view "cached") :to-equal nil)))
+
+  (it "releases an obsolete entry when its replacement exceeds limits"
+    (let* ((org-files-db-views-pre-cache-max-results 1)
+           (view (org-files-db-views-get "cached"))
+           (old-state '(:database-id "db-one" :generation 1))
+           (new-state '(:database-id "db-one" :generation 2))
+           (old-result
+            '((kind . "heading") (title . "Old")
+              (location . ((file_path . "/tmp/old.org")))))
+           (new-results
+            '(((kind . "heading") (title . "One"))
+              ((kind . "heading") (title . "Two"))))
+           (columns (org-files-db--normalize-columns '((title))))
+           (old-presentation
+            (org-files-db-cache--prepare (list old-result) columns))
+           (old-entry
+            (org-files-db-cache--publish
+             view nil old-state (list old-result) columns old-presentation 1))
+           (old-key (org-files-db-cache--entry-key old-entry)))
+      (expect
+       (org-files-db-cache--publish
+        view nil new-state new-results columns
+        (org-files-db-cache--prepare new-results columns) 2)
+       :to-equal nil)
+      (expect (gethash old-key org-files-db-cache--entries) :to-equal nil)
+      (expect (org-files-db-cache--entry-for-view "cached") :to-equal nil)))
+
+  (it "evicts least-recently-used entries when the entry limit is exceeded"
+    (let ((org-files-db-views-pre-cache-max-entries 1)
+          (org-files-db-views-pre-cache-max-total-results 10))
+      (let ((old (make-org-files-db-cache--entry
+                  :key "old" :view-name "old" :last-used 1.0
+                  :result-count 1 :in-use-p nil))
+            (new (make-org-files-db-cache--entry
+                  :key "new" :view-name "new" :last-used 2.0
+                  :result-count 1 :in-use-p nil)))
+        (puthash "old" old org-files-db-cache--entries)
+        (puthash "new" new org-files-db-cache--entries)
+        (puthash "old" "old" org-files-db-cache--view-keys)
+        (puthash "new" "new" org-files-db-cache--view-keys)
+        (org-files-db-cache--enforce-limits)
+        (expect (gethash "old" org-files-db-cache--entries) :to-equal nil)
+        (expect (not (null (gethash "new" org-files-db-cache--entries)))
+                :to-equal t))))
+
+  (it "keeps a displayed entry alive while publishing its replacement"
+    (let* ((org-files-db-views-pre-cache-max-entries 1)
+           (org-files-db-views-pre-cache-max-total-results 10)
+           (view (org-files-db-views-get "cached"))
+           (old-state '(:database-id "db-one" :generation 1))
+           (new-state '(:database-id "db-one" :generation 2))
+           (result '((kind . "heading") (title . "One")
+                     (location . ((file_path . "/tmp/a.org")))))
+           (columns (org-files-db--normalize-columns '((title))))
+           (old-presentation (org-files-db-cache--prepare (list result) columns))
+           (old-key (org-files-db-cache--cache-key view nil old-state))
+           (old-entry
+            (make-org-files-db-cache--entry
+             :key old-key :view-name "cached" :view-token "old"
+             :config-file nil :database-id "db-one" :generation 1
+             :results (list result) :columns columns
+             :presentation old-presentation :result-count 1
+             :complete-p t :in-use-p t))
+           replacement)
+      (puthash old-key old-entry org-files-db-cache--entries)
+      (puthash "cached" old-key org-files-db-cache--view-keys)
+      (setq replacement
+            (org-files-db-cache--publish
+             view nil new-state (list result) columns
+             (org-files-db-cache--prepare (list result) columns) 2))
+      (expect (gethash old-key org-files-db-cache--entries)
+              :to-equal old-entry)
+      (expect (org-files-db-cache--entry-for-view "cached")
+              :to-equal replacement)
+      (cl-letf (((symbol-function 'org-files-db--present-presentation)
+                 (lambda (&rest _) result)))
+        (org-files-db-cache--present-entry old-entry #'ignore "Result: "))
+      (expect (gethash old-key org-files-db-cache--entries) :to-equal nil)))
+
+  (it "prevents obsolete worker tokens from publishing"
+    (let* ((view (org-files-db-views-get "cached"))
+           (state '(:database-id "db-one" :generation 3))
+           (job
+            (make-org-files-db-cache--job
+             :view-name "cached"
+             :view-token (org-files-db-cache--view-token view nil)
+             :cache-key (org-files-db-cache--cache-key view nil state)
+             :database-id "db-one"
+             :target-generation 3
+             :refresh-token 1)))
+      (puthash "cached" 2 org-files-db-cache--refresh-tokens)
+      (expect (org-files-db-cache--job-current-p job view state)
+              :to-equal nil)))
+
+  (it "clears entries and obsoletes matching refreshes"
+    (let ((entry
+           (make-org-files-db-cache--entry
+            :key "key" :view-name "cached" :result-count 1)))
+      (puthash "key" entry org-files-db-cache--entries)
+      (puthash "cached" "key" org-files-db-cache--view-keys)
+      (org-files-db-cache-clear-view "cached")
+      (expect (org-files-db-cache--entry-for-view "cached") :to-equal nil)))
+
+  (it "sends source mutation notifications after creating identifiers"
+    (let* ((file (org-files-db-test--write-file "id.org" "* Target\n"))
+           (result
+            (org-files-db-test--result "heading" "Target" file))
+           notified)
+      (let ((org-files-db--source-mutated-hook
+             (list (lambda (config paths)
+                     (setq notified (list config paths))))))
+        (org-files-db-actions--ensure-result-property result "ID"))
+      (expect (cadr notified) :to-equal (list file))))
+
+  (it "prepares serializable logical rows and reconstructs candidates"
+    (let* ((result
+            '((kind . "heading")
+              (title . "Überblick 東京")
+              (level . 2)
+              (location . ((file_path . "/tmp/a.org") (line . 1)))))
+           (data
+            (org-files-db-cache--prepare-logical-data
+             (list result) '((title :width (max 40)))))
+           (presentation
+            (org-files-db-cache--presentation-from-logical-data data))
+           (candidate
+            (car (org-files-db--presentation-candidates presentation))))
+      (expect (org-files-db-cache--plain-data-p data) :to-equal t)
+      (expect (vectorp (org-files-db--presentation-rows presentation))
+              :to-equal t)
+      (expect (get-text-property 0 'org-files-db-result candidate)
+              :to-equal result)
+      (expect (org-files-db-test--candidate-visible candidate)
+              :to-match "Überblick 東京")))
+
+  (it "patches retained logical rows without mutating the published entry"
+    (let* ((old-results
+            '(((kind . "heading") (title . "A old")
+               (location . ((file_path . "/tmp/a.org") (line . 1))))
+              ((kind . "heading") (title . "B")
+               (location . ((file_path . "/tmp/b.org") (line . 1))))))
+           (columns (org-files-db--normalize-columns '((title))))
+           (entry
+            (make-org-files-db-cache--entry
+             :results old-results
+             :columns columns
+             :complete-p t
+             :presentation
+             (org-files-db-cache--prepare old-results columns)))
+           (restricted-data
+            (org-files-db-cache--prepare-logical-data
+             '(((kind . "heading") (title . "A new")
+                (location . ((file_path . "/tmp/a.org") (line . 2)))))
+             columns))
+           (restricted-rows
+            (org-files-db-cache--rows-from-logical-data restricted-data))
+           (patched-rows
+            (org-files-db-cache--apply-patch-rows
+             entry '("/tmp/a.org") nil restricted-rows)))
+      (expect
+       (mapcar
+        (lambda (row)
+          (org-files-db--result-title
+           (org-files-db--presentation-row-result row)))
+        (append patched-rows nil))
+       :to-equal '("A new" "B"))
+      (expect (mapcar #'org-files-db--result-title
+                      (org-files-db-cache--entry-results entry))
+              :to-equal '("A old" "B"))
+      (expect
+       (length
+        (org-files-db--presentation-candidates
+         (org-files-db-cache--presentation-from-rows
+          patched-rows columns)))
+       :to-equal 2)))
+
+  (it "rejects mismatched or non-serializable worker results"
+    (let* ((job
+            (make-org-files-db-cache--job
+             :database-id "db-one"
+             :target-generation 3
+             :refresh-type 'full))
+           (logical
+            (org-files-db-cache--prepare-logical-data
+             '(((title . "One"))) '((title)))))
+      (expect
+       (org-files-db-cache--worker-result-valid-p
+        job (list :ok t :database-id "other" :target-generation 3
+                  :refresh-type 'full :logical-data logical))
+       :to-equal nil)
+      (setf (plist-get logical :rows) (current-buffer))
+      (expect
+       (org-files-db-cache--worker-result-valid-p
+        job (list :ok t :database-id "db-one" :target-generation 3
+                  :refresh-type 'full :logical-data logical))
+       :to-equal nil)))
+
+  (it "rechecks generation immediately before worker publication"
+    (let* ((view (org-files-db-views-get "cached"))
+           (target-state '(:database-id "db-one" :generation 2))
+           (new-state '(:database-id "db-one" :generation 3))
+           (job
+            (make-org-files-db-cache--job
+             :view-name "cached"
+             :view-token (org-files-db-cache--view-token view nil)
+             :cache-key
+             (org-files-db-cache--cache-key view nil target-state)
+             :config-file nil
+             :database-id "db-one"
+             :target-generation 2
+             :refresh-token 5))
+           requested-state
+           published)
+      (puthash "cached" 5 org-files-db-cache--refresh-tokens)
+      (cl-letf (((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config) new-state))
+                ((symbol-function 'org-files-db-cache--request-refresh)
+                 (lambda (_view _config _explicit &optional state)
+                   (setq requested-state state)))
+                ((symbol-function 'org-files-db-cache--publish)
+                 (lambda (&rest _)
+                   (setq published t))))
+        (org-files-db-cache--publish-worker-presentation
+         job view nil (org-files-db--normalize-columns '((title)))
+         (make-org-files-db--presentation)))
+      (expect published :to-equal nil)
+      (expect requested-state :to-equal new-state)))
+
+  (it "falls back to a full rebuild when a patch worker fails"
+    (let* ((view (org-files-db-views-get "cached"))
+           (state '(:database-id "db-one" :generation 2))
+           (job
+            (make-org-files-db-cache--job
+             :view-name "cached"
+             :view-token (org-files-db-cache--view-token view nil)
+             :cache-key (org-files-db-cache--cache-key view nil state)
+             :config-file nil
+             :database-id "db-one"
+             :source-generation 1
+             :target-generation 2
+             :refresh-type 'patch
+             :refresh-token 6))
+           fallback)
+      (puthash "cached" 6 org-files-db-cache--refresh-tokens)
+      (setq org-files-db-cache--current-job job
+            org-files-db-cache--current-worker 'worker)
+      (cl-letf (((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config) state))
+                ((symbol-function 'org-files-db-cache--request-full-refresh)
+                 (lambda (_view _config seen-state _explicit)
+                   (setq fallback seen-state)))
+                ((symbol-function 'org-files-db-cache--start-next-worker)
+                 #'ignore))
+        (org-files-db-cache--worker-finished
+         job '(:ok nil :error "restricted query failed")))
+      (expect fallback :to-equal state)))
+
+  (it "does not let an obsolete callback clear a newer worker"
+    (let* ((old-job (make-org-files-db-cache--job :view-name "old"))
+           (new-job (make-org-files-db-cache--job :view-name "new")))
+      (setq org-files-db-cache--current-job new-job
+            org-files-db-cache--current-worker 'new-worker)
+      (org-files-db-cache--worker-finished old-job nil)
+      (expect (eq org-files-db-cache--current-job new-job) :to-equal t)
+      (expect org-files-db-cache--current-worker :to-equal 'new-worker)))
+
+  (it "reuses a known status state when scheduling a refresh"
+    (let* ((view (org-files-db-views-get "cached"))
+           (state '(:database-id "db-one" :generation 4))
+           (status-reads 0)
+           requested)
+      (cl-letf (((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config)
+                   (setq status-reads (1+ status-reads))
+                   state))
+                ((symbol-function 'org-files-db-cache--request-full-refresh)
+                 (lambda (_view _config seen-state _explicit)
+                   (setq requested seen-state))))
+        (org-files-db-cache--request-refresh view nil nil state))
+      (expect status-reads :to-equal 0)
+      (expect requested :to-equal state)))
+
+  (it "explicit asynchronous refresh always requests a full replacement"
+    (let* ((view (org-files-db-views-get "cached"))
+           (state '(:database-id "db-one" :generation 4))
+           requested)
+      (cl-letf (((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config) state))
+                ((symbol-function 'org-files-db-cache--obsolete-view-refresh)
+                 #'ignore)
+                ((symbol-function 'org-files-db-cache--request-full-refresh)
+                 (lambda (_view _config seen-state explicit)
+                   (setq requested (list seen-state explicit))))
+                ((symbol-function 'message) #'ignore))
+        (org-files-db-cache-refresh-view view nil nil))
+      (expect requested :to-equal (list state t))))
+
+  (it "polling ensures missing pre-cache views at an unchanged generation"
+    (let ((state '(:database-id "db-one" :generation 4))
+          requested)
+      (puthash :no-config state org-files-db-cache--index-states)
+      (cl-letf (((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config) state))
+                ((symbol-function 'org-files-db-cache--request-refresh)
+                 (lambda (view _config _explicit &optional seen-state)
+                   (push (list (car view) seen-state) requested))))
+        (org-files-db-cache--check-config nil))
+      (setq requested (nreverse requested))
+      (expect (mapcar #'car requested)
+              :to-equal '("cached" "cached-search"))
+      (expect (cadr (car requested)) :to-equal state)))
+
+  (it "refreshes views sharing a database across configurations"
+    (let* ((config (org-files-db-test--write-file
+                    "shared.toml" "db_path='shared'\n"))
+           (state '(:database-id "db-one" :generation 5))
+           (other-view
+            `("shared-view"
+              :command query :pre-cache t :config-file ,config
+              :query (headings) :columns ((title))))
+           (entry
+            (make-org-files-db-cache--entry
+             :key "shared-key" :view-name "shared-view"
+             :config-file config :database-id "db-one" :generation 4))
+           requested)
+      (setq org-files-db-views (append org-files-db-views (list other-view)))
+      (puthash "shared-key" entry org-files-db-cache--entries)
+      (puthash "shared-view" "shared-key" org-files-db-cache--view-keys)
+      (cl-letf (((symbol-function 'org-files-db-cache--request-refresh)
+                 (lambda (view seen-config _explicit &optional seen-state)
+                   (push (list (car view) seen-config seen-state) requested))))
+        (org-files-db-cache--ensure-config-views nil state))
+      (let ((shared (assoc "shared-view" requested #'string=)))
+        (expect (not (null shared)) :to-equal t)
+        (expect (nth 1 shared) :to-equal config)
+        (expect (nth 2 shared) :to-equal state))))
+
+  (it "recognizes SQLite main, WAL, and SHM notifications"
+    (dolist (file '("index.sqlite" "index.sqlite-wal" "index.sqlite-shm"))
+      (expect
+       (org-files-db-cache--sqlite-event-p
+        (list nil 'changed file)
+        "/tmp/index.sqlite" "/tmp/")
+       :to-equal t))
+    (expect
+     (org-files-db-cache--sqlite-event-p
+      '(nil changed "other.sqlite") "/tmp/index.sqlite" "/tmp/")
+     :to-equal nil))
+
+  (it "debounces repeated SQLite wake-up events per configuration"
+    (let ((scheduled 0))
+      (cl-letf (((symbol-function 'timerp)
+                 (lambda (value) (eq value 'fake-timer)))
+                ((symbol-function 'run-at-time)
+                 (lambda (&rest _)
+                   (setq scheduled (1+ scheduled))
+                   'fake-timer)))
+        (org-files-db-cache--debounced-check "/tmp/config.toml")
+        (org-files-db-cache--debounced-check "/tmp/config.toml"))
+      (expect scheduled :to-equal 1)))
+
+  (it "prepares complete logical data inside the async worker"
+    (let* ((request
+            '(:view ("cached" :command query :query (headings)
+                              :columns ((title)))
+              :config-file nil
+              :database-id "db-one"
+              :source-generation 1
+              :target-generation 2
+              :cache-key "cache-key"
+              :view-token "view-token"
+              :refresh-token 9
+              :refresh-type full))
+           (result
+            '((kind . "heading") (title . "Worker")
+              (location . ((file_path . "/tmp/a.org") (line . 1)))))
+           response)
+      (cl-letf (((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config)
+                   '(:database-id "db-one" :generation 2)))
+                ((symbol-function 'org-files-db-cache--fetch-view)
+                 (lambda (_view _config)
+                   (list :results (list result)
+                         :columns
+                         (org-files-db--normalize-columns '((title)))))))
+        (setq response (org-files-db-cache--worker-run request)))
+      (expect (plist-get response :ok) :to-equal t)
+      (expect (plist-get response :source-generation) :to-equal 1)
+      (expect (plist-get response :cache-key) :to-equal "cache-key")
+      (expect (plist-get response :view-token) :to-equal "view-token")
+      (expect (plist-get response :refresh-token) :to-equal 9)
+      (expect (length (plist-get (plist-get response :logical-data) :rows))
+              :to-equal 1)
+      (expect (org-files-db-cache--plain-data-p response) :to-equal t)))
+
+  (it "does not publish a synchronous build when generation keeps changing"
+    (let* ((view (org-files-db-views-get "cached"))
+           (initial '(:database-id "db-one" :generation 1))
+           (states (list '(:database-id "db-one" :generation 2)
+                         '(:database-id "db-one" :generation 3)))
+           (fetches 0)
+           published
+           built)
+      (cl-letf (((symbol-function 'org-files-db-cache--fetch-view)
+                 (lambda (_view _config)
+                   (setq fetches (1+ fetches))
+                   (list :results '(((kind . "heading") (title . "Fresh")))
+                         :columns
+                         (org-files-db--normalize-columns '((title))))))
+                ((symbol-function 'org-files-db-cache--prepare)
+                 (lambda (&rest _)
+                   (make-org-files-db--presentation)))
+                ((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config) (pop states)))
+                ((symbol-function 'org-files-db-cache--publish)
+                 (lambda (&rest _)
+                   (setq published t))))
+        (setq built
+              (org-files-db-cache--build-sync view nil initial t)))
+      (expect fetches :to-equal 3)
+      (expect published :to-equal nil)
+      (expect (plist-get built :entry) :to-equal nil)
+      (expect (plist-get (plist-get built :state) :generation)
+              :to-equal 3)))
+
+  (it "preserves an equivalent worker token across duplicate wake-ups"
+    (let* ((existing
+            (make-org-files-db-cache--job
+             :view-name "cached"
+             :cache-key "key"
+             :target-generation 4
+             :refresh-type 'full
+             :refresh-token 7))
+           (duplicate
+            (make-org-files-db-cache--job
+             :view-name "cached"
+             :cache-key "key"
+             :target-generation 4
+             :refresh-type 'full
+             :refresh-token 8)))
+      (setq org-files-db-cache--current-job existing
+            org-files-db-cache--current-worker 'worker)
+      (puthash "cached" 7 org-files-db-cache--refresh-tokens)
+      (expect (eq (org-files-db-cache--enqueue-job duplicate) existing)
+              :to-equal t)
+      (expect (gethash "cached" org-files-db-cache--refresh-tokens)
+              :to-equal 7)
+      (expect org-files-db-cache--queue :to-equal nil)))
+
+  (it "rejects cyclic async worker data"
+    (let ((value (list 'cycle)))
+      (setcdr value value)
+      (expect (org-files-db-cache--plain-data-p value) :to-equal nil)))
+
+  (it "queues only one async worker at a time"
+    (let* ((view (org-files-db-views-get "cached"))
+           (state '(:database-id "db-one" :generation 1))
+           first-start)
+      (cl-letf (((symbol-function 'org-files-db-cache--async-start)
+                 (lambda (start _finish)
+                   (setq first-start start)
+                   'fake-process))
+                ((symbol-function 'org-files-db--resolve-executable)
+                 (lambda () "/tmp/orgfdb")))
+        (org-files-db-cache--request-full-refresh view nil state t)
+        (let ((second (copy-tree view)))
+          (setcar second "cached-two")
+          (setq org-files-db-views (append org-files-db-views (list second)))
+          (org-files-db-cache--request-full-refresh second nil state t)))
+      (expect (not (null first-start)) :to-equal t)
+      (expect (not (null org-files-db-cache--current-job)) :to-equal t)
+      (expect (length org-files-db-cache--queue) :to-equal 1))))
 
 (describe "Org rendering and Embark export"
   (it "renders flat results as linked headings"

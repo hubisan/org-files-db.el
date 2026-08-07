@@ -83,18 +83,14 @@ omitted, inherit `org-files-db-config-file'; an explicit nil disables
            (plist-get parsed :config-file)
            (plist-get parsed :config-file-supplied-p)
            "Search"))
-         (response (org-files-db--execute-search
-                    expression scope effective-config-file "Search"))
-         (results
-          (org-files-db--results-with-config
-           (org-files-db--normalize-results response)
-           effective-config-file))
-         (columns
-          (org-files-db--normalize-columns
-           (or columns
-               (org-files-db--default-columns 'search results)))))
+         (fetched
+          (org-files-db--fetch-search
+           expression columns scope effective-config-file "Search")))
     (org-files-db--present-results
-     results columns action "Search result: ")))
+     (plist-get fetched :results)
+     (plist-get fetched :columns)
+     action
+     "Search result: ")))
 
 (defun org-files-db-search--status-candidate (message)
   "Return a non-selectable live-search status candidate for MESSAGE."

@@ -27,18 +27,6 @@
 (require 'org-files-db-core)
 (require 'org-files-db-actions)
 
-(defvar read-eval)
-
-(defun org-files-db-query--target (query)
-  "Infer the orgfdb query target from QUERY."
-  (let* ((form (if (stringp query)
-                   (condition-case nil
-                       (let ((read-eval nil))
-                         (car (read-from-string query)))
-                     (error nil))
-                 query))
-         (head (car-safe form)))
-    (if (memq head '(headings links files)) head 'headings)))
 
 ;;;###autoload
 (cl-defun org-files-db-query
@@ -51,33 +39,17 @@ ACTION receives the selected result object.  When omitted, use
 `org-files-db-config-file'; an explicit nil disables --config for this call.
 Configured columns automatically request any required path or target context."
   (interactive (list (org-files-db--read-sexp "Query: ") nil nil))
-  (let* ((requested-columns columns)
-         (inferred-target (org-files-db-query--target query))
-         (initial-columns
-          (or requested-columns
-              (org-files-db--default-columns inferred-target nil)))
-         (normalized-columns
-          (org-files-db--normalize-columns initial-columns))
-         (includes (org-files-db--column-includes normalized-columns))
-         (effective-config-file
+  (let* ((effective-config-file
           (org-files-db--resolve-config-file
            config-file config-file-supplied-p "Query"))
-         (response (org-files-db--execute-query
-                    query effective-config-file "Query" includes))
-         (results
-          (org-files-db--results-with-config
-           (org-files-db--normalize-results response)
-           effective-config-file))
-         (target (or (org-files-db--response-target response)
-                     inferred-target))
-         (final-columns
-          (if (or requested-columns (eq target inferred-target))
-              normalized-columns
-            (org-files-db--normalize-columns
-             (org-files-db--default-columns target results)))))
+         (fetched
+          (org-files-db--fetch-query
+           query columns effective-config-file "Query")))
     (org-files-db--present-results
-     results final-columns action "Query result: ")))
-
+     (plist-get fetched :results)
+     (plist-get fetched :columns)
+     action
+     "Query result: ")))
 (provide 'org-files-db-query)
 
 ;;; org-files-db-query.el ends here

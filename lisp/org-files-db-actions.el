@@ -109,6 +109,13 @@ RESULT may be an original result object or a propertized completion candidate."
             counter (1+ counter)))
     candidate))
 
+(defun org-files-db-actions--notify-source-mutated (config-file paths)
+  "Notify cache observers that PATHS changed for CONFIG-FILE."
+  (run-hook-with-args
+   'org-files-db--source-mutated-hook
+   config-file
+   (delete-dups (delq nil (mapcar #'expand-file-name paths)))))
+
 (defun org-files-db-actions--ensure-result-property (result property)
   "Return RESULT's PROPERTY, creating and saving it when absent."
   (org-files-db-actions--at-result
@@ -127,7 +134,10 @@ RESULT may be an original result object or a propertized completion candidate."
                     custom-id))
                  (_ (user-error "Unsupported identifier property: %s"
                                 property))))
-         (save-buffer))
+         (save-buffer)
+         (org-files-db-actions--notify-source-mutated
+          (org-files-db--result-config-file result "Identifier action")
+          (list (org-files-db--result-file result))))
        value))))
 
 (defun org-files-db-actions--link-file-path (file origin-file)
@@ -472,6 +482,10 @@ When CONFIRM is non-nil, ask before modifying files.  CONFIG-FILE overrides
           (make-directory (file-name-directory new-path) t)
           (org-files-db-actions--apply-link-edits edits)
           (org-files-db-actions--rename-visited-file old-path new-path)
+          (org-files-db-actions--notify-source-mutated
+           effective-config-file
+           (append (list old-path new-path)
+                   (mapcar (lambda (edit) (plist-get edit :file)) edits)))
           (message "Renamed %s and updated %d link(s)"
                    old-path (length edits))
           new-path)

@@ -19,10 +19,12 @@
 
 ;;; Commentary:
 
-;; Named wrappers around the generic query and search entry points.
+;; Named wrappers around the generic query and search entry points, including
+;; optional generation-aware prepared completion caches.
 
 ;;; Code:
 
+(require 'org-files-db-cache)
 (require 'org-files-db-query)
 (require 'org-files-db-search)
 
@@ -30,7 +32,8 @@
   "Named predefined query and search views.
 Each entry has the form (NAME :command COMMAND ...), where COMMAND is
 `query' or `search'.  An optional :config-file overrides
-`org-files-db-config-file'; an explicit nil disables --config for that view."
+`org-files-db-config-file'; an explicit nil disables --config for that view.
+An optional :pre-cache t enables generation-aware prepared completion caching."
   :type '(repeat sexp)
   :group 'org-files-db)
 
@@ -49,6 +52,15 @@ Each entry has the form (NAME :command COMMAND ...), where COMMAND is
                   (org-files-db-views--validate-name view) command))
     command))
 
+(defun org-files-db-views--pre-cache-p (view)
+  "Return non-nil when VIEW enables prepared pre-caching."
+  (let* ((properties (cdr view))
+         (present-p (not (null (plist-member properties :pre-cache))))
+         (value (plist-get properties :pre-cache)))
+    (when (and present-p (not (memq value '(nil t))))
+      (user-error "View `%s' has invalid :pre-cache %S" (car view) value))
+    (eq value t)))
+
 (defun org-files-db-views--validate ()
   "Validate `org-files-db-views' and return it."
   (let ((seen (make-hash-table :test #'equal)))
@@ -59,7 +71,8 @@ Each entry has the form (NAME :command COMMAND ...), where COMMAND is
         (when (gethash name seen)
           (user-error "Duplicate org-files-db view name: %s" name))
         (puthash name t seen)
-        (org-files-db-views--command view)))
+        (org-files-db-views--command view)
+        (org-files-db-views--pre-cache-p view)))
     org-files-db-views))
 
 (defun org-files-db-views-get (name)
@@ -71,22 +84,38 @@ Each entry has the form (NAME :command COMMAND ...), where COMMAND is
       (copy-tree view)
     (user-error "Unknown org-files-db view: %s" name)))
 
-(defun org-files-db-views--names (command)
-  "Return configured view names for COMMAND."
+(defun org-files-db-views--names (command &optional pre-cache-only)
+  "Return configured view names for COMMAND.
+When PRE-CACHE-ONLY is non-nil, include only views with :pre-cache t."
   (org-files-db-views--validate)
   (mapcar #'car
           (seq-filter
-           (lambda (view) (eq (org-files-db-views--command view) command))
+           (lambda (view)
+             (and (eq (org-files-db-views--command view) command)
+                  (or (not pre-cache-only)
+                      (org-files-db-views--pre-cache-p view))))
            org-files-db-views)))
 
-(defun org-files-db-views--read-name (command)
-  "Read a configured view name for COMMAND."
-  (let ((names (org-files-db-views--names command)))
+(defun org-files-db-views--read-name (command &optional pre-cache-only)
+  "Read a configured view name for COMMAND.
+When PRE-CACHE-ONLY is non-nil, offer only views with :pre-cache t."
+  (let ((names (org-files-db-views--names command pre-cache-only)))
     (unless names
       (user-error "No org-files-db %s views are configured" command))
     (completing-read
      (format "%s view: " (capitalize (symbol-name command)))
      names nil t nil nil (car names))))
+
+(defun org-files-db-views--read-any-pre-cache-name ()
+  "Read the name of any predefined view enabling :pre-cache t."
+  (org-files-db-views--validate)
+  (let ((names
+         (mapcar #'car
+                 (seq-filter #'org-files-db-views--pre-cache-p
+                             org-files-db-views))))
+    (unless names
+      (user-error "No org-files-db views enable :pre-cache"))
+    (completing-read "Cached view: " names nil t nil nil (car names))))
 
 (defun org-files-db-views--action (view)
   "Return VIEW's optional action function."
@@ -103,11 +132,22 @@ Each entry has the form (NAME :command COMMAND ...), where COMMAND is
      (not (null (plist-member properties :config-file)))
      (format "View `%s'" (car view)))))
 
+(defun org-files-db-views--read-index-state (config-file)
+  "Return authoritative index state for effective CONFIG-FILE."
+  (org-files-db-cache--read-index-state config-file))
+
+(defun org-files-db-views--read-changes
+    (config-file cached-database-id cached-generation)
+  "Return CONFIG-FILE changes for CACHED-DATABASE-ID since CACHED-GENERATION."
+  (org-files-db-cache--read-changes
+   config-file cached-database-id cached-generation))
+
 ;;;###autoload
-(defun org-files-db-views-query (&optional name)
+(cl-defun org-files-db-views-query (&optional name &key force-refresh)
   "Execute predefined query view NAME.
-Interactively, offer only query views through standard completion."
-  (interactive)
+Interactively, offer only query views through standard completion.  A prefix
+argument or FORCE-REFRESH bypasses and replaces any prepared cache."
+  (interactive (list nil :force-refresh (not (null current-prefix-arg))))
   (let* ((name (or name (org-files-db-views--read-name 'query)))
          (view (org-files-db-views-get name)))
     (unless (eq (org-files-db-views--command view) 'query)
@@ -118,14 +158,18 @@ Interactively, offer only query views through standard completion."
           (config-file (org-files-db-views--config-file view)))
       (unless query
         (user-error "Query view `%s' has no :query" name))
-      (org-files-db-query
-       query columns action :config-file config-file))))
+      (if (org-files-db-views--pre-cache-p view)
+          (org-files-db-cache-present-view
+           view config-file action "Query result: " force-refresh)
+        (org-files-db-query
+         query columns action :config-file config-file)))))
 
 ;;;###autoload
-(defun org-files-db-views-search (&optional name)
+(cl-defun org-files-db-views-search (&optional name &key force-refresh)
   "Execute predefined search view NAME.
-Interactively, offer only search views through standard completion."
-  (interactive)
+Interactively, offer only search views through standard completion.  A prefix
+argument or FORCE-REFRESH bypasses and replaces any prepared cache."
+  (interactive (list nil :force-refresh (not (null current-prefix-arg))))
   (let* ((name (or name (org-files-db-views--read-name 'search)))
          (view (org-files-db-views-get name)))
     (unless (eq (org-files-db-views--command view) 'search)
@@ -138,10 +182,46 @@ Interactively, offer only search views through standard completion."
       (unless (and (stringp expression)
                    (not (string-empty-p expression)))
         (user-error "Search view `%s' has no valid :expression" name))
-      (org-files-db-search
-       expression columns action
-       :scope scope
-       :config-file config-file))))
+      (if (org-files-db-views--pre-cache-p view)
+          (org-files-db-cache-present-view
+           view config-file action "Search result: " force-refresh)
+        (org-files-db-search
+         expression columns action
+         :scope scope
+         :config-file config-file)))))
+
+;;;###autoload
+(defun org-files-db-views-refresh-cache (name &optional synchronous)
+  "Refresh prepared cache for predefined view NAME.
+By default, refresh asynchronously.  With a prefix argument or SYNCHRONOUS
+non-nil, perform a complete refresh immediately."
+  (interactive
+   (list (org-files-db-views--read-any-pre-cache-name)
+         (not (null current-prefix-arg))))
+  (let ((view (org-files-db-views-get name)))
+    (org-files-db-cache-refresh-view
+     view (org-files-db-views--config-file view) synchronous)))
+
+;;;###autoload
+(defun org-files-db-views-refresh-all-caches (&optional synchronous)
+  "Refresh all configured prepared view caches.
+By default, refresh asynchronously.  With a prefix argument or SYNCHRONOUS
+non-nil, perform complete refreshes immediately."
+  (interactive (list (not (null current-prefix-arg))))
+  (org-files-db-cache-refresh-all synchronous))
+
+;;;###autoload
+(defun org-files-db-views-clear-cache (name)
+  "Clear prepared cache and obsolete workers for predefined view NAME."
+  (interactive (list (org-files-db-views--read-any-pre-cache-name)))
+  (org-files-db-views-get name)
+  (org-files-db-cache-clear-view name))
+
+;;;###autoload
+(defun org-files-db-views-clear-all-caches ()
+  "Clear every prepared predefined-view cache and pending refresh."
+  (interactive)
+  (org-files-db-cache-clear-all))
 
 (provide 'org-files-db-views)
 

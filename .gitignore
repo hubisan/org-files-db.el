@@ -29,14 +29,23 @@ flycheck_*.el
 # Projectiles
 .projectile
 
+# Project update temp folder
+.project-update-tmp/
+
 # Package artifacts
 *.tar
 *.tar.gz
+*.zip
+
+# Build / Cache
+tmp/
+temp/
 
 # OS and editor metadata
 .DS_Store
 .idea/
 .vscode/
+*:Zone.Identifier
 
 # Project update temporary files
 .project-update-tmp/

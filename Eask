@@ -21,6 +21,7 @@
 (source "melpa")
 
 (depends-on "emacs" "29.4")
+(depends-on "async" "1.9.9")
 
 (development
  (depends-on "buttercup")

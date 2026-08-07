@@ -1235,10 +1235,12 @@ Per command geht, pro View noch prüfen.
 
 [[./archive/2026-08-06--improve-performance.org][Task details]]
 
-* TODO Add generation-aware asynchronous pre-caching for predefined views
+* REVIEW Add generation-aware asynchronous pre-caching for predefined views
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
+
+[[./2026-08-07--generation-aware-view-pre-cache.org][Task details]]
 
 Goal: Allow selected predefined views in the Emacs Lisp package to keep a prepared in-memory completion cache that is refreshed asynchronously with ~async.el~ whenever the committed ~orgfdb~ index state changes.
 

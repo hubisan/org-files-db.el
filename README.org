@@ -10,11 +10,12 @@ Emacs interface for [[https://github.com/hubisan/org-files-db][org-files-db]].  
 
 - Emacs 29.4 or newer
 - ~orgfdb~ installed or available through an explicit path
+- [[https://github.com/jwiegley/emacs-async][async.el]] for background predefined-view cache refreshes
 - [[https://github.com/minad/consult][Consult]] for live FTS5 search
 - [[https://github.com/oantolin/embark][Embark]] for exporting the currently filtered completion candidates
 - [[https://emacs-eask.github.io/][Eask]] for development
 
-Consult and Embark are optional at runtime.  Ordinary queries, one-shot search, views, actions, and dynamic blocks work without them.
+Consult and Embark are optional at runtime.  Ordinary queries, one-shot search, views, actions, and dynamic blocks work without them.  Pre-caching is disabled unless a predefined view opts in with ~:pre-cache t~.
 
 * Configuration
 
@@ -114,6 +115,8 @@ emacs -Q -L lisp -l benchmarks/org-files-db-benchmark.el \
 
 Run ~M-x org-files-db-benchmark-query~ to separate real CLI execution, JSON parsing, result normalization, presentation, and total time for the current database.  Run ~M-x org-files-db-benchmark-compare-frontends~ interactively to compare initialization of standard completion and Consult using the same already prepared candidates.  Consult remains optional and normal query completion does not depend on it.
 
+Run ~M-x org-files-db-benchmark-view-cache~ to compare synthetic cold preparation, warm cache lookup, a small affected-file patch, and a complete rebuild.
+
 * Search
 
 Perform one FTS5 search:
@@ -168,6 +171,57 @@ The former leading positional search scope remains accepted for compatibility, i
 Use ~M-x org-files-db-views-query~ or ~M-x org-files-db-views-search~.  From Lisp, pass the view name directly.
 
 A view without ~:config-file~ inherits ~org-files-db-config-file~.  A path selects that configuration for the delegated query or search, while an explicit ~nil~ disables ~--config~ for the view.
+
+** Generation-aware pre-caching
+
+Pre-caching is an advanced opt-in feature for predefined views.  Add ~:pre-cache t~ to keep one complete prepared completion cache in memory:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("all-headings"
+         :command query
+         :pre-cache t
+         :query (headings)
+         :columns
+         ((todo-keyword :width (max 10))
+          (title :width (max 70))
+          (file-name :width (max 30))))
+        ("project-search"
+         :command search
+         :pre-cache t
+         :expression "org-files-db"
+         :scope title
+         :columns
+         ((title :width (max 70))
+          (file-name :width (max 30))))))
+#+end_src
+
+The cache uses the stable ~database_id~ and committed ~generation~ reported by ~orgfdb status~.  A warm view with the same database identity and generation skips query or search execution, JSON parsing, row preparation, width calculation, and candidate formatting.  Direct calls to ~org-files-db-query~ and ~org-files-db-search~ remain uncached.
+
+When the generation changes, ~orgfdb changes~ determines the refresh action.  Complete structural query views without limits, offsets, row expansion, or custom sorting can rerun only the authoritative ~upsert_files~ through ~--restrict-files-json -~ and remove rows owned by deleted files.  Search views and query views whose complete result semantics cannot be patched are rebuilt completely.  A patch remains one complete view cache; it is not an independent cache per file.
+
+Cache replacements use ~async.el~.  The worker executes ~orgfdb~, parses its response, and prepares serializable logical rows and display widths.  The main Emacs process applies theme-sensitive faces and final candidate strings before publication.  Publication occurs only after the database identity, target generation, cache key, view-definition token, and refresh token are checked again, so an obsolete worker cannot overwrite a newer entry.  SQLite file notifications are used only as wake-up signals when the canonical database path is available.  Otherwise an idle polling check reads authoritative status.  Source changes become visible only after the Rust watcher commits a new generation.
+
+A missing or stale cache never produces an empty or knowingly stale completion.  Opening the view falls back to the normal complete synchronous path.  Use a prefix argument with ~org-files-db-views-query~ or ~org-files-db-views-search~ to force a complete fresh synchronous view and replace its cache.
+
+Cache management commands are:
+
+- ~org-files-db-views-refresh-cache~
+- ~org-files-db-views-refresh-all-caches~
+- ~org-files-db-views-clear-cache~
+- ~org-files-db-views-clear-all-caches~
+
+Refresh commands use ~async.el~ by default; a prefix argument requests a complete synchronous refresh.  Clearing a cache does not modify the Rust database or the view definition.
+
+Prepared views retain original result objects and completion metadata, so actions, duplicate candidates, configured order, and Embark export behave like a fresh view.  Large caches consume memory.  Conservative limits are controlled by:
+
+#+begin_src emacs-lisp
+org-files-db-views-pre-cache-max-entries
+org-files-db-views-pre-cache-max-results
+org-files-db-views-pre-cache-max-total-results
+#+end_src
+
+An oversized view remains usable synchronously but is not retained automatically for the same definition and generation.  Cache entries are evicted in least-recently-used order.  Caches are in-memory only and are rebuilt after Emacs restarts.
 
 * Embark export
 
@@ -242,6 +296,8 @@ org-files-db-search            central search operation
 org-files-db-search-live       live search operation
 org-files-db-actions-*         public result action
 org-files-db-actions--*        private action helper
+org-files-db-cache-*           cache module operation
+org-files-db-cache--*          private cache helper
 org-files-db-views-*           public view operation
 org-files-db-views--*          private view helper
 org-files-db-dblock-*          public dynamic-block insertion command
@@ -266,6 +322,7 @@ lisp/org-files-db-query.el    Query command
 lisp/org-files-db-search.el   One-shot and live FTS5 search
 lisp/org-files-db-export.el   Org rendering and Embark exporter
 lisp/org-files-db-actions.el  Link, follow, rename, and backlink actions
+lisp/org-files-db-cache.el    Generation-aware prepared predefined-view caches
 lisp/org-files-db-views.el    Named query and search views
 lisp/org-files-db-dblock.el   Org dynamic blocks
 tests/                        Buttercup tests
