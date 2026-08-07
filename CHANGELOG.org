@@ -6,11 +6,12 @@
   - Views opt in with ~:pre-cache t~, while the global ~org-files-db-cache-mode~ controls whether caching is active; enabling the mode immediately queues all opted-in views so they can be warm before first use.
   - Patch-safe structural query views use ~orgfdb changes~ and file-restricted reruns for exact upsert paths; search and unsafe query views rebuild completely.
   - Cache workers use ~async.el~ to merge patches, prepare complete logical rows and widths, and format candidate strings; the main process only reapplies theme-sensitive faces and process-local metadata before generation-safe publication.
+  - Large patch inputs and complete worker results use short-lived job-owned transport files instead of async.el's serialized process pipe; the callback receives only a bounded metadata and timing envelope.
   - Cache workers disable async.el password-prompt detection because they are strictly local; large serialized cache payloads can otherwise be mistaken for TRAMP password prompts and open recursive minibuffers.
-  - Opening a stale view waits for its active asynchronous replacement instead of cancelling it and duplicating the refresh synchronously; generation changes during the wait continue through the next worker.
+  - Opening a stale view waits for its active asynchronous replacement while servicing process callbacks and timers instead of cancelling it and duplicating the refresh synchronously; generation changes during the wait continue through the next worker, and worker death or watchdog expiry has a bounded synchronous fallback.
   - Added synchronous force refresh, explicit refresh and clear commands, primary SQLite file notifications when the canonical database path is available, optional periodic fallback polling for unwatched databases, failure backoff, LRU eviction, and conservative result limits.
   - Package-controlled identifier and rename mutations mark related entries potentially stale until the Rust watcher commits a new generation; while the committed generation is unchanged, the matching prepared cache remains usable instead of triggering a redundant synchronous query.
-  - Added cache lifecycle, parsing, patching, limit, mutation, and worker tests plus cold, warm, patch, and rebuild benchmark coverage.
+  - Added quiet opt-in lifecycle and timing diagnostics, cache lifecycle, parsing, patching, limit, mutation, transport, callback-progress, and worker-death tests plus cold, warm, transfer, publication, patch, and rebuild benchmark coverage.
 - =CHANGED= Optimized eager presentation for large synchronous query and search result sets.
   - Column definitions, result values, display cells, widths, faces, and candidates are now prepared once per invocation and reused throughout completion.
   - Fixed widths avoid width scans, capped widths stop scanning after reaching their limit, and face attributes are cached per presentation.

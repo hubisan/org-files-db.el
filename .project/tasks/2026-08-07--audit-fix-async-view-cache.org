@@ -1,0 +1,109 @@
+#+TITLE: Audit and fix the generation-aware async predefined-view cache
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-07 Fri 14:44]
+#+TASK_COMPLETED: [2026-08-07 Fri 15:06]
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Audit and fix the current generation-aware asynchronous predefined-view cache, then implement the approved plan. Preserve the complete requirements recorded under the linked active task in ~todo.org~.
+
+* Planning
+
+** Problem summary
+
+Large worker requests and results cross async.el as serialized Lisp, making transfer much slower than the cache build. An unsuccessful async child can bypass the finish callback, leaving the interactive waiter blocked until its 60-second timeout. Generation refresh, watch lifecycle, patch safety, and bounded fallback require end-to-end regression coverage.
+
+** Goals
+
+- Move large worker input and output through short-lived job-owned IPC files while keeping the async return envelope small.
+- Guarantee cleanup and queue progress for success, rejection, cancellation, child death, and timeout.
+- Keep warm lookup presentation-free and patch/search behavior generation-correct.
+- Add quiet-by-default diagnostics and measurable worker/publication phases.
+- Verify real file notification and interactive lifecycle behavior.
+
+** Non-goals
+
+- Persistent caches, Lisp threads, direct SQLite access, or TOML parsing.
+- Caching direct ~org-files-db-query~ or ~org-files-db-search~ calls.
+- Changes to Rust indexing behavior or dependencies.
+
+** Architecture
+
+- Keep lifecycle, queueing, transport, validation, waiting, watches, and diagnostics in ~org-files-db-cache.el~.
+- Give each running job private request/result artifact paths. Patch base results use the request artifact; the child writes the complete replacement to the result artifact and returns only a bounded control envelope.
+- Wrap async.el's sentinel and add a watchdog so every terminal state clears the active job and advances the queue.
+- Validate generation, database ID, cache key, view token, refresh token, artifact metadata, and final status before atomic publication.
+
+** Execution plan
+
+1. Add diagnostics, timing state, IPC helpers, and job cleanup.
+2. Refactor worker launch/result handling and terminal-process failure handling.
+3. Make waiting callback-safe, generation-following, and bounded.
+4. Exercise watch, poll, patch, search, source-dirty, and mode lifecycle paths.
+5. Add worker transport and failure regressions plus benchmarks and documentation.
+6. Run real-cache checks and ~make ci~.
+
+** Risks & assumptions
+
+- ~orgfdb status~ now returns a canonical absolute ~database_path~.
+- IPC artifacts are transport-only and are removed on every handled lifecycle path.
+- Original results and complete searchable candidate data remain available for actions and completion.
+- A synchronous fresh query remains the final correctness fallback.
+
+** Open questions
+
+None.
+
+** Proposed checks
+
+- ~make ci~
+- Real 9,903-row pre-cache timing and warm lookup.
+- Real status-derived file-notify installation and mode cleanup.
+
+* Results
+
+** Approach
+
+- Traced enable, initial build, warm use, stale wait, notification, patch, callback, and follow-up-generation paths against the current code and async.el implementation.
+- Reproduced the real 9,903-row cache.  The old worker did useful background preparation in about 2.65 seconds, but returning about 22 MB through async.el made publication take about 21.6 seconds.  A non-zero child exit skipped async.el's finish callback and left the active job installed until the 60-second interactive timeout.
+- Moved large patch inputs and complete replacement payloads to short-lived job-owned files.  async.el now returns a small readable metadata/timing envelope.  The parent rejects obsolete metadata before reading the artifact, reconstructs process-local presentation state once, rechecks authoritative status, and publishes atomically.
+- Wrapped the async sentinel and added a watchdog so child death, callback failure, timeout, rejection, cancellation, and mode shutdown all clear job state, remove artifacts, and advance the single-worker queue.
+- Kept interactive waits bounded while servicing all processes and timers with ~accept-process-output~ on nil.  This lets callbacks, file notifications, watchdogs, and newer-generation jobs progress.
+- Added quiet opt-in diagnostics for mode, status, watch, queue, worker, rejection, publication, warm lookup, and phase timings.
+
+** Changed files
+
+- ~lisp/org-files-db-cache.el~: worker transport, sentinel/watchdog, bounded waiting, diagnostics, validation, atomic publication, and lifecycle cleanup.
+- ~tests/org-files-db-test.el~: cache opt-in, warm-path, callback progress, worker death, generation supersession, transport, patch input, watch/timer, and shutdown regressions.
+- ~benchmarks/org-files-db-benchmark.el~: file-backed worker-transfer benchmark.
+- ~README.org~ and ~CHANGELOG.org~: final cache lifecycle, transport, debugging, and benchmark behavior.
+- ~.project/tasks/todo.org~ and this task file: project workflow state and implementation record.
+
+** Checks performed
+
+- ~make compile~
+- ~make lint~
+- ~make ci~
+- Real ~orgfdb status~ and 9,903-row query using ~/home/hubisan/memento/orgfdb-config.toml~.
+- Real mode enable/prewarm/warm lookup/disable lifecycle with diagnostics enabled and polling disabled.
+
+** Test results
+
+- ~make ci~ passed: compilation, package-lint, checkdoc, indent-lint, relint, and 177 Buttercup specs with 0 failures.
+- Real uncached query, parse, and presentation: 1.317 seconds.
+- Real asynchronous prewarm: 4.824 seconds total; worker 2.623 seconds, artifact write 0.992 seconds, artifact read 0.745 seconds, reconstruction 0.997 seconds.  The replacement artifact was 22,029,195 bytes.
+- Real warm lookup: 0.006887 seconds for 9,903 candidates, with query and presentation-building functions guarded to fail if called.
+- Real status-derived file notification watch count: one while enabled; polling timer: nil; failures: zero.
+- Disable verification: zero watches, no poll timer, zero entries, no active job, and an empty queue.
+
+** Blockers
+
+None.
+
+** Follow-ups
+
+- Optional manual generation-change verification: enable ~org-files-db-cache-debug~, let the Rust watcher commit a source change, and confirm the notification/status/patch-or-full/publication sequence in ~*Messages*~.

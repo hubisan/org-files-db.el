@@ -763,10 +763,25 @@ uses deterministic synthetic results and does not execute orgfdb."
            iterations))
          (full-logical
           (org-files-db-cache--prepare-logical-data results normalized))
+         (worker-payload
+          (list :ok t
+                :database-id "benchmark"
+                :source-generation 0
+                :target-generation 1
+                :cache-key "benchmark-key"
+                :view-token "benchmark-view"
+                :refresh-token 1
+                :refresh-type 'full
+                :logical-data full-logical))
          (worker-transfer
           (org-files-db-benchmark--time-call
            (lambda ()
-             (car (read-from-string (prin1-to-string full-logical))))
+             (let ((file (make-temp-file "org-files-db-benchmark-cache-")))
+               (unwind-protect
+                   (progn
+                     (org-files-db-cache--write-data-file file worker-payload)
+                     (org-files-db-cache--read-data-file file))
+                 (org-files-db-cache--delete-transport-file file))))
            iterations))
          (logical
           (org-files-db-cache--prepare-logical-data replacement normalized))

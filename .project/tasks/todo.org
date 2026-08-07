@@ -2513,9 +2513,510 @@ This task does not implement:
 - Tests cover unchanged, patch, rebuild, database replacement, async publication, restricted queries, file notifications, limits, force refresh, and stale-worker rejection.
 - Benchmarks document cold, warm, patched, and fully rebuilt behaviour for representative result sizes.
   
-* TODO Truncate > nur optisch
-Truncate soll nur optisch sein, 
+* REVIEW Audit and fix the generation-aware async predefined-view cache in this Emacs Lisp repository.
 
+[[./2026-08-07--audit-fix-async-view-cache.org][Task details]]
+
+Audit and fix the generation-aware async predefined-view cache in this Emacs Lisp repository.
+
+Work from the CURRENT repository state only. Do not assume previous implementations or comments are correct.
+
+Current symptom
+===============
+
+The cache mechanism is currently unusable.
+
+A predefined cached view such as:
+
+    (setq org-files-db-views
+          '(("all-headings"
+             :command query
+             :pre-cache t
+             :query (headings)
+             :columns
+             ((todo-keyword :width (max 10))
+              (title :width (max 70))
+              (outline-path)
+              (file-name :width (max 30))))))
+
+    (org-files-db-cache-mode 1)
+
+should be prepared asynchronously.
+
+However, after enabling the cache mode, calling:
+
+    (org-files-db-views-query "all-headings")
+
+can block for an extremely long time. In one manual test it was aborted after about one minute.
+
+Previously there were also these symptoms:
+
+- after a database generation change, opening the view behaved nearly like a completely uncached query;
+- async workers generated large serialized return values;
+- async.el once created an endless sequence of *Minibuf-N* buffers;
+- this was mitigated by running async-start with `async-prompt-for-password` nil;
+- the implementation has gone through several revisions, so do not trust that the current architecture actually satisfies its intended design.
+
+Goal
+====
+
+Determine why the cache does not reliably become warm/current in the background, why opening a cached view can block for so long, and fix the architecture rather than merely hiding the symptom.
+
+Expected user-visible behaviour
+===============================
+
+The cache is controlled by a global minor mode:
+
+    org-files-db-cache-mode
+
+`:pre-cache t` only marks views eligible for caching.
+
+When the mode is disabled:
+
+- predefined views behave normally and uncached;
+- no background cache workers;
+- no file notification watches;
+- no cache polling.
+
+When the mode is enabled:
+
+1. Resolve every predefined view with `:pre-cache t`.
+2. Read authoritative Rust index state with `orgfdb status`.
+3. Install file notification watches where possible.
+4. Immediately enqueue all eligible views for initial asynchronous caching.
+5. Only one expensive cache worker should run at a time.
+6. The first interactive use should already be instant if pre-caching finished.
+
+Normal warm lookup
+==================
+
+If cached database_id and generation equal current database_id and generation:
+
+    org-files-db-views-query "all-headings"
+
+must immediately open the already prepared completion candidates.
+
+It must NOT:
+
+- run orgfdb query/search;
+- parse JSON;
+- expand rows;
+- sort rows;
+- calculate widths;
+- format candidates;
+- start another worker.
+
+Generation change
+=================
+
+Preferred flow:
+
+    Generation 42 cache is current
+        ->
+    SQLite/WAL/SHM changes
+        ->
+    file-notify wakeup
+        ->
+    short debounce
+        ->
+    orgfdb status
+        ->
+    generation 43 detected
+        ->
+    asynchronous refresh starts
+        ->
+    worker:
+        changes
+        restricted query for upsert files, when patch-safe
+        remove changed/deleted old rows
+        merge
+        deterministic sort
+        calculate widths
+        format candidates
+        build complete replacement cache payload
+        ->
+    main Emacs:
+        verify database_id/generation/cache key/view token/refresh token
+        atomically publish cache generation 43
+
+Opening while refresh is running
+================================
+
+If cache generation 42 is stale and an async worker for generation 43 is already running:
+
+    org-files-db-views-query "all-headings")
+
+must NOT:
+
+- cancel that worker;
+- start a duplicate synchronous query;
+- rebuild the cache itself.
+
+Instead it may wait for the already-running refresh.
+
+While waiting, Emacs MUST continue servicing process output/timers so the async callback can actually execute.
+
+If generation advances again to 44 while generation 43 is being built:
+
+- generation 43 must not be published as current;
+- enqueue/follow the refresh to generation 44;
+- an interactive caller waiting for freshness should eventually continue with generation 44.
+
+Do not create a busy loop and do not wait forever.
+
+There must be a bounded failure path. If the worker dies, returns invalid data, status fails repeatedly, or the expected generation can no longer be reached, fall back to a correct synchronous fresh query or report an actionable error.
+
+Important: inspect very carefully whether the current waiting implementation can deadlock because the main Emacs is waiting in a way that prevents async.el's process sentinel/callback from running.
+
+Async worker boundary
+=====================
+
+async.el starts another Emacs process. It cannot mutate Lisp variables in the parent Emacs directly.
+
+Anything returned from the worker crosses the process boundary as serialized readable Lisp.
+
+Audit:
+
+- how large the worker payload is;
+- whether large result objects/candidates are unnecessarily duplicated;
+- whether the worker is returning full presentation structs containing redundant data;
+- whether serialization/deserialization itself dominates runtime;
+- whether the main process then recomputes work the worker already did.
+
+The expensive cache build should happen outside the main Emacs as much as reasonably possible, but do not blindly serialize enormous duplicated object graphs if that makes the async path slower than a normal query.
+
+Find the right boundary.
+
+It is acceptable for small process-local/theme-sensitive reconstruction to happen in main Emacs, but a warm lookup must never redo presentation work.
+
+Patch behaviour
+===============
+
+For patch-safe structural queries:
+
+- call `orgfdb changes`;
+- obey `cache_action`;
+- use `--restrict-files-json -` only for `upsert_files`;
+- never restricted-query deleted files;
+- remove old rows owned by upsert/deleted files;
+- merge new rows;
+- restore deterministic sorting;
+- restore complete presentation;
+- publish atomically.
+
+Search views are never patch-safe and use a full asynchronous rebuild after generation changes.
+
+Do not infer patchability merely because `upsert_files` is non-empty.
+
+File notification
+=================
+
+File notification is the primary generation-change trigger.
+
+Use Emacs `filenotify` / `file-notify-add-watch`.
+
+Watch the database directory and recognize events for:
+
+- SQLite main file;
+- `-wal`;
+- `-shm`.
+
+A filesystem event is only a wake-up.
+
+It must lead to:
+
+    status -> generation comparison
+
+Do not invalidate or rebuild merely because a filesystem event occurred.
+
+Do not create repeated watches for the same effective configuration.
+
+Do not leak watches when the minor mode is disabled/re-enabled.
+
+Polling
+=======
+
+Polling is optional fallback only.
+
+There should be a defcustom similar to:
+
+    org-files-db-views-pre-cache-poll-interval
+
+Semantics:
+
+- positive number: fallback interval in seconds;
+- nil: disable polling completely.
+
+Polling should only be necessary where reliable file notification cannot be established.
+
+The timer/watch lifecycle belongs to `org-files-db-cache-mode`.
+
+Do not use polling as the normal primary mechanism if file-notify works.
+
+Source mutations
+================
+
+A source Org file modification does not make uncommitted filesystem contents part of the cache.
+
+The authoritative state is still Rust's committed database generation.
+
+Do not synchronously rebuild merely because the package knows that an Org source was edited while `orgfdb status` still reports the same generation.
+
+Wait for the Rust watcher/indexer to commit a new generation, then refresh asynchronously.
+
+Investigate first
+=================
+
+Before changing code, trace and document the actual current control flow for these cases:
+
+A. `org-files-db-cache-mode` enabled with one `:pre-cache t` view.
+
+B. Initial async cache build.
+
+C. Opening the view after initial build completed.
+
+D. Opening the view while initial build is still running.
+
+E. SQLite generation change detected through file-notify.
+
+F. Opening the view while a generation refresh is running.
+
+G. Generation advances again while a refresh is running.
+
+For every case identify:
+
+- functions called;
+- main Emacs versus async child Emacs;
+- CLI calls;
+- worker queue state;
+- refresh token;
+- expected/source/target generation;
+- callback/sentinel;
+- publication point;
+- wait loop;
+- fallback path.
+
+Find concrete root causes, not just suspicious-looking code.
+
+Instrumentation
+===============
+
+Add small internal diagnostic support if necessary.
+
+It should be possible during debugging to observe events such as:
+
+    cache-mode enabled
+    watch installed
+    status db=X gen=42
+    initial refresh queued
+    worker started view=all-headings gen=42 type=full
+    worker finished ...
+    worker result accepted/rejected ...
+    cache published gen=42
+    file notify received
+    status gen=43
+    patch queued 42->43
+    interactive lookup waiting for refresh
+    refresh published
+    warm lookup used
+
+Do not spam normal users by default.
+
+Prefer a defcustom/debug variable or `message` only under an internal debug flag.
+
+Tests
+=====
+
+Preserve all existing tests and fix the implementation rather than weakening assertions unless an existing test is demonstrably incorrect.
+
+Add regression coverage for at least:
+
+1. Cache mode immediately queues all `:pre-cache t` views.
+
+2. Cache mode does nothing for `:pre-cache nil`.
+
+3. Warm current-generation lookup performs zero CLI query/search calls and zero presentation rebuilds.
+
+4. Opening a stale view while its worker is running waits for that worker instead of starting a synchronous rebuild.
+
+5. The waiting implementation still services process output/callbacks and cannot deadlock.
+
+6. A failed/died worker causes a bounded fallback rather than an infinite wait.
+
+7. Generation 42 -> 43 -> 44 while waiting eventually yields 44 and never publishes 43 as current.
+
+8. file-notify is installed as the primary wake-up when database path is known.
+
+9. poll interval nil creates no polling timer.
+
+10. positive polling interval creates the fallback timer.
+
+11. disabling the minor mode cancels timers, file watches, queued/running cache work as appropriate, and clears/inactivates cache state cleanly.
+
+12. Re-enabling does not duplicate watches/timers.
+
+13. A source-dirty flag with unchanged committed generation does not force a synchronous query.
+
+14. Patch worker runs restricted query only for upsert files.
+
+15. Search refresh remains full async rebuild.
+
+16. Worker result serialization is valid and bounded; no cyclic/non-readable data crosses the async boundary.
+
+17. async worker launch cannot trigger async.el password/TRAMP prompting for cache payload data.
+
+Performance / diagnosis
+=======================
+
+Measure or at least instrument:
+
+- normal uncached query duration;
+- full async cache build worker duration;
+- worker serialization/transfer duration;
+- main-process publication/reconstruction duration;
+- warm cache lookup duration;
+- small patch duration;
+- time from file-notify event to published new generation.
+
+The current async path being slower than a direct query is a serious signal. Determine whether the cost comes from:
+
+- duplicate full presentation work;
+- serialization of a huge cache object;
+- waiting logic;
+- worker startup;
+- repeated refresh loops;
+- repeated status/changes calls;
+- cache never being considered current;
+- file-notify not being installed;
+- stale/source-dirty logic;
+- view/cache-key instability;
+- generation token mismatch;
+- queue starvation;
+- callbacks not being processed.
+
+Do not optimize blindly.
+
+Code quality
+============
+
+Keep the existing module structure unless there is a strong reason to change it.
+
+`org-files-db-cache.el` should own cache lifecycle.
+
+Do not move SQLite/indexing logic into Emacs.
+
+Do not add persistent on-disk cache.
+
+Do not add Lisp threads.
+
+Keep direct:
+
+    org-files-db-query
+    org-files-db-search
+
+always uncached/fresh.
+
+Keep public naming consistent with the existing package.
+
+Use the project's existing complete GPL headers.
+
+Do not add SPDX-only headers.
+
+Run:
+
+    make ci
+
+and fix every new compilation, checkdoc, indent, package-lint, relint, and Buttercup issue caused by the changes.
+
+Deliverables
+============
+
+First give a concise diagnosis containing:
+
+1. root cause(s);
+2. why the interactive view could block for ~1 minute;
+3. whether the async worker was actually doing background work;
+4. whether the result transfer architecture is sensible;
+5. whether file-notify is actually active in the normal path.
+
+Then implement the fix.
+
+At the end provide:
+
+- changed files;
+- concise explanation of the final architecture;
+- tests added/changed;
+- `make ci` result;
+- any manual verification steps;
+- one Conventional Commit message.
+
+Do not claim the cache is fixed merely because tests pass. Reason through the real interactive lifecycle as well.
+
+* TODO Keep truncated completion columns fully searchable
+
+Goal:
+
+- Make column truncation purely visual.
+- Completion filtering and Consult search must always use the complete untruncated values.
+- Preserve this behaviour for both fresh results and prepared predefined-view caches.
+
+Requirements:
+
+- A column with a width or truncation rule may shorten only the visible presentation.
+- The candidate must retain the complete original cell value for completion filtering.
+- Text hidden by:
+  - suffix truncation,
+  - prefix truncation,
+  - middle truncation,
+  - fixed column widths,
+  - maximum column widths
+  must remain searchable.
+- Cached candidates must behave exactly like freshly prepared candidates.
+- The async cache worker must not discard full values when it prepares or serializes candidate data.
+- Rehydrating a worker-produced cache in the main Emacs process must preserve the complete searchable text.
+- Do not rerun value extraction or candidate formatting merely to recover searchable text during a warm cache lookup.
+- Duplicate candidate identity, result metadata, Consult metadata, Embark actions, and visible formatting must remain unchanged.
+
+Example:
+
+Original value:
+
+#+begin_src text
+Implement generation-aware asynchronous pre-caching for predefined views
+#+end_src
+
+Visible value with truncation:
+
+#+begin_src text
+Implement generation-awar…views
+#+end_src
+
+The candidate must still match searches such as:
+
+#+begin_src text
+asynchronous
+pre-caching
+predefined
+#+end_src
+
+Tests:
+
+- Add a regression test for an uncached candidate whose matching text exists only in the truncated-away part.
+- Cover suffix truncation.
+- Cover middle truncation.
+- Cover fixed/max-width columns where applicable.
+- Add the same regression for a prepared predefined-view cache.
+- Add the same regression for a candidate prepared in an async cache worker and rehydrated in the main Emacs process.
+- Verify a warm cache lookup performs no additional value extraction or formatting.
+- Preserve existing duplicate-candidate and metadata behaviour.
+
+Acceptance criteria:
+
+- Truncation changes only what the user sees.
+- Completion matching always sees the complete logical value.
+- Fresh, synchronously prepared, asynchronously prepared, and warm cached candidates have identical search semantics.
+- All existing tests continue to pass.
+- ~make ci~ passes.
 
 * TODO Add row expansion for tags, effective properties, and keywords
 :PROPERTIES:

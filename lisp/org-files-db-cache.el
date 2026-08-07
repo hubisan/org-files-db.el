@@ -84,7 +84,14 @@ treated as a worker failure and falls back to the synchronous fresh path."
   :type 'number
   :group 'org-files-db)
 
-(defconst org-files-db-cache--format-version 2
+(defcustom org-files-db-cache-debug nil
+  "When non-nil, report generation-aware view-cache diagnostics.
+Messages include lifecycle, queue, worker, status, notification, publication,
+and timing events.  The default nil keeps normal cache operation quiet."
+  :type 'boolean
+  :group 'org-files-db)
+
+(defconst org-files-db-cache--format-version 3
   "Version of the prepared predefined-view cache representation.")
 
 (defconst org-files-db-cache--failure-backoff-seconds 60.0
@@ -129,7 +136,10 @@ treated as a worker failure and falls back to the synchronous fresh path."
   deleted-files
   refresh-token
   explicit-p
-  started-at)
+  started-at
+  request-file
+  result-file
+  watchdog-timer)
 
 (defvar org-files-db-cache--entries (make-hash-table :test #'equal)
   "Prepared cache entries keyed by process-local storage key.")
@@ -170,6 +180,18 @@ treated as a worker failure and falls back to the synchronous fresh path."
 (defvar org-files-db-cache--poll-timer nil)
 (defvar org-files-db-cache--watchers (make-hash-table :test #'equal))
 (defvar org-files-db-cache--debounce-timers (make-hash-table :test #'equal))
+(defvar org-files-db-cache--notification-times (make-hash-table :test #'equal))
+
+(defun org-files-db-cache--debug (format-string &rest arguments)
+  "Report FORMAT-STRING with ARGUMENTS when cache debugging is enabled."
+  (when org-files-db-cache-debug
+    (apply #'message
+           (concat "org-files-db cache: " format-string)
+           arguments)))
+
+(defun org-files-db-cache--elapsed (started-at)
+  "Return elapsed seconds since STARTED-AT, or nil."
+  (and started-at (- (float-time) started-at)))
 
 (defun org-files-db-cache--config-key (config-file)
   "Return a stable key for effective CONFIG-FILE."
@@ -285,6 +307,11 @@ When NIL-OK is non-nil, nil is accepted."
     (when (and org-files-db-cache-mode
                (not org-files-db-cache--worker-process-p))
       (org-files-db-cache--ensure-watcher config-file state))
+    (org-files-db-cache--debug
+     "status db=%s gen=%s path=%s"
+     (plist-get state :database-id)
+     (plist-get state :generation)
+     (or (plist-get state :database-path) "unavailable"))
     state))
 
 (defun org-files-db-cache--normalize-cache-action (value context)
@@ -750,6 +777,57 @@ never cross the async boundary."
            (t (setq valid nil))))))
     valid))
 
+(defun org-files-db-cache--write-data-file (file value)
+  "Write readable Lisp VALUE to transport FILE and return its byte size.
+Worker payloads are assembled exclusively from normalized JSON and internal
+plain presentation records.  Avoid another full graph walk here: malformed
+artifacts are rejected by metadata and reconstruction validation in the parent."
+  (let ((coding-system-for-write 'utf-8-emacs-unix)
+        print-level
+        print-length
+        (print-circle nil))
+    (with-temp-buffer
+      (prin1 value (current-buffer))
+      (write-region (point-min) (point-max) file nil 'silent)))
+  (file-attribute-size (file-attributes file)))
+
+(defun org-files-db-cache--read-data-file (file)
+  "Read one complete plain Lisp value from transport FILE."
+  (unless (and (stringp file) (file-regular-p file) (file-readable-p file))
+    (signal 'org-files-db-error
+            (list "Cache worker result artifact is missing or unreadable")))
+  (let ((coding-system-for-read 'utf-8-emacs-unix)
+        value)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (goto-char (point-min))
+      (setq value (read (current-buffer)))
+      (skip-chars-forward " \t\r\n")
+      (unless (eobp)
+        (signal 'org-files-db-error
+                (list "Cache worker result artifact has trailing data"))))
+    value))
+
+(defun org-files-db-cache--delete-transport-file (file)
+  "Delete cache transport FILE when it exists."
+  (when (and (stringp file) (file-exists-p file))
+    (condition-case nil
+        (delete-file file)
+      (file-error nil))))
+
+(defun org-files-db-cache--cleanup-job-transport (job)
+  "Cancel JOB's watchdog and remove its transport artifacts."
+  (when job
+    (when (timerp (org-files-db-cache--job-watchdog-timer job))
+      (cancel-timer (org-files-db-cache--job-watchdog-timer job)))
+    (setf (org-files-db-cache--job-watchdog-timer job) nil)
+    (org-files-db-cache--delete-transport-file
+     (org-files-db-cache--job-request-file job))
+    (org-files-db-cache--delete-transport-file
+     (org-files-db-cache--job-result-file job))
+    (setf (org-files-db-cache--job-request-file job) nil
+          (org-files-db-cache--job-result-file job) nil)))
+
 (defun org-files-db-cache--prepare-logical-data (results columns)
   "Prepare serializable worker presentation data for RESULTS using COLUMNS.
 The worker performs result extraction, shared-width calculation, and candidate
@@ -1159,6 +1237,17 @@ automatic cache limits reject it.  REFRESH-TOKEN identifies the refresh."
           ;; replacement is not immediately evicted to protect the old display.
           (unless defer-limits-p
             (org-files-db-cache--enforce-limits))
+          (org-files-db-cache--debug
+           "cache published view=%s db=%s gen=%s rows=%d notify-to-publish=%s"
+           name (plist-get state :database-id) (plist-get state :generation)
+           count
+           (if-let* ((notified-at
+                      (gethash (org-files-db-cache--config-key config-file)
+                               org-files-db-cache--notification-times)))
+               (format "%.3fs" (org-files-db-cache--elapsed notified-at))
+             "n/a"))
+          (remhash (org-files-db-cache--config-key config-file)
+                   org-files-db-cache--notification-times)
           entry)))))
 
 (defun org-files-db-cache--same-state-p (left right)
@@ -1267,11 +1356,13 @@ CONFIG-FILE is the effective configuration.  Generation changes observed while
 waiting are followed through subsequent queued workers.  Return a current cache
 entry, or nil after a worker failure, missing replacement, or timeout."
   (let* ((name (car view))
-         (deadline
-          (and (> org-files-db-views-pre-cache-wait-timeout 0)
-               (+ (float-time) org-files-db-views-pre-cache-wait-timeout)))
+         (timeout (max 0.1 org-files-db-views-pre-cache-wait-timeout))
+         (deadline (+ (float-time) timeout))
          (state initial-state)
          entry done)
+    (org-files-db-cache--debug
+     "interactive lookup waiting view=%s db=%s gen=%s timeout=%.1fs"
+     name (plist-get state :database-id) (plist-get state :generation) timeout)
     (org-files-db-cache--request-refresh view config-file nil state)
     (while (not done)
       (setq state (org-files-db-cache--known-index-state config-file state))
@@ -1283,7 +1374,10 @@ entry, or nil after a worker failure, missing replacement, or timeout."
          ((and state
                (org-files-db-cache--entry-current-p entry state key))
           (setq done t))
-         ((and deadline (>= (float-time) deadline))
+         ((>= (float-time) deadline)
+          (org-files-db-cache--debug
+           "interactive wait timed out view=%s gen=%s"
+           name (and state (plist-get state :generation)))
           (setq entry nil
                 done t))
          ((not (org-files-db-cache--refresh-active-p name))
@@ -1298,10 +1392,9 @@ entry, or nil after a worker failure, missing replacement, or timeout."
           ;; `accept-process-output' keeps Emacs responsive while the command
           ;; waits for the already-running async replacement.  When our job is
           ;; queued behind another view, waiting on nil services that worker too.
-          (accept-process-output
-           (and (processp org-files-db-cache--current-worker)
-                org-files-db-cache--current-worker)
-           0.05)))))
+          ;; Waiting on nil services all process filters and sentinels as well as
+          ;; timers, including file-notify debounce and worker watchdog timers.
+          (accept-process-output nil 0.05)))))
     entry))
 
 (defun org-files-db-cache-present-view
@@ -1343,6 +1436,9 @@ cancelling that worker and duplicating the expensive refresh synchronously."
              (entry (org-files-db-cache--entry-for-view name)))
         (cond
          ((org-files-db-cache--entry-current-p entry state key)
+          (org-files-db-cache--debug
+           "warm lookup used view=%s db=%s gen=%s"
+           name (plist-get state :database-id) (plist-get state :generation))
           (org-files-db-cache--present-entry entry action prompt))
          ;; Package-controlled source changes can be newer than the committed
          ;; Rust generation.  Until orgfdb advances that generation, the old
@@ -1350,6 +1446,9 @@ cancelling that worker and duplicating the expensive refresh synchronously."
          ;; state, so avoid a redundant synchronous query of the same state.
          ((and (org-files-db-cache--source-dirty-at-state-p entry state)
                (org-files-db-cache--entry-at-state-p entry state key))
+          (org-files-db-cache--debug
+           "warm committed lookup used view=%s db=%s gen=%s source-dirty=t"
+           name (plist-get state :database-id) (plist-get state :generation))
           (org-files-db-cache--present-entry entry action prompt))
          ;; Preserve the original fast first-open behaviour when no cache and
          ;; no initial pre-cache worker exists yet.
@@ -1597,6 +1696,14 @@ wake-up events cannot obsolete the only worker for that state."
         existing)
     (setq org-files-db-cache--queue
           (nconc org-files-db-cache--queue (list job)))
+    (org-files-db-cache--debug
+     "%s refresh queued view=%s source=%s target=%s token=%s queue=%d"
+     (org-files-db-cache--job-refresh-type job)
+     (org-files-db-cache--job-view-name job)
+     (or (org-files-db-cache--job-source-generation job) "none")
+     (org-files-db-cache--job-target-generation job)
+     (org-files-db-cache--job-refresh-token job)
+     (length org-files-db-cache--queue))
     (org-files-db-cache--start-next-worker)
     job))
 
@@ -1609,6 +1716,21 @@ wake-up events cannot obsolete the only worker for that state."
           :expression (plist-get properties :expression)
           :scope (or (plist-get properties :scope) 'all)
           :columns (copy-tree (plist-get properties :columns)))))
+
+(defun org-files-db-cache--prepare-job-transport (job entry)
+  "Create transport artifacts for JOB using optional source ENTRY."
+  (org-files-db-cache--cleanup-job-transport job)
+  (setf (org-files-db-cache--job-result-file job)
+        (make-temp-file "org-files-db-cache-result-"))
+  (when (eq (org-files-db-cache--job-refresh-type job) 'patch)
+    (unless entry
+      (signal 'org-files-db-error
+              (list "Patch cache source disappeared before worker start")))
+    (let ((request-file (make-temp-file "org-files-db-cache-request-")))
+      (setf (org-files-db-cache--job-request-file job) request-file)
+      (org-files-db-cache--write-data-file
+       request-file (org-files-db-cache--entry-results entry))))
+  job)
 
 (defun org-files-db-cache--worker-request (job view)
   "Return serializable async worker request for JOB and VIEW."
@@ -1640,8 +1762,8 @@ wake-up events cannot obsolete the only worker for that state."
                  :refresh-type (org-files-db-cache--job-refresh-type job)
                  :upsert-files (org-files-db-cache--job-upsert-files job)
                  :deleted-files (org-files-db-cache--job-deleted-files job)
-                 :base-results
-                 (and patch-p (org-files-db-cache--entry-results entry))
+                 :base-results-file
+                 (and patch-p (org-files-db-cache--job-request-file job))
                  :columns
                  (and entry
                       (org-files-db-cache--column-definitions
@@ -1712,6 +1834,17 @@ wake-up events cannot obsolete the only worker for that state."
                   (list "Index changed before cache worker started")))
         (let* ((refresh-type (plist-get request :refresh-type))
                (patch-p (eq refresh-type 'patch))
+               (base-results
+                (when patch-p
+                  (cond
+                   ((plist-member request :base-results)
+                    (plist-get request :base-results))
+                   ((plist-get request :base-results-file)
+                    (org-files-db-cache--read-data-file
+                     (plist-get request :base-results-file)))
+                   (t
+                    (signal 'org-files-db-error
+                            (list "Patch worker lacks complete base results"))))))
                (fetched
                 (unless patch-p
                   (org-files-db-cache--fetch-view view config-file)))
@@ -1729,15 +1862,11 @@ wake-up events cannot obsolete the only worker for that state."
                    columns)))
                (results
                 (if patch-p
-                    (progn
-                      (unless (plist-member request :base-results)
-                        (signal 'org-files-db-error
-                                (list "Patch worker lacks complete base results")))
-                      (org-files-db-cache--merge-patch-results
-                       (plist-get request :base-results)
-                       (plist-get request :upsert-files)
-                       (plist-get request :deleted-files)
-                       restricted-results))
+                    (org-files-db-cache--merge-patch-results
+                     base-results
+                     (plist-get request :upsert-files)
+                     (plist-get request :deleted-files)
+                     restricted-results)
                   (plist-get fetched :results)))
                (logical-data
                 (org-files-db-cache--prepare-logical-data results columns))
@@ -1752,12 +1881,38 @@ wake-up events cannot obsolete the only worker for that state."
                       :refresh-token (plist-get request :refresh-token)
                       :refresh-type refresh-type
                       :logical-data logical-data)))
-          (unless (org-files-db-cache--plain-data-p response)
-            (signal 'org-files-db-error
-                    (list "Cache worker result is not serializable")))
           response))
     (error
      (list :ok nil :error (error-message-string err)))))
+
+(defun org-files-db-cache--worker-run-to-file (request result-file)
+  "Run cache worker REQUEST and write its payload to RESULT-FILE.
+Return only small control data suitable for async.el serialization."
+  (let* ((started-at (float-time))
+         (response (org-files-db-cache--worker-run request)))
+    (if (not (plist-get response :ok))
+        response
+      (let* ((write-started-at (float-time))
+             (payload-bytes
+              (org-files-db-cache--write-data-file result-file response))
+             (control
+              (list :ok t
+                    :database-id (plist-get response :database-id)
+                    :source-generation (plist-get response :source-generation)
+                    :target-generation (plist-get response :target-generation)
+                    :cache-key (plist-get response :cache-key)
+                    :view-token (plist-get response :view-token)
+                    :refresh-token (plist-get response :refresh-token)
+                    :refresh-type (plist-get response :refresh-type)
+                    :payload-bytes payload-bytes
+                    :payload-write-seconds
+                    (org-files-db-cache--elapsed write-started-at)
+                    :worker-seconds
+                    (org-files-db-cache--elapsed started-at))))
+        (unless (org-files-db-cache--plain-data-p control)
+          (signal 'org-files-db-error
+                  (list "Cache worker control result is not serializable")))
+        control))))
 
 (defun org-files-db-cache--async-start (start finish)
   "Start asynchronous START form and call FINISH with its result."
@@ -1767,6 +1922,60 @@ wake-up events cannot obsolete the only worker for that state."
   ;; minibuffers while a large cache payload is transferred.
   (let ((async-prompt-for-password nil))
     (async-start start finish)))
+
+(defun org-files-db-cache--worker-process-failed (job process reason)
+  "Finish active JOB as failed for PROCESS using REASON."
+  (when (eq job org-files-db-cache--current-job)
+    (setq org-files-db-cache--current-worker nil
+          org-files-db-cache--current-job nil)
+    (org-files-db-cache--record-failure job reason)
+    (org-files-db-cache--debug
+     "worker failed view=%s target=%s token=%s error=%s"
+     (org-files-db-cache--job-view-name job)
+     (org-files-db-cache--job-target-generation job)
+     (org-files-db-cache--job-refresh-token job) reason)
+    (org-files-db-cache--cleanup-job-transport job)
+    (org-files-db-cache--cancel-worker process)
+    (org-files-db-cache--start-next-worker)))
+
+(defun org-files-db-cache--install-worker-sentinel (process job)
+  "Wrap async PROCESS sentinel so terminal states always finish JOB."
+  (let ((async-sentinel (process-sentinel process)))
+    (set-process-sentinel
+     process
+     (lambda (worker event)
+       (condition-case err
+           (funcall async-sentinel worker event)
+         (error
+          (org-files-db-cache--worker-process-failed
+           job worker
+           (format "Async worker callback failed: %s"
+                   (error-message-string err)))))
+       (when (and (memq (process-status worker) '(exit signal failed closed))
+                  (eq job org-files-db-cache--current-job))
+         (org-files-db-cache--worker-process-failed
+          job worker
+          (format "Async worker terminated without a result (%s)"
+                  (string-trim event))))))))
+
+(defun org-files-db-cache--start-worker-watchdog (process job)
+  "Start the bounded execution watchdog for PROCESS and JOB."
+  (let ((timeout (max 0.1 org-files-db-views-pre-cache-wait-timeout)))
+    (setf
+     (org-files-db-cache--job-watchdog-timer job)
+     (run-at-time
+      timeout nil
+      (lambda ()
+        (when (eq job org-files-db-cache--current-job)
+          (org-files-db-cache--debug
+           "worker watchdog expired view=%s target=%s timeout=%.1fs"
+           (org-files-db-cache--job-view-name job)
+           (org-files-db-cache--job-target-generation job) timeout)
+          (when (process-live-p process)
+            (delete-process process))
+          (when (eq job org-files-db-cache--current-job)
+            (org-files-db-cache--worker-process-failed
+             job process (format "Cache worker exceeded %.1f seconds" timeout)))))))))
 
 (defun org-files-db-cache--start-next-worker ()
   "Start the next queued cache job when no worker is active."
@@ -1787,7 +1996,13 @@ wake-up events cannot obsolete the only worker for that state."
                       (org-files-db-cache--job-refresh-token job))))
           (org-files-db-cache--start-next-worker)
         (condition-case err
-            (let* ((request (org-files-db-cache--worker-request job view))
+            (let* ((entry
+                    (org-files-db-cache--entry-for-view
+                     (org-files-db-cache--job-view-name job)))
+                   (_transport
+                    (org-files-db-cache--prepare-job-transport job entry))
+                   (request (org-files-db-cache--worker-request job view))
+                   (result-file (org-files-db-cache--job-result-file job))
                    (worker-load-path
                     (cons org-files-db-cache--library-directory
                           (copy-sequence load-path)))
@@ -1796,35 +2011,51 @@ wake-up events cannot obsolete the only worker for that state."
                    (async-process-noquery-on-exit t))
               (setf (org-files-db-cache--job-started-at job) (float-time))
               (setq org-files-db-cache--current-job job)
+              (org-files-db-cache--debug
+               "worker started view=%s source=%s target=%s type=%s token=%s"
+               (org-files-db-cache--job-view-name job)
+               (or (org-files-db-cache--job-source-generation job) "none")
+               (org-files-db-cache--job-target-generation job)
+               (org-files-db-cache--job-refresh-type job)
+               (org-files-db-cache--job-refresh-token job))
               (condition-case start-error
-                  (setq
-                   org-files-db-cache--current-worker
-                   (org-files-db-cache--async-start
-                    `(lambda ()
-                       (condition-case err
-                           (progn
-                             (setq load-path ',worker-load-path
-                                   load-prefer-newer t
-                                   default-directory ,worker-default-directory
-                                   org-files-db-executable ,worker-executable
-                                   org-files-db-cache--worker-process-p t)
-                             (require 'org-files-db-cache)
-                             (org-files-db-cache--worker-run ',request))
-                         (error
-                          (list :ok nil :error (error-message-string err)))))
-                    (lambda (result)
-                      (org-files-db-cache--worker-finished job result))))
+                  (let ((process
+                         (org-files-db-cache--async-start
+                          `(lambda ()
+                             (condition-case err
+                                 (progn
+                                   (setq load-path ',worker-load-path
+                                         load-prefer-newer t
+                                         default-directory
+                                         ,worker-default-directory
+                                         org-files-db-executable
+                                         ,worker-executable
+                                         org-files-db-cache--worker-process-p t)
+                                   (require 'org-files-db-cache)
+                                   (org-files-db-cache--worker-run-to-file
+                                    ',request ,result-file))
+                               (error
+                                (list :ok nil
+                                      :error (error-message-string err)))))
+                          (lambda (result)
+                            (org-files-db-cache--worker-finished job result)))))
+                    (setq org-files-db-cache--current-worker process)
+                    (when (processp process)
+                      (org-files-db-cache--install-worker-sentinel process job)
+                      (org-files-db-cache--start-worker-watchdog process job)))
                 (error
                  (setq org-files-db-cache--current-worker nil
                        org-files-db-cache--current-job nil)
                  (org-files-db-cache--record-failure
                   job (error-message-string start-error))
+                 (org-files-db-cache--cleanup-job-transport job)
                  (org-files-db-cache--start-next-worker))))
           (error
            (setq org-files-db-cache--current-worker nil
                  org-files-db-cache--current-job nil)
            (org-files-db-cache--record-failure
             job (error-message-string err))
+           (org-files-db-cache--cleanup-job-transport job)
            (org-files-db-cache--start-next-worker)))))))
 
 (defun org-files-db-cache--job-current-p (job view state)
@@ -1844,8 +2075,8 @@ wake-up events cannot obsolete the only worker for that state."
                view (org-files-db-cache--job-config-file job) state)
               (org-files-db-cache--job-cache-key job))))
 
-(defun org-files-db-cache--worker-result-valid-p (job result)
-  "Return non-nil when RESULT is a valid final payload for JOB."
+(defun org-files-db-cache--worker-metadata-valid-p (job result)
+  "Return non-nil when RESULT metadata identifies JOB."
   (and (listp result)
        (plist-get result :ok)
        (equal (plist-get result :database-id)
@@ -1861,7 +2092,23 @@ wake-up events cannot obsolete the only worker for that state."
        (equal (plist-get result :refresh-token)
               (org-files-db-cache--job-refresh-token job))
        (eq (plist-get result :refresh-type)
-           (org-files-db-cache--job-refresh-type job))
+           (org-files-db-cache--job-refresh-type job))))
+
+(defun org-files-db-cache--worker-result-valid-p (job result)
+  "Return non-nil when async control RESULT is valid for JOB."
+  (and (org-files-db-cache--worker-metadata-valid-p job result)
+       (integerp (plist-get result :payload-bytes))
+       (>= (plist-get result :payload-bytes) 0)
+       (org-files-db-cache--plain-data-p result)
+       (let* ((file (org-files-db-cache--job-result-file job))
+              (attributes (and file (file-attributes file))))
+         (and attributes
+              (= (plist-get result :payload-bytes)
+                 (file-attribute-size attributes))))))
+
+(defun org-files-db-cache--worker-payload-valid-p (job result)
+  "Return non-nil when complete worker payload RESULT is valid for JOB."
+  (and (org-files-db-cache--worker-metadata-valid-p job result)
        (let ((logical-data (plist-get result :logical-data)))
          (and (listp logical-data)
               (plist-member logical-data :results)
@@ -1869,16 +2116,20 @@ wake-up events cannot obsolete the only worker for that state."
               (plist-member logical-data :rows)
               (plist-member logical-data :widths)
               (plist-member logical-data :candidate-templates)
-              (org-files-db-cache--plain-data-p logical-data)))))
+              t))))
 
 (defun org-files-db-cache--publish-worker-presentation
     (job view results columns presentation)
   "Publish JOB PRESENTATION for VIEW, RESULTS, and COLUMNS after a state check."
   (let ((state
-         (condition-case nil
+         (condition-case err
              (org-files-db-cache--read-index-state
               (org-files-db-cache--job-config-file job))
-           (error nil))))
+           (error
+            (org-files-db-cache--record-status-failure
+             (org-files-db-cache--job-config-file job)
+             (error-message-string err))
+            nil))))
     (if (org-files-db-cache--job-current-p job view state)
         (org-files-db-cache--publish
          view (org-files-db-cache--job-config-file job)
@@ -1902,12 +2153,21 @@ wake-up events cannot obsolete the only worker for that state."
                     (org-files-db-cache--current-view
                      (org-files-db-cache--job-view-name job)))
                    (state
-                    (condition-case nil
+                    (condition-case status-error
                         (org-files-db-cache--read-index-state
                          (org-files-db-cache--job-config-file job))
-                      (error nil))))
+                      (error
+                       (org-files-db-cache--record-status-failure
+                        (org-files-db-cache--job-config-file job)
+                        (error-message-string status-error))
+                       nil))))
               (cond
                ((not (org-files-db-cache--job-current-p job view state))
+                (org-files-db-cache--debug
+                 "worker result rejected view=%s target=%s token=%s reason=obsolete"
+                 (org-files-db-cache--job-view-name job)
+                 (org-files-db-cache--job-target-generation job)
+                 (org-files-db-cache--job-refresh-token job))
                 (when view
                   (org-files-db-cache--request-refresh
                    view (org-files-db-cache--job-config-file job) nil state)))
@@ -1915,42 +2175,79 @@ wake-up events cannot obsolete the only worker for that state."
                 (org-files-db-cache--record-failure
                  job (or (and (listp result) (plist-get result :error))
                          "Cache worker returned a malformed result"))
-                (when (eq (org-files-db-cache--job-refresh-type job) 'patch)
+                (org-files-db-cache--debug
+                 "worker result rejected view=%s target=%s token=%s reason=control"
+                 (org-files-db-cache--job-view-name job)
+                 (org-files-db-cache--job-target-generation job)
+                 (org-files-db-cache--job-refresh-token job))
+                (when (and state
+                           (eq (org-files-db-cache--job-refresh-type job) 'patch))
                   (org-files-db-cache--request-full-refresh
                    view (org-files-db-cache--job-config-file job)
                    state nil)))
                (t
                 (condition-case build-error
-                    (let* ((logical-data (plist-get result :logical-data))
-                           (results (plist-get logical-data :results))
-                           (columns
-                            (org-files-db--normalize-columns
-                             (plist-get logical-data :columns)))
-                           (presentation
-                            (org-files-db-cache--presentation-from-logical-data
-                             logical-data))
-                           (rows
-                            (org-files-db--presentation-rows presentation)))
-                      (if (not (org-files-db-cache--entry-eligible-p
-                                (length rows)))
-                          (progn
-                            (org-files-db-cache--record-result-limit-skip
-                             view (org-files-db-cache--job-config-file job)
-                             state (length rows))
-                            (org-files-db-cache--retire-obsolete-view-entry
-                             (org-files-db-cache--job-view-name job)))
-                        (org-files-db-cache--publish-worker-presentation
-                         job view results columns presentation)))
+                    (let* ((read-started-at (float-time))
+                           (payload
+                            (org-files-db-cache--read-data-file
+                             (org-files-db-cache--job-result-file job)))
+                           (read-seconds
+                            (org-files-db-cache--elapsed read-started-at)))
+                      (unless (org-files-db-cache--worker-payload-valid-p
+                               job payload)
+                        (signal 'org-files-db-error
+                                (list "Cache worker payload metadata is invalid")))
+                      (let* ((logical-data (plist-get payload :logical-data))
+                             (results (plist-get logical-data :results))
+                             (columns
+                              (org-files-db--normalize-columns
+                               (plist-get logical-data :columns)))
+                             (reconstruction-started-at (float-time))
+                             (presentation
+                              (org-files-db-cache--presentation-from-logical-data
+                               logical-data))
+                             (reconstruction-seconds
+                              (org-files-db-cache--elapsed
+                               reconstruction-started-at))
+                             (rows
+                              (org-files-db--presentation-rows presentation)))
+                        (org-files-db-cache--debug
+                         (concat "worker finished view=%s target=%s token=%s "
+                                 "worker=%.3fs write=%.3fs bytes=%d "
+                                 "read=%.3fs reconstruct=%.3fs total=%.3fs")
+                         (org-files-db-cache--job-view-name job)
+                         (org-files-db-cache--job-target-generation job)
+                         (org-files-db-cache--job-refresh-token job)
+                         (or (plist-get result :worker-seconds) 0.0)
+                         (or (plist-get result :payload-write-seconds) 0.0)
+                         (plist-get result :payload-bytes)
+                         read-seconds reconstruction-seconds
+                         (or (org-files-db-cache--elapsed
+                              (org-files-db-cache--job-started-at job))
+                             0.0))
+                        (if (not (org-files-db-cache--entry-eligible-p
+                                  (length rows)))
+                            (progn
+                              (org-files-db-cache--record-result-limit-skip
+                               view (org-files-db-cache--job-config-file job)
+                               state (length rows))
+                              (org-files-db-cache--retire-obsolete-view-entry
+                               (org-files-db-cache--job-view-name job)))
+                          (org-files-db-cache--publish-worker-presentation
+                           job view results columns presentation))))
                   (error
                    (org-files-db-cache--record-failure
                     job (error-message-string build-error))
-                   (when (eq (org-files-db-cache--job-refresh-type job) 'patch)
+                   (when (and state
+                              (eq (org-files-db-cache--job-refresh-type job)
+                                  'patch))
                      (org-files-db-cache--request-full-refresh
                       view (org-files-db-cache--job-config-file job)
                       state nil)))))))
           (error
            (org-files-db-cache--record-failure
             job (error-message-string err))))
+      (org-files-db-cache--cleanup-job-transport job)
       (org-files-db-cache--start-next-worker))))
 
 (defun org-files-db-cache--request-full-refresh
@@ -2087,19 +2384,22 @@ KNOWN-STATE avoids a duplicate status command after an authoritative check."
 (defun org-files-db-cache--obsolete-view-refresh (name)
   "Obsolete queued and running refreshes for predefined view NAME."
   (org-files-db-cache--next-refresh-token name)
-  (setq org-files-db-cache--queue
-        (seq-remove
-         (lambda (job)
-           (equal (org-files-db-cache--job-view-name job) name))
-         org-files-db-cache--queue))
+  (let (retained)
+    (dolist (job org-files-db-cache--queue)
+      (if (equal (org-files-db-cache--job-view-name job) name)
+          (org-files-db-cache--cleanup-job-transport job)
+        (push job retained)))
+    (setq org-files-db-cache--queue (nreverse retained)))
   (when (and org-files-db-cache--current-job
              (equal (org-files-db-cache--job-view-name
                      org-files-db-cache--current-job)
                     name))
-    (org-files-db-cache--cancel-worker
-     org-files-db-cache--current-worker)
-    (setq org-files-db-cache--current-worker nil
-          org-files-db-cache--current-job nil)
+    (let ((job org-files-db-cache--current-job)
+          (worker org-files-db-cache--current-worker))
+      (setq org-files-db-cache--current-worker nil
+            org-files-db-cache--current-job nil)
+      (org-files-db-cache--cleanup-job-transport job)
+      (org-files-db-cache--cancel-worker worker))
     (org-files-db-cache--start-next-worker)))
 
 (defun org-files-db-cache-refresh-view (view config-file &optional synchronous)
@@ -2139,7 +2439,14 @@ When SYNCHRONOUS is non-nil, perform a complete replacement immediately."
 
 (defun org-files-db-cache-clear-all ()
   "Clear all prepared entries, jobs, failures, and automatic skip records."
-  (org-files-db-cache--cancel-worker org-files-db-cache--current-worker)
+  (let ((job org-files-db-cache--current-job)
+        (worker org-files-db-cache--current-worker))
+    (setq org-files-db-cache--current-worker nil
+          org-files-db-cache--current-job nil)
+    (org-files-db-cache--cleanup-job-transport job)
+    (org-files-db-cache--cancel-worker worker))
+  (dolist (job org-files-db-cache--queue)
+    (org-files-db-cache--cleanup-job-transport job))
   (setq org-files-db-cache--current-worker nil
         org-files-db-cache--current-job nil
         org-files-db-cache--queue nil
@@ -2149,6 +2456,7 @@ When SYNCHRONOUS is non-nil, perform a complete replacement immediately."
   (clrhash org-files-db-cache--skipped)
   (clrhash org-files-db-cache--failures)
   (clrhash org-files-db-cache--status-failures)
+  (clrhash org-files-db-cache--notification-times)
   (clrhash org-files-db-cache--refresh-tokens)
   (message "Cleared all org-files-db view caches"))
 
@@ -2342,6 +2650,9 @@ DIRECTORY is the watched database location used for relative notification paths.
   (when org-files-db-cache-mode
     (let ((key (org-files-db-cache--config-key config-file)))
       (unless (timerp (gethash key org-files-db-cache--debounce-timers))
+        (puthash key (float-time) org-files-db-cache--notification-times)
+        (org-files-db-cache--debug
+         "file notify received config=%s" config-file)
         (puthash
          key
          (run-at-time
@@ -2417,28 +2728,35 @@ DIRECTORY is the watched database location used for relative notification paths.
           (org-files-db-cache--remove-watcher existing-key))
         (unless (gethash key org-files-db-cache--watchers)
           (condition-case nil
-              (puthash
-               key
-               (file-notify-add-watch
-                directory
-                '(change attribute-change)
-                (lambda (event)
-                  (if (eq (cadr event) 'stopped)
-                      (progn
-                        (remhash key org-files-db-cache--watchers)
-                        (org-files-db-cache--debounced-check config-file))
-                    (when (org-files-db-cache--sqlite-event-p
-                           event database-path directory)
-                      (org-files-db-cache--debounced-check config-file)))))
-               org-files-db-cache--watchers)
+              (let ((descriptor
+                     (file-notify-add-watch
+                      directory
+                      '(change attribute-change)
+                      (lambda (event)
+                        (if (eq (cadr event) 'stopped)
+                            (progn
+                              (remhash key org-files-db-cache--watchers)
+                              (org-files-db-cache--debounced-check config-file))
+                          (when (org-files-db-cache--sqlite-event-p
+                                 event database-path directory)
+                            (org-files-db-cache--debounced-check
+                             config-file)))))))
+                (puthash key descriptor org-files-db-cache--watchers)
+                (org-files-db-cache--debug
+                 "watch installed config=%s path=%s" config-file database-path))
             (error nil)))))))
 
 (defun org-files-db-cache--cancel-runtime ()
   "Cancel active workers, timers, notifications, and queued cache work."
-  (org-files-db-cache--cancel-worker org-files-db-cache--current-worker)
-  (setq org-files-db-cache--current-worker nil
-        org-files-db-cache--current-job nil
-        org-files-db-cache--queue nil)
+  (let ((job org-files-db-cache--current-job)
+        (worker org-files-db-cache--current-worker))
+    (setq org-files-db-cache--current-worker nil
+          org-files-db-cache--current-job nil)
+    (org-files-db-cache--cleanup-job-transport job)
+    (org-files-db-cache--cancel-worker worker))
+  (dolist (job org-files-db-cache--queue)
+    (org-files-db-cache--cleanup-job-transport job))
+  (setq org-files-db-cache--queue nil)
   (when (timerp org-files-db-cache--poll-timer)
     (cancel-timer org-files-db-cache--poll-timer))
   (setq org-files-db-cache--poll-timer nil)
@@ -2448,6 +2766,7 @@ DIRECTORY is the watched database location used for relative notification paths.
        (cancel-timer timer)))
    org-files-db-cache--debounce-timers)
   (clrhash org-files-db-cache--debounce-timers)
+  (clrhash org-files-db-cache--notification-times)
   (let (watcher-keys)
     (maphash
      (lambda (key _descriptor)
@@ -2465,10 +2784,12 @@ DIRECTORY is the watched database location used for relative notification paths.
   (clrhash org-files-db-cache--skipped)
   (clrhash org-files-db-cache--failures)
   (clrhash org-files-db-cache--status-failures)
+  (clrhash org-files-db-cache--notification-times)
   (clrhash org-files-db-cache--refresh-tokens))
 
 (defun org-files-db-cache--enable-mode ()
   "Start cache monitoring and immediately pre-cache opted-in views."
+  (org-files-db-cache--debug "cache-mode enabled")
   (add-hook 'org-files-db--source-mutated-hook
             #'org-files-db-cache--mark-source-mutated)
   (when (and (numberp org-files-db-views-pre-cache-poll-interval)
@@ -2482,6 +2803,7 @@ DIRECTORY is the watched database location used for relative notification paths.
 
 (defun org-files-db-cache--disable-mode ()
   "Stop cache monitoring and release all prepared cache state."
+  (org-files-db-cache--debug "cache-mode disabled")
   (remove-hook 'org-files-db--source-mutated-hook
                #'org-files-db-cache--mark-source-mutated)
   (org-files-db-cache--cancel-runtime)
