@@ -174,7 +174,7 @@ A view without ~:config-file~ inherits ~org-files-db-config-file~.  A path selec
 
 ** Generation-aware pre-caching
 
-Pre-caching is an advanced opt-in feature for predefined views.  Add ~:pre-cache t~ to keep one complete prepared completion cache in memory:
+Pre-caching is an advanced opt-in feature for predefined views.  Add ~:pre-cache t~ to mark a view for caching, then enable the global cache mode:
 
 #+begin_src emacs-lisp
 (setq org-files-db-views
@@ -196,13 +196,19 @@ Pre-caching is an advanced opt-in feature for predefined views.  Add ~:pre-cache
           (file-name :width (max 30))))))
 #+end_src
 
+#+begin_src emacs-lisp
+(org-files-db-cache-mode 1)
+#+end_src
+
+Enabling ~org-files-db-cache-mode~ immediately queues every configured view marked with ~:pre-cache t~.  The work stays asynchronous and runs one cache worker at a time, so views can be warm before their first use.  If a view is invoked while its initial or generation refresh is still running, the command waits for that existing worker instead of starting the same expensive work synchronously.  Disabling the mode stops workers and monitoring and releases the in-memory caches.  With the mode disabled, ~:pre-cache t~ is only an opt-in marker and predefined views execute normally without caching.
+
 The cache uses the stable ~database_id~ and committed ~generation~ reported by ~orgfdb status~.  A warm view with the same database identity and generation skips query or search execution, JSON parsing, row preparation, width calculation, and candidate formatting.  Direct calls to ~org-files-db-query~ and ~org-files-db-search~ remain uncached.
 
 When the generation changes, ~orgfdb changes~ determines the refresh action.  Complete structural query views without limits, offsets, row expansion, or custom sorting can rerun only the authoritative ~upsert_files~ through ~--restrict-files-json -~ and remove rows owned by deleted files.  Search views and query views whose complete result semantics cannot be patched are rebuilt completely.  A patch remains one complete view cache; it is not an independent cache per file.
 
-Cache replacements use ~async.el~.  The worker executes ~orgfdb~, parses its response, and prepares serializable logical rows and display widths.  The main Emacs process applies theme-sensitive faces and final candidate strings before publication.  Publication occurs only after the database identity, target generation, cache key, view-definition token, and refresh token are checked again, so an obsolete worker cannot overwrite a newer entry.  SQLite file notifications are used only as wake-up signals when the canonical database path is available.  Otherwise an idle polling check reads authoritative status.  Source changes become visible only after the Rust watcher commits a new generation.
+Cache replacements use ~async.el~.  The worker executes ~orgfdb~, parses its response, merges file-delta patches into the complete cached result set, recalculates shared widths, and formats the complete candidate strings.  The main Emacs process only restores theme-sensitive faces and process-local result metadata before atomic publication.  Publication occurs only after the database identity, target generation, cache key, view-definition token, and refresh token are checked again, so an obsolete worker cannot overwrite a newer entry.  SQLite file notifications are the primary wake-up signal when ~orgfdb status~ exposes the canonical database path.  Optional fallback polling is controlled by ~org-files-db-views-pre-cache-poll-interval~: set it to a positive number of seconds, or to nil to disable polling.  Polling only checks configurations that do not currently have an active file-notify watcher.  Package-controlled source changes become visible only after the Rust watcher commits a new generation; until then, the existing prepared cache remains the exact view of the previous committed database generation and is reused instead of rerunning the same query synchronously.
 
-A missing or stale cache never produces an empty or knowingly stale completion.  Opening the view falls back to the normal complete synchronous path.  Use a prefix argument with ~org-files-db-views-query~ or ~org-files-db-views-search~ to force a complete fresh synchronous view and replace its cache.
+A missing or stale cache never produces an empty or knowingly stale completion.  A missing cache without an active initial worker keeps the normal synchronous first-open path.  When a stale cache is already refreshing, or can start its generation refresh, opening the view waits for that async replacement instead of cancelling it and duplicating the expensive query and presentation work synchronously.  If the generation advances again while waiting, the command follows the next replacement.  A worker failure or timeout falls back to the complete synchronous path.  Use a prefix argument with ~org-files-db-views-query~ or ~org-files-db-views-search~ to force a complete fresh synchronous view and replace its cache.
 
 Cache management commands are:
 
@@ -219,6 +225,7 @@ Prepared views retain original result objects and completion metadata, so action
 org-files-db-views-pre-cache-max-entries
 org-files-db-views-pre-cache-max-results
 org-files-db-views-pre-cache-max-total-results
+org-files-db-views-pre-cache-poll-interval
 #+end_src
 
 An oversized view remains usable synchronously but is not retained automatically for the same definition and generation.  Cache entries are evicted in least-recently-used order.  Caches are in-memory only and are rebuilt after Emacs restarts.

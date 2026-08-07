@@ -24,7 +24,7 @@ Large predefined views currently execute ~orgfdb~, parse JSON, prepare rows, cal
 - Patch complete structural query views from authoritative affected-file sets.
 - Rebuild search and unsafe query views completely.
 - Build background replacements with ~async.el~ and publish them only after final state and token validation.
-- Add force-refresh, refresh, clear, limits, LRU eviction, idle prewarming, polling, optional file notification, failure recording, and package-mutation staleness.
+- Add force-refresh, refresh, clear, limits, LRU eviction, mode-activation prewarming, optional polling, primary file notification, failure recording, and package-mutation staleness.
 - Keep direct query and search calls fresh and uncached.
 
 ** Non-goals
@@ -51,7 +51,7 @@ Large predefined views currently execute ~orgfdb~, parse JSON, prepare rows, cal
 2. Add shared query/search fetch helpers.
 3. Implement cache structures, state parsers, keys, freshness, synchronous publication, and warm reuse.
 4. Implement restricted-query patching and rebuild fallback.
-5. Implement async queue, refresh tokens, final generation checks, idle prewarming, polling, and optional file notifications.
+5. Implement async queue, refresh tokens, final generation checks, mode-activation prewarming, optional polling, and primary file notifications.
 6. Add LRU limits, explicit cache commands, failures, and source-mutation staleness.
 7. Update actions, dependencies, package entry point, tests, README, changelog, benchmarks, and task status.
 8. Run all available static checks and package tests where the environment permits.
@@ -79,11 +79,22 @@ None. Missing optional database-path output is handled through polling as allowe
 
 - Added a dedicated in-memory cache module for predefined query and search views that opt in with ~:pre-cache t~.
 - Used ~orgfdb status~ database identity and committed generation as the authoritative freshness signal.
-- Added complete synchronous publication, warm prepared-candidate reuse, forced refresh, cache clearing, conservative limits, LRU eviction, idle prewarming, fallback polling, and optional debounced SQLite file notifications.
+- Added complete synchronous publication, warm prepared-candidate reuse, forced refresh, cache clearing, conservative limits, LRU eviction, immediate mode-activation prewarming, optional fallback polling, and primary debounced SQLite file notifications.
 - Added authoritative ~orgfdb changes~ handling and file-restricted structural query patches that remove all rows owned by upserted or deleted paths, rerun only upsert paths, merge independent logical rows, recalculate widths, and reformat the complete replacement before atomic publication.
-- Added one-at-a-time ~async.el~ workers for full rebuilds and restricted patches. Workers return serializable logical rows; the main process reapplies theme-sensitive faces and validates database identity, generation, cache key, view token, and refresh token immediately before publication.
-- Kept direct ~org-files-db-query~ and ~org-files-db-search~ calls fresh and uncached.
+- Added one-at-a-time ~async.el~ workers for full rebuilds and restricted patches. Workers merge complete patches, calculate widths, and format candidate templates; the main process reapplies theme-sensitive faces and process-local metadata and validates database identity, generation, cache key, view token, and refresh token immediately before publication.
+- Disabled async.el password-prompt detection specifically for local cache workers so large serialized cache payloads cannot be misclassified as TRAMP password prompts and create recursive minibuffers.
+- Added global ~org-files-db-cache-mode~ as the explicit lifecycle boundary.  Enabling it immediately queues all ~:pre-cache t~ views, installs file notification, and optionally installs fallback polling; disabling it cancels workers and monitoring and releases cached entries.
+- Kept direct ~org-files-db-query~ and ~org-files-db-search~ calls fresh and uncached, and made ~:pre-cache t~ inert while the cache mode is disabled.
 - Added package-controlled source-mutation staleness notifications for identifier creation and file rename operations.
+
+** Review follow-up
+
+- Moved cache lifecycle behind the global ~org-files-db-cache-mode~ instead of starting timers and workers when the package is loaded.
+- Enabling the mode immediately queues every ~:pre-cache t~ view, so normal first use can consume an already prepared cache; opening during warm-up waits for the existing async worker.
+- Made file notification the primary refresh trigger and changed polling to a regular optional fallback controlled by ~org-files-db-views-pre-cache-poll-interval~; nil disables it and watched configurations are skipped.
+- Moved complete patch merge, width calculation, and candidate formatting into the async worker and retained only face and process-local metadata rehydration in the main Emacs process.
+- Prevented async.el password-prompt detection from interpreting large local cache payloads as recursive minibuffer prompts.
+- Reuse the prepared cache for the still-current committed generation while a package-controlled source mutation is waiting to be indexed, avoiding a redundant synchronous query of unchanged DB state.
 
 ** Changed files
 

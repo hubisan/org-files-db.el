@@ -33,7 +33,8 @@
 Each entry has the form (NAME :command COMMAND ...), where COMMAND is
 `query' or `search'.  An optional :config-file overrides
 `org-files-db-config-file'; an explicit nil disables --config for that view.
-An optional :pre-cache t enables generation-aware prepared completion caching."
+An optional :pre-cache t opts the view into generation-aware prepared
+completion caching while `org-files-db-cache-mode' is enabled."
   :type '(repeat sexp)
   :group 'org-files-db)
 
@@ -158,7 +159,8 @@ argument or FORCE-REFRESH bypasses and replaces any prepared cache."
           (config-file (org-files-db-views--config-file view)))
       (unless query
         (user-error "Query view `%s' has no :query" name))
-      (if (org-files-db-views--pre-cache-p view)
+      (if (and org-files-db-cache-mode
+               (org-files-db-views--pre-cache-p view))
           (org-files-db-cache-present-view
            view config-file action "Query result: " force-refresh)
         (org-files-db-query
@@ -182,7 +184,8 @@ argument or FORCE-REFRESH bypasses and replaces any prepared cache."
       (unless (and (stringp expression)
                    (not (string-empty-p expression)))
         (user-error "Search view `%s' has no valid :expression" name))
-      (if (org-files-db-views--pre-cache-p view)
+      (if (and org-files-db-cache-mode
+               (org-files-db-views--pre-cache-p view))
           (org-files-db-cache-present-view
            view config-file action "Search result: " force-refresh)
         (org-files-db-search

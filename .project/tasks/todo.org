@@ -2512,6 +2512,10 @@ This task does not implement:
 - Background failures preserve previous successful entries without presenting them as current.
 - Tests cover unchanged, patch, rebuild, database replacement, async publication, restricted queries, file notifications, limits, force refresh, and stale-worker rejection.
 - Benchmarks document cold, warm, patched, and fully rebuilt behaviour for representative result sizes.
+  
+* TODO Truncate > nur optisch
+Truncate soll nur optisch sein, 
+
 
 * TODO Add row expansion for tags, effective properties, and keywords
 :PROPERTIES:
