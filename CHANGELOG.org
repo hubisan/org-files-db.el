@@ -2,6 +2,12 @@
 
 * Unreleased
 
+- =ADDED= Added configurable stable sorting for query, search, predefined-view, and dynamic-block results.
+  - Sort by one or more public columns with ascending or descending direction, configurable missing-value placement, and case-sensitive or case-insensitive text comparison.
+  - Text, numeric values, Org priorities, planning timestamps, outline paths, and complete tag collections use type-aware cached sort keys; equal rows retain their original ~orgfdb~ order.
+  - Per-result-type defaults are available through ~org-files-db-heading-sort~, ~org-files-db-file-sort~, ~org-files-db-link-sort~, and ~org-files-db-search-sort~; explicit ~:sort nil~ preserves CLI order and search relevance.
+  - Sort-only columns can request required source or target context without being displayed, and completion, Embark export, and dynamic blocks preserve the prepared order.
+  - Added 1,000- and 10,000-row sorting benchmarks with separate sort-key and comparison timing phases.
 - =CHANGED= Made column truncation presentation-only while retaining complete completion text.
   - Truncated columns now keep their full logical value in the completion candidate and use ~display~ text properties for the shortened visual representation.
   - Standard completion and Consult can match text that is hidden by left, middle, right, fixed-width, or maximum-width truncation without appending duplicate hidden search strings.

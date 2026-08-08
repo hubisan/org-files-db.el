@@ -31,25 +31,36 @@
 ;;;###autoload
 (cl-defun org-files-db-query
     (query &optional columns action
-           &key (config-file nil config-file-supplied-p))
+           &key (config-file nil config-file-supplied-p)
+           (sort nil sort-supplied-p))
   "Execute QUERY and select a result displayed with COLUMNS.
 QUERY is an orgfdb query represented as an Emacs Lisp form or string.
 ACTION receives the selected result object.  When omitted, use
 `org-files-db-query-action'.  When CONFIG-FILE is omitted, inherit
 `org-files-db-config-file'; an explicit nil disables --config for this call.
+When SORT is omitted, use the configured default for the query result type;
+an explicit nil preserves the order returned by orgfdb.
 Configured columns automatically request any required path or target context."
   (interactive (list (org-files-db--read-sexp "Query: ") nil nil))
-  (let* ((effective-config-file
+  (let* ((inferred-target (org-files-db--query-target query))
+         (effective-sort
+          (org-files-db--effective-sort
+           inferred-target sort sort-supplied-p))
+         (effective-config-file
           (org-files-db--resolve-config-file
            config-file config-file-supplied-p "Query"))
          (fetched
           (org-files-db--fetch-query
-           query columns effective-config-file "Query")))
+           query columns effective-config-file "Query" effective-sort))
+         (target (plist-get fetched :target)))
     (org-files-db--present-results
      (plist-get fetched :results)
      (plist-get fetched :columns)
      action
-     "Query result: ")))
+     "Query result: "
+     (plist-get fetched :sort)
+     target
+     "Query")))
 (provide 'org-files-db-query)
 
 ;;; org-files-db-query.el ends here

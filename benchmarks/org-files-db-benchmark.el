@@ -60,6 +60,23 @@
                :truncate (:position left :marker "…")))
   "Representative columns that exercise visual-only truncation.")
 
+(defconst org-files-db-benchmark--text-sort
+  '((title :direction asc)
+    (file-name :direction asc))
+  "Representative multi-key textual sorting benchmark.")
+
+(defconst org-files-db-benchmark--numeric-sort
+  '((line-number :direction desc))
+  "Representative numeric sorting benchmark.")
+
+(defconst org-files-db-benchmark--timestamp-sort
+  '((scheduled-raw :direction asc :missing last))
+  "Representative timestamp sorting benchmark.")
+
+(defconst org-files-db-benchmark--tag-sort
+  '((tags :direction asc))
+  "Representative complete tag-collection sorting benchmark.")
+
 (defconst org-files-db-benchmark--directory
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory containing this benchmark file.")
@@ -166,8 +183,8 @@
         org-files-db-benchmark--allocation-metric-keys)))))
 
 (cl-defun org-files-db-benchmark--presentation
-    (results columns &key (iterations 5))
-  "Benchmark eager presentation of RESULTS with COLUMNS.
+    (results columns &key (iterations 5) sort (context 'headings))
+  "Benchmark eager presentation of RESULTS with COLUMNS and optional SORT.
 Return minimum, median, and maximum timings across ITERATIONS without opening
 completion."
   (unless (and (integerp iterations) (> iterations 0))
@@ -180,7 +197,8 @@ completion."
       (let* ((gc-before (if (boundp 'gcs-done) gcs-done 0))
              (gc-time-before (if (boundp 'gc-elapsed) gc-elapsed 0.0))
              (presentation
-              (org-files-db--prepare-presentation results columns))
+              (org-files-db--prepare-presentation
+               results columns sort context "Benchmark"))
              (candidates
               (org-files-db--presentation-candidates presentation))
              (timings
@@ -257,6 +275,8 @@ completion."
          (todo-type (and todo (if (equal todo "DONE") "closed" "open")))
          (priority (and (zerop (% index 3))
                         (char-to-string (+ ?A (% (/ index 3) 3)))))
+         (scheduled (unless (zerop (% index 13))
+                      (format "<2026-08-%02d>" (1+ (% index 28)))))
          (tags (unless (zerop (% index 11))
                  (list (format "tag-%d" (% index 13))
                        (if (zerop (% index 9)) "über" "project")))))
@@ -268,6 +288,7 @@ completion."
       (todo_keyword . ,todo)
       (todo_type . ,todo-type)
       (priority . ,priority)
+      (scheduled_raw . ,scheduled)
       (all_tags . ,tags)
       (location . ((file_path . ,file)
                    (line . ,(1+ index))
@@ -458,7 +479,18 @@ ITERATIONS defaults to three.  The 50,000-row case may take substantial time."
                (format "%d rows, visual truncation" count)
                (org-files-db-benchmark--presentation
                 results org-files-db-benchmark--truncation-columns
-                :iterations iterations)))))
+                :iterations iterations))
+              (dolist (case
+                       `(("multiple text keys" ,org-files-db-benchmark--text-sort)
+                         ("numeric key" ,org-files-db-benchmark--numeric-sort)
+                         ("timestamp key" ,org-files-db-benchmark--timestamp-sort)
+                         ("tag collection" ,org-files-db-benchmark--tag-sort)))
+                (org-files-db-benchmark--insert-summary
+                 (format "%d rows, sorting: %s" count (car case))
+                 (org-files-db-benchmark--presentation
+                  results org-files-db-benchmark--expensive-columns
+                  :sort (cadr case)
+                  :iterations iterations))))))
         (insert "\nRepresentative JSON response\n")
         (insert "----------------------------\n")
         (let ((text (org-files-db-benchmark--fixture-text)))
@@ -468,6 +500,37 @@ ITERATIONS defaults to three.  The 50,000-row case may take substantial time."
                (org-files-db-benchmark--time-json
                 text object-type array-type
                 org-files-db-benchmark--expensive-columns iterations)))))
+        (goto-char (point-min))
+        (special-mode)))
+    (pop-to-buffer buffer)))
+
+;;;###autoload
+(defun org-files-db-benchmark-sorting (&optional iterations)
+  "Benchmark sorting at 1,000 and 10,000 rows.
+ITERATIONS defaults to three.  Sorting and sort-key preparation are reported
+as separate presentation phases."
+  (interactive "P")
+  (let ((iterations (or (and iterations (prefix-numeric-value iterations)) 3))
+        (buffer (get-buffer-create "*org-files-db sorting benchmark*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "org-files-db sorting benchmark\n")
+        (insert (format "Emacs: %s\nIterations: %d\n"
+                        emacs-version iterations))
+        (dolist (count '(1000 10000))
+          (let ((results (org-files-db-benchmark--results count)))
+            (dolist (case
+                     `(("multiple text keys" ,org-files-db-benchmark--text-sort)
+                       ("numeric key" ,org-files-db-benchmark--numeric-sort)
+                       ("timestamp key" ,org-files-db-benchmark--timestamp-sort)
+                       ("tag collection" ,org-files-db-benchmark--tag-sort)))
+              (org-files-db-benchmark--insert-summary
+               (format "%d rows, %s" count (car case))
+               (org-files-db-benchmark--presentation
+                results org-files-db-benchmark--expensive-columns
+                :sort (cadr case)
+                :iterations iterations)))))
         (goto-char (point-min))
         (special-mode)))
     (pop-to-buffer buffer)))

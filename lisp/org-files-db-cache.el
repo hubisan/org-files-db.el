@@ -433,6 +433,23 @@ When NIL-OK is non-nil, nil is accepted."
           ('search org-files-db-search-columns)
           (_ nil)))))
 
+(defun org-files-db-cache--view-context (view)
+  "Return the sort context used by VIEW."
+  (let ((properties (cdr view)))
+    (pcase (org-files-db-cache--view-command view)
+      ('query (org-files-db--query-target (plist-get properties :query)))
+      ('search 'search)
+      (_ (user-error "View `%s' has an invalid command" (car view))))))
+
+(defun org-files-db-cache--view-sort (view)
+  "Return effective sort specification for VIEW."
+  (let ((properties (cdr view))
+        (context (org-files-db-cache--view-context view)))
+    (org-files-db--effective-sort
+     context
+     (plist-get properties :sort)
+     (not (null (plist-member properties :sort))))))
+
 (defun org-files-db-cache--function-key (function)
   "Return a stable cache-key representation for FUNCTION."
   (cond
@@ -456,6 +473,7 @@ When NIL-OK is non-nil, nil is accepted."
             :properties properties
             :config-file config-file
             :columns (org-files-db-cache--view-columns view)
+            :sort (org-files-db-cache--view-sort view)
             :outline-separator org-files-db-outline-path-separator
             :outline-root org-files-db-outline-path-include-root
             :outline-match org-files-db-outline-path-include-match
@@ -482,7 +500,7 @@ When NIL-OK is non-nil, nil is accepted."
             :scope (or (plist-get (cdr view) :scope) 'all)
             :columns columns
             :row-source (plist-get (cdr view) :row-source)
-            :sort (plist-get (cdr view) :sort)
+            :sort (org-files-db-cache--view-sort view)
             :includes includes)))))
 
 (defun org-files-db-cache--current-view (name)
@@ -601,7 +619,7 @@ Prefer KEY itself unless it is occupied by an entry that must remain alive."
          (not (plist-get properties :truncate))
          (not (plist-get properties :top))
          (not (plist-get properties :row-source))
-         (not (plist-get properties :sort))
+         (null (org-files-db-cache--view-sort view))
          (memq (org-files-db--query-target (plist-get properties :query))
                '(headings links files))
          (org-files-db-cache--all-results-owned-p
@@ -617,7 +635,8 @@ Prefer KEY itself unless it is occupied by an entry that must remain alive."
          (unless query
            (user-error "Query view `%s' has no :query" (car view)))
          (org-files-db--fetch-query
-          query (plist-get properties :columns) config-file origin)))
+          query (plist-get properties :columns) config-file origin
+          (org-files-db-cache--view-sort view))))
       ('search
        (let ((expression (plist-get properties :expression))
              (scope (or (plist-get properties :scope) 'all)))
@@ -626,7 +645,8 @@ Prefer KEY itself unless it is occupied by an entry that must remain alive."
            (user-error "Search view `%s' has no valid :expression" (car view)))
          (org-files-db--fetch-search
           expression (plist-get properties :columns)
-          scope config-file origin)))
+          scope config-file origin
+          (org-files-db-cache--view-sort view))))
       (_ (user-error "View `%s' has an invalid command" (car view))))))
 
 (defun org-files-db-cache--fetch-restricted-query
@@ -656,8 +676,10 @@ values have been prepared, rows no longer need presentation-source objects."
         (org-files-db--presentation-face-cache presentation) nil)
   presentation)
 
-(defun org-files-db-cache--prepare (results columns)
-  "Prepare RESULTS with COLUMNS while retaining patchable logical rows."
+(defun org-files-db-cache--prepare
+    (results columns &optional sort context origin)
+  "Prepare RESULTS with COLUMNS and optional SORT for CONTEXT and ORIGIN.
+Retain logical rows for cache patch refreshes."
   (let* ((large-p
           (>= (length results) org-files-db--large-presentation-row-count))
          (bounded-gc-p
@@ -670,7 +692,8 @@ values have been prepared, rows no longer need presentation-source objects."
               org-files-db--large-presentation-gc-threshold
             gc-cons-threshold)))
     (org-files-db-cache--compact-presentation
-     (org-files-db--prepare-presentation-1 results columns))))
+     (org-files-db--prepare-presentation-1
+      results columns sort context origin))))
 
 (defun org-files-db-cache--column-definitions (columns)
   "Return plain definitions represented by normalized COLUMNS."
@@ -933,7 +956,10 @@ plist keys :presentation, :results, :columns, and optional :entry."
               presentation
               (org-files-db-cache--prepare
                (plist-get fetched :results)
-               (plist-get fetched :columns))
+               (plist-get fetched :columns)
+               (plist-get fetched :sort)
+               (org-files-db-cache--view-context view)
+               (format "View `%s'" (car view)))
               final-state
               (if publish-p
                   (condition-case nil
@@ -959,7 +985,10 @@ plist keys :presentation, :results, :columns, and optional :entry."
             presentation
             (org-files-db-cache--prepare
              (plist-get fetched :results)
-             (plist-get fetched :columns))))
+             (plist-get fetched :columns)
+             (plist-get fetched :sort)
+             (org-files-db-cache--view-context view)
+             (format "View `%s'" (car view)))))
     (when (and publish-p stable-p final-state)
       (setq entry
             (org-files-db-cache--publish
@@ -1317,13 +1346,18 @@ wake-up events cannot obsolete the only worker for that state."
 
 (defun org-files-db-cache--worker-view-data (view)
   "Return serializable worker-relevant data from VIEW."
-  (let ((properties (cdr view)))
-    (list (car view)
-          :command (plist-get properties :command)
-          :query (plist-get properties :query)
-          :expression (plist-get properties :expression)
-          :scope (or (plist-get properties :scope) 'all)
-          :columns (copy-tree (plist-get properties :columns)))))
+  (let* ((properties (cdr view))
+         (data
+          (list (car view)
+                :command (plist-get properties :command)
+                :query (plist-get properties :query)
+                :expression (plist-get properties :expression)
+                :scope (or (plist-get properties :scope) 'all)
+                :columns (copy-tree (plist-get properties :columns)))))
+    (when (plist-member properties :sort)
+      (setq data
+            (plist-put data :sort (copy-tree (plist-get properties :sort)))))
+    data))
 
 (defun org-files-db-cache--prepare-job-transport (job entry)
   "Create the result transport artifact for JOB and source ENTRY.
@@ -1376,6 +1410,10 @@ source entry after validating its generation."
                        :file-columns (copy-tree org-files-db-file-columns)
                        :link-columns (copy-tree org-files-db-link-columns)
                        :search-columns (copy-tree org-files-db-search-columns)
+                       :heading-sort (copy-tree org-files-db-heading-sort)
+                       :file-sort (copy-tree org-files-db-file-sort)
+                       :link-sort (copy-tree org-files-db-link-sort)
+                       :search-sort (copy-tree org-files-db-search-sort)
                        :outline-separator org-files-db-outline-path-separator
                        :outline-include-root org-files-db-outline-path-include-root
                        :outline-include-match org-files-db-outline-path-include-match
@@ -1408,6 +1446,22 @@ upsert results; the main Emacs merges them with the retained source entry."
               (if (plist-member options :search-columns)
                   (plist-get options :search-columns)
                 org-files-db-search-columns))
+             (org-files-db-heading-sort
+              (if (plist-member options :heading-sort)
+                  (plist-get options :heading-sort)
+                org-files-db-heading-sort))
+             (org-files-db-file-sort
+              (if (plist-member options :file-sort)
+                  (plist-get options :file-sort)
+                org-files-db-file-sort))
+             (org-files-db-link-sort
+              (if (plist-member options :link-sort)
+                  (plist-get options :link-sort)
+                org-files-db-link-sort))
+             (org-files-db-search-sort
+              (if (plist-member options :search-sort)
+                  (plist-get options :search-sort)
+                org-files-db-search-sort))
              (org-files-db-outline-path-separator
               (if (plist-member options :outline-separator)
                   (plist-get options :outline-separator)
@@ -1837,7 +1891,11 @@ Return only small control data suitable for async.el serialization."
                                (plist-get payload :columns)))
                              (publication-started-at (float-time))
                              (presentation
-                              (org-files-db-cache--prepare results columns))
+                              (org-files-db-cache--prepare
+                               results columns
+                               (org-files-db-cache--view-sort view)
+                               (org-files-db-cache--view-context view)
+                               (format "View `%s'" (car view))))
                              (publication-seconds
                               (org-files-db-cache--elapsed
                                publication-started-at))

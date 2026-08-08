@@ -33,6 +33,8 @@
 Each entry has the form (NAME :command COMMAND ...), where COMMAND is
 `query' or `search'.  An optional :config-file overrides
 `org-files-db-config-file'; an explicit nil disables --config for that view.
+An optional :sort overrides the configured default sorting; an explicit nil
+preserves the order returned by orgfdb.
 An optional :pre-cache t opts the view into generation-aware prepared
 completion caching while `org-files-db-cache-mode' is enabled."
   :type '(repeat sexp)
@@ -62,6 +64,27 @@ completion caching while `org-files-db-cache-mode' is enabled."
       (user-error "View `%s' has invalid :pre-cache %S" (car view) value))
     (eq value t)))
 
+(defun org-files-db-views--sort (view)
+  "Return VIEW's effective validated sort specification."
+  (let* ((properties (cdr view))
+         (command (org-files-db-views--command view))
+         (context
+          (if (eq command 'query)
+              (org-files-db--query-target (plist-get properties :query))
+            'search))
+         (columns
+          (org-files-db--normalize-columns
+           (or (plist-get properties :columns)
+               (org-files-db--default-columns context nil))))
+         (sort
+          (org-files-db--effective-sort
+           context
+           (plist-get properties :sort)
+           (not (null (plist-member properties :sort)))))
+         (origin (format "View `%s'" (car view))))
+    (org-files-db--normalize-sort sort columns context origin)
+    sort))
+
 (defun org-files-db-views--validate ()
   "Validate `org-files-db-views' and return it."
   (let ((seen (make-hash-table :test #'equal)))
@@ -73,7 +96,8 @@ completion caching while `org-files-db-cache-mode' is enabled."
           (user-error "Duplicate org-files-db view name: %s" name))
         (puthash name t seen)
         (org-files-db-views--command view)
-        (org-files-db-views--pre-cache-p view)))
+        (org-files-db-views--pre-cache-p view)
+        (org-files-db-views--sort view)))
     org-files-db-views))
 
 (defun org-files-db-views-get (name)
@@ -156,6 +180,7 @@ argument or FORCE-REFRESH bypasses and replaces any prepared cache."
     (let ((query (plist-get (cdr view) :query))
           (columns (plist-get (cdr view) :columns))
           (action (org-files-db-views--action view))
+          (sort (org-files-db-views--sort view))
           (config-file (org-files-db-views--config-file view)))
       (unless query
         (user-error "Query view `%s' has no :query" name))
@@ -164,7 +189,7 @@ argument or FORCE-REFRESH bypasses and replaces any prepared cache."
           (org-files-db-cache-present-view
            view config-file action "Query result: " force-refresh)
         (org-files-db-query
-         query columns action :config-file config-file)))))
+         query columns action :config-file config-file :sort sort)))))
 
 ;;;###autoload
 (cl-defun org-files-db-views-search (&optional name &key force-refresh)
@@ -179,6 +204,7 @@ argument or FORCE-REFRESH bypasses and replaces any prepared cache."
     (let ((expression (plist-get (cdr view) :expression))
           (columns (plist-get (cdr view) :columns))
           (action (org-files-db-views--action view))
+          (sort (org-files-db-views--sort view))
           (scope (or (plist-get (cdr view) :scope) 'all))
           (config-file (org-files-db-views--config-file view)))
       (unless (and (stringp expression)
@@ -191,7 +217,8 @@ argument or FORCE-REFRESH bypasses and replaces any prepared cache."
         (org-files-db-search
          expression columns action
          :scope scope
-         :config-file config-file)))))
+         :config-file config-file
+         :sort sort)))))
 
 ;;;###autoload
 (defun org-files-db-views-refresh-cache (name &optional synchronous)

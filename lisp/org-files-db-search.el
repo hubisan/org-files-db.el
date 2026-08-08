@@ -52,7 +52,7 @@ arguments."
       (while tail
         (let ((key (pop tail)))
           (pop tail)
-          (unless (memq key '(:scope :config-file))
+          (unless (memq key '(:scope :config-file :sort))
             (user-error "Unsupported org-files-db search option: %S" key)))))
     (when (and legacy-scope-p (plist-member keywords :scope))
       (user-error "Do not combine positional scope with :scope"))
@@ -65,15 +65,20 @@ arguments."
             (t 'all)))
           :config-file (plist-get keywords :config-file)
           :config-file-supplied-p
-          (not (null (plist-member keywords :config-file))))))
+          (not (null (plist-member keywords :config-file)))
+          :sort (plist-get keywords :sort)
+          :sort-supplied-p
+          (not (null (plist-member keywords :sort))))))
 
 ;;;###autoload
 (defun org-files-db-search (expression &optional columns action &rest options)
   "Search for EXPRESSION and select a result displayed with COLUMNS.
 ACTION receives the selected result object.  OPTIONS accepts :scope with
-one of `all', `title', or `body', plus :config-file.  When :config-file is
-omitted, inherit `org-files-db-config-file'; an explicit nil disables
---config for this call.  A leading positional scope remains supported."
+one of `all', `title', or `body', plus :config-file and :sort.
+When :config-file is omitted, inherit `org-files-db-config-file'; an explicit
+nil disables --config for this call.  When :sort is omitted, use
+`org-files-db-search-sort'; an explicit nil preserves orgfdb relevance order.
+A leading positional scope remains supported."
   (interactive
    (list (read-string "FTS5 search: ") nil nil))
   (let* ((parsed (org-files-db-search--parse-options options))
@@ -83,14 +88,22 @@ omitted, inherit `org-files-db-config-file'; an explicit nil disables
            (plist-get parsed :config-file)
            (plist-get parsed :config-file-supplied-p)
            "Search"))
+         (sort
+          (org-files-db--effective-sort
+           'search
+           (plist-get parsed :sort)
+           (plist-get parsed :sort-supplied-p)))
          (fetched
           (org-files-db--fetch-search
-           expression columns scope effective-config-file "Search")))
+           expression columns scope effective-config-file "Search" sort)))
     (org-files-db--present-results
      (plist-get fetched :results)
      (plist-get fetched :columns)
      action
-     "Search result: ")))
+     "Search result: "
+     (plist-get fetched :sort)
+     'search
+     "Search")))
 
 (defun org-files-db-search--status-candidate (message)
   "Return a non-selectable live-search status candidate for MESSAGE."
@@ -99,9 +112,9 @@ omitted, inherit `org-files-db-config-file'; an explicit nil disables
               'consult--candidate nil))
 
 (cl-defun org-files-db-search--live-candidates
-    (expression columns scope
+    (expression columns scope sort
                 &optional (config-file nil config-file-supplied-p))
-  "Return live candidates for EXPRESSION using COLUMNS and SCOPE.
+  "Return live candidates for EXPRESSION using COLUMNS, SCOPE, and SORT.
 This function starts an asynchronous orgfdb process.  When Consult interrupts
 it because the minibuffer input changed, unwind cleanup cancels the obsolete
 process.  CONFIG-FILE selects the effective orgfdb configuration."
@@ -135,7 +148,8 @@ process.  CONFIG-FILE selects the effective orgfdb configuration."
                     (org-files-db--normalize-results response)
                     effective-config-file)))
               (if results
-                  (org-files-db--make-candidates results columns)
+                  (org-files-db--make-candidates
+                   results columns sort 'search "Live search")
                 (list (org-files-db-search--status-candidate "No matches"))))))
       (when (and process (not done))
         (org-files-db--cancel-process process)))))
@@ -152,8 +166,8 @@ process.  CONFIG-FILE selects the effective orgfdb configuration."
 (defun org-files-db-search-live (&optional columns action &rest options)
   "Search orgfdb interactively while input changes.
 COLUMNS controls candidate display, ACTION handles the selected result, and
-OPTIONS accepts :scope and :config-file as in `org-files-db-search'.  A leading
-positional scope remains supported.  This command requires Consult."
+OPTIONS accepts :scope, :config-file, and :sort as in `org-files-db-search'.
+A leading positional scope remains supported.  This command requires Consult."
   (interactive)
   (unless (require 'consult nil t)
     (user-error "Live search requires the Consult package"))
@@ -167,11 +181,18 @@ positional scope remains supported.  This command requires Consult."
          (columns
           (org-files-db--normalize-columns
            (or columns org-files-db-search-columns)))
+         (sort
+          (org-files-db--normalize-sort
+           (org-files-db--effective-sort
+            'search
+            (plist-get parsed :sort)
+            (plist-get parsed :sort-supplied-p))
+           columns 'search "Live search"))
          (collection
           (org-files-db-search--consult-dynamic-collection
            (lambda (input)
              (org-files-db-search--live-candidates
-              input columns scope effective-config-file))
+              input columns scope sort effective-config-file))
            :min-input org-files-db-search-min-input))
          (result
           (org-files-db-search--consult-read

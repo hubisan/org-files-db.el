@@ -94,6 +94,12 @@
       (setq matches (cdr matches)))
     (nreverse result)))
 
+(defun org-files-db-test--sort-names (sort)
+  "Return normalized column names represented by SORT."
+  (if (vectorp sort)
+      (mapcar #'org-files-db--presentation-sort-name (append sort nil))
+    (mapcar #'car sort)))
+
 (describe "org-files-db"
 
 (before-each
@@ -117,6 +123,10 @@
   (set-file-modes org-files-db-test--executable #o755)
   (setq org-files-db-executable org-files-db-test--executable
         org-files-db-config-file nil
+        org-files-db-heading-sort nil
+        org-files-db-file-sort nil
+        org-files-db-link-sort nil
+        org-files-db-search-sort nil
         org-files-db-views nil
         org-files-db-export-layout 'flat
         org-files-db-export-linked-heading-style 'preserve))
@@ -430,6 +440,20 @@
       (expect calls :to-equal 1)
       (expect seen-includes :to-equal '(path target))))
 
+  (it "infers query includes from undisplayed sort columns"
+    (let (seen-includes)
+      (cl-letf (((symbol-function 'org-files-db--execute-query)
+                 (lambda (_query &optional _config _origin includes)
+                   (setq seen-includes includes)
+                   '((target . "links") (results . nil))))
+                ((symbol-function 'org-files-db--present-results)
+                 (lambda (&rest _) nil)))
+        (org-files-db-query
+         '(links (status "resolved"))
+         '((link-type)) nil
+         :sort '((target-outline-path))))
+      (expect seen-includes :to-equal '(target))))
+
   (it "retains response-target fallback for default query columns"
     (let (seen-columns)
       (cl-letf (((symbol-function 'org-files-db--execute-query)
@@ -465,6 +489,15 @@
             :to-equal '("--format" "json" "--title" "sqlite"))
     (expect (org-files-db--search-arguments "sqlite" 'body)
             :to-equal '("--format" "json" "--body" "sqlite")))
+
+  (it "parses search sort options without changing legacy scope support"
+    (let ((parsed
+           (org-files-db-search--parse-options
+            '(title :sort ((rank :direction desc))))))
+      (expect (plist-get parsed :scope) :to-equal 'title)
+      (expect (plist-get parsed :sort)
+              :to-equal '((rank :direction desc)))
+      (expect (plist-get parsed :sort-supplied-p) :to-equal t)))
 
   (it "executes the real fake CLI response"
     (let ((response (org-files-db--execute-query '(headings))))
@@ -584,6 +617,49 @@
           (org-files-db-query
            '(headings) nil nil :config-file override)
           (expect seen-config :to-equal override))))))
+
+(describe "per-command sorting"
+  (it "uses heading defaults and lets explicit nil preserve CLI order"
+    (let ((org-files-db-heading-sort '((priority)))
+          seen-sorts)
+      (cl-letf (((symbol-function 'org-files-db--execute-query)
+                 (lambda (&rest _)
+                   '((target . "headings") (results . nil))))
+                ((symbol-function 'org-files-db--present-results)
+                 (lambda (_results _columns _action _prompt sort &rest _)
+                   (push (org-files-db-test--sort-names sort) seen-sorts))))
+        (org-files-db-query '(headings))
+        (org-files-db-query '(headings) nil nil :sort nil))
+      (expect (nreverse seen-sorts) :to-equal '((priority) nil))))
+
+  (it "uses search defaults and lets explicit nil preserve relevance order"
+    (let ((org-files-db-search-sort '((title)))
+          seen-sorts)
+      (cl-letf (((symbol-function 'org-files-db--execute-search)
+                 (lambda (&rest _) '((results . nil))))
+                ((symbol-function 'org-files-db--present-results)
+                 (lambda (_results _columns _action _prompt sort &rest _)
+                   (push (org-files-db-test--sort-names sort) seen-sorts))))
+        (org-files-db-search "x")
+        (org-files-db-search "x" nil nil :sort nil))
+      (expect (nreverse seen-sorts) :to-equal '((title) nil))))
+
+  (it "uses different query defaults for files and links"
+    (let ((org-files-db-file-sort '((file-name)))
+          (org-files-db-link-sort '((link-type)))
+          seen-sorts)
+      (cl-letf (((symbol-function 'org-files-db--execute-query)
+                 (lambda (query &rest _)
+                   (list (cons 'target
+                               (if (eq (car query) 'files) "files" "links"))
+                         '(results . nil))))
+                ((symbol-function 'org-files-db--present-results)
+                 (lambda (_results _columns _action _prompt sort &rest _)
+                   (push (org-files-db-test--sort-names sort) seen-sorts))))
+        (org-files-db-query '(files))
+        (org-files-db-query '(links)))
+      (expect (nreverse seen-sorts)
+              :to-equal '((file-name) (link-type))))))
 
 (describe "columns and completion candidates"
   (it "supports auto, maximum, and fixed widths"
@@ -1336,6 +1412,252 @@
       (expect (length results) :to-equal 1)
       (expect (hash-table-p (car results)) :to-equal t)))
 
+(describe "result sorting"
+  (it "sorts text case-insensitively and preserves equal source order"
+    (let* ((results '(((title . "beta") (kind . "heading"))
+                      ((title . "Alpha") (kind . "heading"))
+                      ((title . "alpha") (kind . "heading"))
+                      ((title . "Zulu") (kind . "heading"))))
+           (sorted
+            (org-files-db--sort-results
+             results '((title)) '((title)) 'headings "Test")))
+      (expect (mapcar (lambda (result) (alist-get 'title result)) sorted)
+              :to-equal '("Alpha" "alpha" "beta" "Zulu"))))
+
+  (it "supports descending text and explicit case sensitivity"
+    (let* ((results '(((title . "a") (kind . "heading"))
+                      ((title . "B") (kind . "heading"))
+                      ((title . "A") (kind . "heading"))))
+           (sorted
+            (org-files-db--sort-results
+             results nil
+             '((title :direction desc :case-fold nil))
+             'headings "Test")))
+      (expect (mapcar (lambda (result) (alist-get 'title result)) sorted)
+              :to-equal '("a" "B" "A"))))
+
+  (it "sorts numeric values numerically"
+    (let* ((results
+            '(((kind . "heading") (title . "ten")
+               (location . ((line . 10))))
+              ((kind . "heading") (title . "two")
+               (location . ((line . 2))))
+              ((kind . "heading") (title . "hundred")
+               (location . ((line . 100))))))
+           (sorted
+            (org-files-db--sort-results
+             results nil '((line-number)) 'headings "Test")))
+      (expect (mapcar (lambda (result) (alist-get 'title result)) sorted)
+              :to-equal '("two" "ten" "hundred"))))
+
+  (it "sorts search rank numerically"
+    (let* ((results '(((kind . "heading") (title . "A") (rank . 10))
+                      ((kind . "heading") (title . "B") (rank . 2))
+                      ((kind . "heading") (title . "C") (rank . 100))))
+           (sorted
+            (org-files-db--sort-results
+             results nil '((rank)) 'search "Search")))
+      (expect (mapcar (lambda (result) (alist-get 'title result)) sorted)
+              :to-equal '("B" "A" "C"))))
+
+  (it "sorts Org priorities naturally and honors missing placement"
+    (let* ((results '(((kind . "heading") (title . "none"))
+                      ((kind . "heading") (title . "C") (priority . "C"))
+                      ((kind . "heading") (title . "A") (priority . "A"))
+                      ((kind . "heading") (title . "B") (priority . "B"))))
+           (ascending
+            (org-files-db--sort-results
+             results nil '((priority :missing last)) 'headings "Test"))
+           (descending
+            (org-files-db--sort-results
+             results nil
+             '((priority :direction desc :missing first))
+             'headings "Test")))
+      (expect (mapcar (lambda (result) (alist-get 'title result)) ascending)
+              :to-equal '("A" "B" "C" "none"))
+      (expect (mapcar (lambda (result) (alist-get 'title result)) descending)
+              :to-equal '("none" "C" "B" "A"))))
+
+  (it "sorts timestamps chronologically and treats invalid values as missing"
+    (let* ((results
+            '(((kind . "heading") (title . "later")
+               (scheduled_raw . "<2026-08-10 Mon 10:00>"))
+              ((kind . "heading") (title . "invalid")
+               (scheduled_raw . "not-a-time"))
+              ((kind . "heading") (title . "earlier")
+               (scheduled_raw . "<2026-08-09 Sun 09:00>"))))
+           (sorted
+            (org-files-db--sort-results
+             results nil '((scheduled-raw :missing last))
+             'headings "Test")))
+      (expect (mapcar (lambda (result) (alist-get 'title result)) sorted)
+              :to-equal '("earlier" "later" "invalid"))))
+
+  (it "parses each timestamp sort key only once"
+    (let* ((results
+            '(((kind . "heading")
+               (scheduled_raw . "<2026-08-10 Mon 10:00>"))
+              ((kind . "heading")
+               (scheduled_raw . "<2026-08-09 Sun 09:00>"))
+              ((kind . "heading")
+               (scheduled_raw . "<2026-08-11 Tue 11:00>"))))
+           (original (symbol-function 'org-time-string-to-time))
+           (calls 0))
+      (cl-letf (((symbol-function 'org-time-string-to-time)
+                 (lambda (value)
+                   (setq calls (1+ calls))
+                   (funcall original value))))
+        (org-files-db--sort-results
+         results nil '((scheduled-raw)) 'headings "Test"))
+      (expect calls :to-equal 3)))
+
+  (it "sorts outline paths structurally instead of by presentation separator"
+    (let* ((left
+            '((kind . "heading") (title . "Zulu")
+              (node_path . (((kind . "file") (title . "Root"))
+                            ((kind . "heading") (title . "Alpha"))
+                            ((kind . "heading") (title . "Zulu"))))))
+           (right
+            '((kind . "heading") (title . "Alpha")
+              (node_path . (((kind . "file") (title . "Root"))
+                            ((kind . "heading") (title . "Beta"))
+                            ((kind . "heading") (title . "Alpha"))))))
+           (columns
+            '((outline-path :separator " ~~ " :width (fixed 8)
+                            :truncate (:position middle :marker "…"))))
+           (sorted
+            (org-files-db--sort-results
+             (list right left) columns '((outline-path))
+             'headings "Test")))
+      (expect (mapcar (lambda (result) (alist-get 'title result)) sorted)
+              :to-equal '("Zulu" "Alpha"))))
+
+  (it "applies missing placement to absent outline paths"
+    (let* ((with-path
+            '((kind . "heading") (title . "With path")
+              (node_path . (((kind . "heading") (title . "Parent"))
+                            ((kind . "heading") (title . "Child"))))))
+           (without-path '((kind . "heading") (title . "Without path")))
+           (sorted
+            (org-files-db--sort-results
+             (list without-path with-path) nil
+             '((outline-path :missing last)) 'headings "Test")))
+      (expect (mapcar (lambda (result) (alist-get 'title result)) sorted)
+              :to-equal '("With path" "Without path"))))
+
+  (it "sorts aggregate tags by their complete collections"
+    (let* ((results '(((kind . "heading") (title . "B")
+                       (all_tags . ("project" "z")))
+                      ((kind . "heading") (title . "A")
+                       (all_tags . ("project" "a")))
+                      ((kind . "heading") (title . "Missing"))))
+           (sorted
+            (org-files-db--sort-results
+             results '((tags :width (fixed 4)))
+             '((tags :missing last)) 'headings "Test")))
+      (expect (mapcar (lambda (result) (alist-get 'title result)) sorted)
+              :to-equal '("A" "B" "Missing"))))
+
+  (it "sorts by undisplayed columns and multiple cached keys"
+    (let* ((results '(((kind . "heading") (title . "Beta") (priority . "B"))
+                      ((kind . "heading") (title . "Zulu") (priority . "A"))
+                      ((kind . "heading") (title . "Alpha") (priority . "A"))))
+           (presentation
+            (org-files-db--prepare-presentation
+             results '((title :width (max 20)))
+             '((priority) (title)) 'headings "Test"))
+           (candidates (org-files-db--presentation-candidates presentation)))
+      (expect
+       (mapcar
+        (lambda (candidate)
+          (alist-get 'title (get-text-property 0 'org-files-db-result candidate)))
+        candidates)
+       :to-equal '("Alpha" "Zulu" "Beta"))
+      (expect (numberp
+               (plist-get (org-files-db--presentation-timings presentation)
+                          :sort-key-preparation))
+              :to-equal t)
+      (expect (numberp
+               (plist-get (org-files-db--presentation-timings presentation)
+                          :sorting))
+              :to-equal t)))
+
+  (it "reuses displayed values when the same column is also a sort key"
+    (let* ((results '(((kind . "heading") (title . "Beta"))
+                      ((kind . "heading") (title . "Alpha"))
+                      ((kind . "heading") (title . "Zulu"))))
+           (columns (org-files-db--normalize-columns '((title))))
+           (column (aref columns 0))
+           (extractor (org-files-db--presentation-column-extractor column))
+           (calls 0))
+      (setf (org-files-db--presentation-column-extractor column)
+            (lambda (source normalized-column)
+              (setq calls (1+ calls))
+              (funcall extractor source normalized-column)))
+      (let ((presentation
+             (org-files-db--prepare-presentation
+              results columns '((title)) 'headings "Test")))
+        (expect calls :to-equal 3)
+        (expect
+         (mapcar
+          (lambda (candidate)
+            (alist-get 'title
+                       (get-text-property 0 'org-files-db-result candidate)))
+          (org-files-db--presentation-candidates presentation))
+         :to-equal '("Alpha" "Beta" "Zulu")))))
+
+  (it "keeps an empty normalized sort on the no-sort fast path"
+    (let ((results '(((kind . "heading") (title . "Zulu"))
+                     ((kind . "heading") (title . "Alpha")))))
+      (expect (eq results
+                  (org-files-db--sort-results
+                   results nil [] 'headings "Test"))
+              :to-equal t)))
+
+  (it "keeps equal non-ASCII keys stable after case folding"
+    (let* ((results '(((kind . "heading") (title . "ÄPFEL") (line . 1))
+                      ((kind . "heading") (title . "äpfel") (line . 2))
+                      ((kind . "heading") (title . "Über") (line . 3))))
+           (sorted
+            (org-files-db--sort-results
+             results nil '((title)) 'headings "Test")))
+      (expect (mapcar (lambda (result) (alist-get 'title result)) sorted)
+              :to-equal '("ÄPFEL" "äpfel" "Über"))))
+
+  (it "infers includes required only by sort columns"
+    (expect
+     (org-files-db--sort-includes
+      '((target-outline-path)) '((link-type)) 'links "Test")
+     :to-equal '(target))
+    (expect
+     (org-files-db--sort-includes
+      '((source-outline-path)) '((link-type)) 'links "Test")
+     :to-equal '(path)))
+
+  (it "validates sort syntax options and result availability"
+    (dolist
+        (sort '((title)
+                ((title :direction sideways))
+                ((title :missing middle))
+                ((title :case-fold yes))
+                ((rank))))
+      (expect
+       (org-files-db--normalize-sort sort [] 'headings "Query")
+       :to-throw 'user-error))
+    (expect
+     (org-files-db--normalize-sort '((tag)) [] 'headings "Query")
+     :to-throw 'user-error)
+    (expect
+     (org-files-db--normalize-sort '((title :direction)) [] 'headings "Query")
+     :to-throw 'user-error))
+
+  (it "resolves omitted and explicit nil sort defaults independently"
+    (let ((org-files-db-heading-sort '((priority))))
+      (expect (org-files-db--effective-sort 'headings nil nil)
+              :to-equal '((priority)))
+      (expect (org-files-db--effective-sort 'headings nil t)
+              :to-equal nil))))
+
 (describe "UTF-8 locations"
   (it "converts zero-based UTF-8 offsets to Emacs positions"
     (let* ((file (org-files-db-test--write-file "utf8.org" "äöü\n* Ziel\n"))
@@ -1384,6 +1706,68 @@
       (expect (car arguments) :to-equal "sqlite")
       (expect (plist-get (nthcdr 3 arguments) :scope) :to-equal 'title)
       (expect (plist-get (nthcdr 3 arguments) :config-file) :to-equal nil)))
+
+  (it "lets views inherit override and explicitly disable sorting"
+    (let ((org-files-db-heading-sort '((priority)))
+          inherited-arguments override-arguments disabled-arguments)
+      (setq org-files-db-views
+            '(("inherited" :command query :query (headings))
+              ("override" :command query :query (headings)
+               :sort ((title :direction desc)))
+              ("disabled" :command query :query (headings) :sort nil)))
+      (cl-letf (((symbol-function 'org-files-db-query)
+                 (lambda (&rest args)
+                   (pcase (car args)
+                     ('(headings)
+                      (cond
+                       ((null inherited-arguments)
+                        (setq inherited-arguments args))
+                       ((null override-arguments)
+                        (setq override-arguments args))
+                       (t (setq disabled-arguments args))))))))
+        (org-files-db-views-query "inherited")
+        (org-files-db-views-query "override")
+        (org-files-db-views-query "disabled"))
+      (expect (plist-get (nthcdr 3 inherited-arguments) :sort)
+              :to-equal '((priority)))
+      (expect (plist-get (nthcdr 3 override-arguments) :sort)
+              :to-equal '((title :direction desc)))
+      (expect (not (null
+                    (plist-member (nthcdr 3 disabled-arguments) :sort)))
+              :to-equal t)
+      (expect (plist-get (nthcdr 3 disabled-arguments) :sort)
+              :to-equal nil)))
+
+  (it "lets search views inherit and explicitly disable sorting"
+    (let ((org-files-db-search-sort '((title)))
+          inherited-arguments disabled-arguments)
+      (setq org-files-db-views
+            '(("search-inherited" :command search :expression "x")
+              ("search-disabled" :command search :expression "x" :sort nil)))
+      (cl-letf (((symbol-function 'org-files-db-search)
+                 (lambda (&rest args)
+                   (if inherited-arguments
+                       (setq disabled-arguments args)
+                     (setq inherited-arguments args)))))
+        (org-files-db-views-search "search-inherited")
+        (org-files-db-views-search "search-disabled"))
+      (expect (plist-get (nthcdr 3 inherited-arguments) :sort)
+              :to-equal '((title)))
+      (expect (not (null
+                    (plist-member (nthcdr 3 disabled-arguments) :sort)))
+              :to-equal t)
+      (expect (plist-get (nthcdr 3 disabled-arguments) :sort)
+              :to-equal nil)))
+
+  (it "reports invalid view sort columns while validating the named view"
+    (setq org-files-db-views
+          '(("bad-sort" :command query :query (headings) :sort ((rank)))))
+    (condition-case err
+        (progn
+          (org-files-db-views--validate)
+          (error "Expected invalid view sorting"))
+      (user-error
+       (expect (error-message-string err) :to-match "View `bad-sort'"))))
 
   (it "passes an inherited global configuration explicitly"
     (let ((config (org-files-db-test--write-file
@@ -1486,7 +1870,34 @@
                                     (buffer-string))))))
         (org-files-db-export-embark-org (list candidate)))
       (expect exported :to-match "org-files-db results")
-      (expect exported :to-match "One"))))
+      (expect exported :to-match "One")))
+
+  (it "preserves prepared sorted order in flat and outline Embark exports"
+    (let* ((file (org-files-db-test--write-file
+                  "sorted-export.org" "* Parent\n** Zulu\n** Alpha\n"))
+           (zulu `((kind . "heading") (title . "Zulu") (level . 2)
+                   (node_path . (((kind . "heading") (title . "Parent")
+                                  (level . 1))))
+                   (location . ((file_path . ,file) (line . 2)))))
+           (alpha `((kind . "heading") (title . "Alpha") (level . 2)
+                    (node_path . (((kind . "heading") (title . "Parent")
+                                   (level . 1))))
+                    (location . ((file_path . ,file) (line . 3)))))
+           (presentation
+            (org-files-db--prepare-presentation
+             (list zulu alpha) '((title)) '((title)) 'headings "Export"))
+           (candidates (org-files-db--presentation-candidates presentation)))
+      (dolist (layout '(flat outline))
+        (let ((org-files-db-export-layout layout)
+              exported)
+          (cl-letf (((symbol-function 'pop-to-buffer)
+                     (lambda (buffer &rest _)
+                       (setq exported
+                             (with-current-buffer buffer (buffer-string))))))
+            (org-files-db-export-embark-org candidates))
+          (expect (< (string-match "Alpha" exported)
+                         (string-match "Zulu" exported))
+                  :to-equal t))))))
 
 (describe "link actions"
   (it "inserts a normal file link"
@@ -1649,6 +2060,71 @@
         (expect (buffer-string) :to-match "Dynamic"))
       (expect seen-config :to-equal config)))
 
+  (it "sorts direct query blocks before rendering"
+    (let ((left '((kind . "heading") (title . "Zulu")
+                  (location . ((file_path . "/tmp/z.org") (line . 1)))))
+          (right '((kind . "heading") (title . "Alpha")
+                   (location . ((file_path . "/tmp/a.org") (line . 1))))))
+      (with-temp-buffer
+        (org-mode)
+        (cl-letf (((symbol-function 'org-files-db--execute-query)
+                   (lambda (&rest _)
+                     `((target . "headings")
+                       (results . (,left ,right))))))
+          (org-dblock-write:org-files-db-query
+           '(:query "(headings)"
+             :sort "((title :direction asc))"
+             :layout flat)))
+        (let ((text (buffer-string)))
+          (expect (< (string-match "Alpha" text)
+                         (string-match "Zulu" text))
+                  :to-equal t)))))
+
+  (it "inherits view sorting in dynamic query blocks"
+    (setq org-files-db-views
+          '(("sorted" :command query :query (headings)
+             :sort ((title :direction desc)))))
+    (let ((alpha '((kind . "heading") (title . "Alpha")
+                   (location . ((file_path . "/tmp/a.org") (line . 1)))))
+          (zulu '((kind . "heading") (title . "Zulu")
+                  (location . ((file_path . "/tmp/z.org") (line . 1))))))
+      (with-temp-buffer
+        (org-mode)
+        (cl-letf (((symbol-function 'org-files-db--execute-query)
+                   (lambda (&rest _)
+                     `((target . "headings")
+                       (results . (,alpha ,zulu))))))
+          (org-dblock-write:org-files-db-query
+           '(:view "sorted" :layout flat)))
+        (let ((text (buffer-string)))
+          (expect (< (string-match "Zulu" text)
+                         (string-match "Alpha" text))
+                  :to-equal t)))))
+
+  (it "lets explicit nil dynamic sort preserve CLI order over a global default"
+    (let ((org-files-db-heading-sort '((title)))
+          (zulu '((kind . "heading") (title . "Zulu")
+                  (location . ((file_path . "/tmp/z.org") (line . 1)))))
+          (alpha '((kind . "heading") (title . "Alpha")
+                   (location . ((file_path . "/tmp/a.org") (line . 1))))))
+      (with-temp-buffer
+        (org-mode)
+        (cl-letf (((symbol-function 'org-files-db--execute-query)
+                   (lambda (&rest _)
+                     `((target . "headings")
+                       (results . (,zulu ,alpha))))))
+          (org-dblock-write:org-files-db-query
+           '(:query "(headings)" :sort "nil" :layout flat)))
+        (let ((text (buffer-string)))
+          (expect (< (string-match "Zulu" text)
+                         (string-match "Alpha" text))
+                  :to-equal t)))))
+
+  (it "parses dynamic sort expressions with read-time evaluation disabled"
+    (expect
+     (org-files-db-dblock--sort-value "#.(error \"unsafe\")")
+     :to-throw 'user-error))
+
   (it "lets direct dynamic blocks inherit or disable configuration"
     (let ((global (org-files-db-test--write-file
                    "block-global.toml" "db_path='global'\n"))
@@ -1725,6 +2201,23 @@
       (expect seen-scope :to-equal 'title)
       (expect seen-config :to-equal config)))
 
+  (it "sorts direct search blocks before rendering"
+    (let ((results
+           '(((kind . "heading") (title . "Zulu") (rank . 2)
+              (location . ((file_path . "/tmp/z.org") (line . 1))))
+             ((kind . "heading") (title . "Alpha") (rank . 1)
+              (location . ((file_path . "/tmp/a.org") (line . 1)))))))
+      (with-temp-buffer
+        (org-mode)
+        (cl-letf (((symbol-function 'org-files-db--execute-search)
+                   (lambda (&rest _) `((results . ,results)))))
+          (org-dblock-write:org-files-db-search
+           '(:expression "report" :sort "((rank))" :layout flat)))
+        (let ((text (buffer-string)))
+          (expect (< (string-match "Alpha" text)
+                         (string-match "Zulu" text))
+                  :to-equal t)))))
+
   (it "does not interpret nil text as a configuration path"
     (expect (org-files-db-dblock--config-file
              '(:query "(headings)" :config-file "nil")
@@ -1764,7 +2257,7 @@
       (cl-letf (((symbol-function 'org-files-db-search--consult-dynamic-collection)
                  (lambda (function &rest _) function))
                 ((symbol-function 'org-files-db-search--live-candidates)
-                 (lambda (_input _columns scope config-file)
+                 (lambda (_input _columns scope _sort config-file)
                    (setq seen-scope scope
                          seen-config config-file)
                    nil))
@@ -1796,16 +2289,43 @@
                    'fake-process)))
         (setq candidates
               (org-files-db-search--live-candidates
-               "report" '((title :width auto)) 'all config)))
+               "report" '((title :width auto)) 'all nil config)))
       (setq candidate-result
             (get-text-property 0 'org-files-db-result (car candidates)))
       (expect (not (null (member config arguments))) :to-equal t)
       (expect (org-files-db--result-config-file candidate-result)
-              :to-equal config))))
+              :to-equal config)))
+
+  (it "passes effective sorting into live candidate generation"
+    (let ((features (cons 'consult features))
+          (org-files-db-search-sort '((title)))
+          seen-sorts
+          (result '((kind . "heading") (title . "Live"))))
+      (cl-letf (((symbol-function 'org-files-db-search--consult-dynamic-collection)
+                 (lambda (function &rest _) function))
+                ((symbol-function 'org-files-db-search--live-candidates)
+                 (lambda (_input _columns _scope sort _config-file)
+                   (push (org-files-db-test--sort-names sort) seen-sorts)
+                   nil))
+                ((symbol-function 'org-files-db-search--consult-read)
+                 (lambda (collection &rest _)
+                   (funcall collection "report")
+                   result)))
+        (org-files-db-search-live nil #'ignore)
+        (org-files-db-search-live nil #'ignore :sort nil))
+      (expect (nreverse seen-sorts) :to-equal '((title) nil)))))
 
 (describe "asynchronous process support"
   (it "delivers parsed JSON to its callback"
-    (let (done value failure process)
+    (let* ((executable
+            (org-files-db-test--write-file
+             "async-orgfdb"
+             (concat
+              "#!/bin/sh\n"
+              "printf '%s\\n' '[{\"kind\":\"heading\",\"title\":\"Search result\",\"rank\":-1.0,\"location\":{\"file_path\":\"/tmp/search.org\",\"line\":2,\"byte_start\":3}}]'\n")))
+           (org-files-db-executable executable)
+           done value failure process)
+      (set-file-modes executable #o755)
       (setq process
             (org-files-db--start-process
              "search" '("--format" "json" "x")

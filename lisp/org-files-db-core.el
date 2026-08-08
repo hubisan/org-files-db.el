@@ -115,6 +115,26 @@ do not pass the --config option unless a command-specific path is supplied."
   :type '(repeat sexp)
   :group 'org-files-db)
 
+(defcustom org-files-db-heading-sort nil
+  "Default sorting for heading query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-file-sort nil
+  "Default sorting for file query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-link-sort nil
+  "Default sorting for link query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-search-sort nil
+  "Default sorting for full-text search results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
 (defcustom org-files-db-query-action #'org-files-db-actions-open-result
   "Function called with the selected query or search result."
   :type 'function
@@ -1188,6 +1208,16 @@ Return a result-like alist for the target."
   cells
   sort-keys)
 
+(cl-defstruct org-files-db--presentation-sort
+  "One normalized sort specification used by a presentation."
+  name
+  column
+  column-index
+  kind
+  direction
+  missing
+  case-fold)
+
 (cl-defstruct org-files-db--presentation
   "Complete eagerly prepared result presentation."
   columns
@@ -1523,6 +1553,401 @@ Return a result-like alist for the target."
   (if (org-files-db--normalized-columns-p columns)
       columns
     (vconcat (mapcar #'org-files-db--normalize-column columns))))
+
+(defconst org-files-db--sort-columns-by-context
+  '((heading
+     title todo-keyword todo-type priority outline-path tags file-title
+     file-name file-path line-number scheduled-raw deadline-raw closed-raw)
+    (file
+     file-title file-name file-path tags line-number)
+    (link
+     link-type link-target link-description resolution-status
+     source-outline-path target-outline-path file-name file-path line-number)
+    (search
+     title outline-path file-name file-path line-number rank))
+  "Public sort columns supported for each result context.")
+
+(defconst org-files-db--row-sort-columns
+  '((tag . tags)
+    (property-name . effective-properties)
+    (property-value . effective-properties)
+    (keyword-name . keywords)
+    (keyword-value . keywords))
+  "Singular sort columns reserved for row-expanded presentations.")
+
+(defconst org-files-db--sort-missing
+  (make-symbol "org-files-db-sort-missing")
+  "Sentinel stored for missing normalized sort values.")
+
+(defun org-files-db--sort-context (context)
+  "Return canonical sort CONTEXT symbol."
+  (pcase context
+    ((or 'heading 'headings) 'heading)
+    ((or 'file 'files) 'file)
+    ((or 'link 'links) 'link)
+    ('search 'search)
+    (_ (user-error "Unsupported org-files-db sort context: %S" context))))
+
+(defun org-files-db--default-sort (context)
+  "Return configured default sort specification for CONTEXT."
+  (pcase (org-files-db--sort-context context)
+    ('heading org-files-db-heading-sort)
+    ('file org-files-db-file-sort)
+    ('link org-files-db-link-sort)
+    ('search org-files-db-search-sort)))
+
+(defun org-files-db--effective-sort (context sort supplied-p)
+  "Return effective SORT for CONTEXT.
+When SUPPLIED-P is non-nil, SORT wins even when it is nil."
+  (if supplied-p sort (org-files-db--default-sort context)))
+
+(defun org-files-db--sort-user-error (origin format-string &rest arguments)
+  "Signal a sort validation error for ORIGIN using FORMAT-STRING and ARGUMENTS."
+  (user-error "%s: %s"
+              (or origin "Sorting")
+              (apply #'format format-string arguments)))
+
+(defun org-files-db--sort-column-index (columns name)
+  "Return the first index of column NAME in normalized COLUMNS, or nil."
+  (let ((index 0)
+        found)
+    (while (and (< index (length columns)) (null found))
+      (when (eq (org-files-db--presentation-column-name (aref columns index))
+                name)
+        (setq found index))
+      (setq index (1+ index)))
+    found))
+
+(defun org-files-db--sort-kind (name)
+  "Return normalized comparison kind for sort column NAME."
+  (pcase name
+    ((or 'line-number 'rank) 'number)
+    ('priority 'priority)
+    ((or 'scheduled-raw 'deadline-raw 'closed-raw) 'timestamp)
+    ((or 'outline-path 'source-outline-path 'target-outline-path) 'outline)
+    ('tags 'tags)
+    (_ 'text)))
+
+(defun org-files-db--normalize-sort-spec
+    (spec columns context origin &optional row-source)
+  "Normalize one sort SPEC for COLUMNS and CONTEXT.
+ORIGIN is used in validation errors.  ROW-SOURCE is reserved for expanded rows."
+  (unless (and (consp spec) (proper-list-p spec) (symbolp (car spec)))
+    (org-files-db--sort-user-error origin "Malformed sort specification: %S" spec))
+  (let* ((name (car spec))
+         (properties (cdr spec))
+         (row-requirement (assq name org-files-db--row-sort-columns))
+         (allowed (cdr (assq (org-files-db--sort-context context)
+                             org-files-db--sort-columns-by-context))))
+    (unless (zerop (mod (length properties) 2))
+      (org-files-db--sort-user-error
+       origin "Sort column %s has malformed options" name))
+    (when row-requirement
+      (unless (eq row-source (cdr row-requirement))
+        (org-files-db--sort-user-error
+         origin "Sort column %s requires :row-source %s"
+         name (cdr row-requirement))))
+    (unless (or row-requirement (memq name allowed))
+      (org-files-db--sort-user-error
+       origin "Sort column %s is unavailable for %s results"
+       name (org-files-db--sort-context context)))
+    (let ((tail properties))
+      (while tail
+        (let ((key (pop tail)))
+          (pop tail)
+          (unless (memq key '(:direction :missing :case-fold))
+            (org-files-db--sort-user-error
+             origin "Sort column %s has unsupported option %S" name key)))))
+    (let* ((direction (if (plist-member properties :direction)
+                          (plist-get properties :direction)
+                        'asc))
+           (missing (if (plist-member properties :missing)
+                        (plist-get properties :missing)
+                      'last))
+           (case-fold (if (plist-member properties :case-fold)
+                          (plist-get properties :case-fold)
+                        t))
+           (column-index (org-files-db--sort-column-index columns name))
+           (column (if column-index
+                       (aref columns column-index)
+                     (org-files-db--normalize-column (list name)))))
+      (unless (memq direction '(asc desc))
+        (org-files-db--sort-user-error
+         origin "Sort column %s has unsupported direction %S" name direction))
+      (unless (memq missing '(first last))
+        (org-files-db--sort-user-error
+         origin "Sort column %s has unsupported missing position %S" name missing))
+      (unless (memq case-fold '(nil t))
+        (org-files-db--sort-user-error
+         origin "Sort column %s has non-boolean :case-fold %S" name case-fold))
+      (make-org-files-db--presentation-sort
+       :name name
+       :column column
+       :column-index column-index
+       :kind (org-files-db--sort-kind name)
+       :direction direction
+       :missing missing
+       :case-fold case-fold))))
+
+(defun org-files-db--normalize-sort
+    (sort columns context &optional origin row-source)
+  "Normalize SORT using presentation COLUMNS for CONTEXT.
+ORIGIN is included in validation errors.  ROW-SOURCE supports future expanded
+rows.  Nil SORT returns an empty vector and therefore preserves source order."
+  (if (and (vectorp sort)
+           (or (zerop (length sort))
+               (org-files-db--presentation-sort-p (aref sort 0))))
+      sort
+    (unless (or (null sort) (and (listp sort) (proper-list-p sort)))
+      (org-files-db--sort-user-error origin "Malformed sort value: %S" sort))
+    (vconcat
+     (mapcar (lambda (spec)
+               (org-files-db--normalize-sort-spec
+                spec columns context origin row-source))
+             sort))))
+
+(defun org-files-db--sort-includes (sort columns context &optional origin row-source)
+  "Return CLI includes required by SORT for COLUMNS and CONTEXT.
+ORIGIN identifies validation errors; ROW-SOURCE describes expanded rows."
+  (let ((sorts (org-files-db--normalize-sort
+                sort (org-files-db--normalize-columns columns)
+                context origin row-source))
+        includes)
+    (cl-loop for spec across sorts
+             for include =
+             (org-files-db--presentation-column-required-include
+              (org-files-db--presentation-sort-column spec))
+             when (and include (not (memq include includes)))
+             do (setq includes (append includes (list include))))
+    includes))
+
+(defun org-files-db--sort-missing-value-p (value)
+  "Return non-nil when raw sort VALUE should be treated as missing."
+  (or (null value)
+      (and (stringp value) (string-empty-p value))
+      (and (sequencep value) (not (stringp value)) (zerop (length value)))))
+
+(defun org-files-db--sort-normalize-text (value case-fold)
+  "Normalize textual sort VALUE, applying CASE-FOLD once."
+  (if (org-files-db--sort-missing-value-p value)
+      org-files-db--sort-missing
+    (let ((text (org-files-db--presentation-display-value value)))
+      (if case-fold (downcase text) text))))
+
+(defun org-files-db--sort-normalize-number (value)
+  "Normalize numeric sort VALUE or return the missing sentinel."
+  (cond
+   ((numberp value) value)
+   ((and (stringp value)
+         (string-match-p
+          "\\`[[:space:]]*[+-]?[0-9]+\\(?:\\.[0-9]+\\)?[[:space:]]*\\'"
+          value))
+    (string-to-number value))
+   (t org-files-db--sort-missing)))
+
+(defun org-files-db--sort-normalize-priority (value case-fold)
+  "Normalize Org priority VALUE, respecting CASE-FOLD."
+  (cond
+   ((characterp value)
+    (org-files-db--sort-normalize-text (char-to-string value) case-fold))
+   (t (org-files-db--sort-normalize-text value case-fold))))
+
+(defun org-files-db--sort-normalize-timestamp (value)
+  "Normalize Org timestamp VALUE chronologically or mark it missing."
+  (if (not (and (stringp value) (not (string-empty-p value))))
+      org-files-db--sort-missing
+    (condition-case nil
+        (float-time (org-time-string-to-time value))
+      (error org-files-db--sort-missing))))
+
+(defun org-files-db--sort-normalize-string-sequence (values case-fold)
+  "Normalize string sequence VALUES once, respecting CASE-FOLD."
+  (if (org-files-db--sort-missing-value-p values)
+      org-files-db--sort-missing
+    (let ((items (cond
+                  ((vectorp values) (append values nil))
+                  ((listp values) values)
+                  (t (list values)))))
+      (vconcat
+       (mapcar (lambda (value)
+                 (let ((text (org-files-db--presentation-display-value value)))
+                   (if case-fold (downcase text) text)))
+               items)))))
+
+(defun org-files-db--presentation-outline-sort-value (source sort)
+  "Return structural outline sort value from SOURCE for normalized SORT."
+  (let* ((name (org-files-db--presentation-sort-name sort))
+         (column (org-files-db--presentation-sort-column sort))
+         (data
+          (pcase name
+            ('source-outline-path
+             (org-files-db--presentation-source-source-outline-data source))
+            ('target-outline-path
+             (org-files-db--presentation-source-target-outline-data source))
+            (_
+             (if (eq (org-files-db--presentation-source-kind source) 'link)
+                 (org-files-db--presentation-source-source-outline-data source)
+               (org-files-db--presentation-source-outline-data source)))))
+         (headings (and data (copy-sequence (cdr data))))
+         (root (and data (car data))))
+    (if (null data)
+        org-files-db--sort-missing
+      (unless (org-files-db--presentation-column-outline-include-match column)
+        (setq headings (butlast headings)))
+      (org-files-db--sort-normalize-string-sequence
+       (if (and
+            (org-files-db--presentation-column-outline-include-root column)
+            root)
+           (cons root headings)
+         headings)
+       (org-files-db--presentation-sort-case-fold sort)))))
+
+(defun org-files-db--presentation-sort-raw-value (row sort)
+  "Return ROW raw value for normalized SORT, reusing displayed cells."
+  (let ((column-index (org-files-db--presentation-sort-column-index sort)))
+    (if (and column-index (org-files-db--presentation-row-cells row))
+        (org-files-db--presentation-cell-logical-value
+         (aref (org-files-db--presentation-row-cells row) column-index))
+      (let ((source (org-files-db--presentation-row-source row))
+            (column (org-files-db--presentation-sort-column sort)))
+        (funcall (org-files-db--presentation-column-extractor column)
+                 source column)))))
+
+(defun org-files-db--presentation-sort-key (row sort)
+  "Calculate one normalized sort key for ROW according to SORT."
+  (let ((kind (org-files-db--presentation-sort-kind sort)))
+    (pcase kind
+      ('outline
+       (org-files-db--presentation-outline-sort-value
+        (org-files-db--presentation-row-source row) sort))
+      ('tags
+       (org-files-db--sort-normalize-string-sequence
+        (org-files-db--presentation-sort-raw-value row sort)
+        (org-files-db--presentation-sort-case-fold sort)))
+      ('number
+       (org-files-db--sort-normalize-number
+        (org-files-db--presentation-sort-raw-value row sort)))
+      ('priority
+       (org-files-db--sort-normalize-priority
+        (org-files-db--presentation-sort-raw-value row sort)
+        (org-files-db--presentation-sort-case-fold sort)))
+      ('timestamp
+       (org-files-db--sort-normalize-timestamp
+        (org-files-db--presentation-sort-raw-value row sort)))
+      (_
+       (org-files-db--sort-normalize-text
+        (org-files-db--presentation-sort-raw-value row sort)
+        (org-files-db--presentation-sort-case-fold sort))))))
+
+(defun org-files-db--presentation-prepare-sort-keys (rows sorts)
+  "Calculate all SORTS once for every entry in ROWS."
+  (dotimes (row-index (length rows))
+    (let ((keys (make-vector (length sorts) nil))
+          (row (aref rows row-index)))
+      (dotimes (sort-index (length sorts))
+        (aset keys sort-index
+              (org-files-db--presentation-sort-key
+               row (aref sorts sort-index))))
+      (setf (org-files-db--presentation-row-sort-keys row) keys)))
+  rows)
+
+(defun org-files-db--sort-compare-string-sequences (left right)
+  "Compare normalized string sequences LEFT and RIGHT.
+Return -1, 0, or 1 without allocating comparison strings."
+  (let ((index 0)
+        (left-length (length left))
+        (right-length (length right))
+        result)
+    (while (and (null result)
+                (< index left-length)
+                (< index right-length))
+      (let ((left-value (aref left index))
+            (right-value (aref right index)))
+        (cond
+         ((string< left-value right-value) (setq result -1))
+         ((string< right-value left-value) (setq result 1))))
+      (setq index (1+ index)))
+    (or result
+        (cond
+         ((< left-length right-length) -1)
+         ((> left-length right-length) 1)
+         (t 0)))))
+
+(defun org-files-db--sort-compare-values (left right kind)
+  "Compare normalized LEFT and RIGHT according to KIND."
+  (pcase kind
+    ((or 'number 'timestamp)
+     (cond ((< left right) -1) ((> left right) 1) (t 0)))
+    ((or 'outline 'tags)
+     (org-files-db--sort-compare-string-sequences left right))
+    (_
+     (cond ((string< left right) -1)
+           ((string< right left) 1)
+           (t 0)))))
+
+(defun org-files-db--presentation-compare-rows (left right sorts)
+  "Return non-nil when LEFT should sort before RIGHT according to SORTS."
+  (let ((index 0)
+        comparison)
+    (while (and (zerop (or comparison 0)) (< index (length sorts)))
+      (let* ((sort (aref sorts index))
+             (left-value
+              (aref (org-files-db--presentation-row-sort-keys left) index))
+             (right-value
+              (aref (org-files-db--presentation-row-sort-keys right) index))
+             (left-missing (eq left-value org-files-db--sort-missing))
+             (right-missing (eq right-value org-files-db--sort-missing)))
+        (setq comparison
+              (cond
+               ((and left-missing right-missing) 0)
+               (left-missing
+                (if (eq (org-files-db--presentation-sort-missing sort) 'first)
+                    -1 1))
+               (right-missing
+                (if (eq (org-files-db--presentation-sort-missing sort) 'first)
+                    1 -1))
+               (t
+                (let ((value
+                       (org-files-db--sort-compare-values
+                        left-value right-value
+                        (org-files-db--presentation-sort-kind sort))))
+                  (if (eq (org-files-db--presentation-sort-direction sort)
+                          'desc)
+                      (- value)
+                    value))))))
+      (setq index (1+ index)))
+    (if (zerop (or comparison 0))
+        (< (org-files-db--presentation-row-original-position left)
+           (org-files-db--presentation-row-original-position right))
+      (< comparison 0))))
+
+(defun org-files-db--presentation-sort-rows (rows sorts)
+  "Sort ROWS in place according to cached SORTS and return ROWS."
+  (if (zerop (length sorts))
+      rows
+    (cl-sort
+     rows
+     (lambda (left right)
+       (org-files-db--presentation-compare-rows left right sorts)))))
+
+(defun org-files-db--sort-results
+    (results columns sort context &optional origin row-source)
+  "Return RESULTS ordered by SORT using the shared presentation row pipeline.
+COLUMNS supplies public column options used by normalized sort descriptors.
+CONTEXT determines the public sort columns.  ORIGIN is used in validation
+errors.  ROW-SOURCE is reserved for expanded rows."
+  (if (or (null sort)
+          (and (vectorp sort) (zerop (length sort))))
+      results
+    (let* ((normalized-columns
+            (org-files-db--normalize-columns (or columns nil)))
+           (sorts (org-files-db--normalize-sort
+                   sort normalized-columns context origin row-source))
+           (sources (org-files-db--presentation-build-sources results))
+           (rows (org-files-db--presentation-build-rows sources)))
+      (org-files-db--presentation-prepare-sort-keys rows sorts)
+      (org-files-db--presentation-sort-rows rows sorts)
+      (mapcar #'org-files-db--presentation-row-result (append rows nil)))))
 
 (defun org-files-db--format-outline-data-for-column (data column)
   "Format outline DATA using normalized presentation COLUMN."
@@ -2181,17 +2606,27 @@ Set TIMING-VARIABLE and add details to METRICS-VARIABLE."
                    (funcall allocation-function allocation-before)))
         ,metrics-variable))))
 
-(defun org-files-db--prepare-presentation-1 (results columns)
-  "Eagerly prepare RESULTS for completion using COLUMNS without GC policy."
+(defun org-files-db--prepare-presentation-1
+    (results columns &optional sort context origin row-source)
+  "Eagerly prepare RESULTS for completion using COLUMNS without GC policy.
+SORT is an optional user-facing sort specification for CONTEXT.  ORIGIN is
+included in sort validation errors.  ROW-SOURCE is reserved for expanded rows."
   (let ((total-started (float-time))
-        normalized-columns sources rows widths face-cache candidates lookup
+        normalized-columns normalized-sorts sources rows widths face-cache
+        candidates lookup
         column-normalization source-construction row-construction
-        value-extraction width-calculation face-preparation
+        value-extraction sort-key-preparation sorting width-calculation
+        face-preparation
         candidate-formatting phase-metrics)
     (setq normalized-columns
           (org-files-db--measure-presentation-phase
               :column-normalization column-normalization phase-metrics
             (org-files-db--normalize-columns columns)))
+    (setq normalized-sorts
+          (if sort
+              (org-files-db--normalize-sort
+               sort normalized-columns context origin row-source)
+            []))
     (setq sources
           (org-files-db--measure-presentation-phase
               :presentation-source-construction
@@ -2201,16 +2636,39 @@ Set TIMING-VARIABLE and add details to METRICS-VARIABLE."
           (org-files-db--measure-presentation-phase
               :presentation-row-construction row-construction phase-metrics
             (org-files-db--presentation-build-rows sources)))
-    (org-files-db--measure-presentation-phase
-        :result-value-extraction value-extraction phase-metrics
-      (pcase-let ((`(,prepared-widths . ,prepared-face-cache)
-                   (org-files-db--presentation-populate-cells-widths-and-faces
-                    rows normalized-columns)))
-        (setq widths prepared-widths
-              face-cache prepared-face-cache))
-      nil)
-    (setq width-calculation 0.0
-          face-preparation 0.0)
+    (if (zerop (length normalized-sorts))
+        (progn
+          (org-files-db--measure-presentation-phase
+              :result-value-extraction value-extraction phase-metrics
+            (pcase-let ((`(,prepared-widths . ,prepared-face-cache)
+                         (org-files-db--presentation-populate-cells-widths-and-faces
+                          rows normalized-columns)))
+              (setq widths prepared-widths
+                    face-cache prepared-face-cache))
+            nil)
+          (setq sort-key-preparation 0.0
+                sorting 0.0
+                width-calculation 0.0
+                face-preparation 0.0))
+      (org-files-db--measure-presentation-phase
+          :result-value-extraction value-extraction phase-metrics
+        (org-files-db--presentation-populate-cells rows normalized-columns))
+      (org-files-db--measure-presentation-phase
+          :sort-key-preparation sort-key-preparation phase-metrics
+        (org-files-db--presentation-prepare-sort-keys rows normalized-sorts))
+      (setq rows
+            (org-files-db--measure-presentation-phase
+                :sorting sorting phase-metrics
+              (org-files-db--presentation-sort-rows rows normalized-sorts)))
+      (setq widths
+            (org-files-db--measure-presentation-phase
+                :shared-width-calculation width-calculation phase-metrics
+              (org-files-db--presentation-calculate-widths
+               rows normalized-columns)))
+      (setq face-cache
+            (org-files-db--measure-presentation-phase
+                :face-preparation face-preparation phase-metrics
+              (org-files-db--presentation-prepare-faces rows))))
     (org-files-db--measure-presentation-phase
         :candidate-formatting candidate-formatting phase-metrics
       (pcase-let ((`(,prepared-candidates . ,prepared-lookup)
@@ -2234,21 +2692,24 @@ Set TIMING-VARIABLE and add details to METRICS-VARIABLE."
            :presentation-source-construction source-construction
            :presentation-row-construction row-construction
            :result-value-extraction value-extraction
-           :sort-key-preparation 0.0
-           :sorting 0.0
+           :sort-key-preparation sort-key-preparation
+           :sorting sorting
            :shared-width-calculation width-calculation
            :face-preparation face-preparation
            :candidate-formatting candidate-formatting
            :boundary-garbage-collection 0.0
            :total (org-files-db--elapsed-seconds total-started)))))
 
-(defun org-files-db--prepare-presentation (results columns)
-  "Eagerly prepare RESULTS for completion using COLUMNS.
-Large preparations receive bounded temporary allocation headroom.  Discard
-intermediate source, row, and face-cache references before completion, but do
-not force a full garbage collection on the interactive path."
+(defun org-files-db--prepare-presentation
+    (results columns &optional sort context origin row-source)
+  "Eagerly prepare RESULTS for completion using COLUMNS and optional SORT.
+CONTEXT and ORIGIN describe validation context; ROW-SOURCE describes expanded
+rows.  Large preparations receive bounded temporary allocation headroom.
+Discard intermediate source, row, and face-cache references before completion,
+but do not force a full garbage collection on the interactive path."
   (if (< (length results) org-files-db--large-presentation-row-count)
-      (org-files-db--prepare-presentation-1 results columns)
+      (org-files-db--prepare-presentation-1
+       results columns sort context origin row-source)
     (let* ((bounded-gc-p
             (and (< gc-cons-threshold
                     org-files-db--large-presentation-gc-threshold)
@@ -2259,7 +2720,8 @@ not force a full garbage collection on the interactive path."
                 org-files-db--large-presentation-gc-threshold
               gc-cons-threshold))
            (presentation
-            (org-files-db--prepare-presentation-1 results columns))
+            (org-files-db--prepare-presentation-1
+             results columns sort context origin row-source))
            (boundary-started (float-time))
            (boundary-gcs-before
             (if (boundp 'gcs-done) gcs-done 0))
@@ -2324,10 +2786,14 @@ not force a full garbage collection on the interactive path."
     (org-files-db--format-presentation-row
      (aref rows 0) normalized width-vector)))
 
-(defun org-files-db--make-candidates (results columns)
-  "Return completion candidates for RESULTS using COLUMNS."
+(defun org-files-db--make-candidates
+    (results columns &optional sort context origin row-source)
+  "Return completion candidates for RESULTS using COLUMNS and optional SORT.
+CONTEXT and ORIGIN describe validation context; ROW-SOURCE describes expanded
+rows."
   (org-files-db--presentation-candidates
-   (org-files-db--prepare-presentation results columns)))
+   (org-files-db--prepare-presentation
+    results columns sort context origin row-source)))
 
 (defun org-files-db--completion-table (candidates)
   "Return a completion table for CANDIDATES."
@@ -2408,9 +2874,10 @@ not force a full garbage collection on the interactive path."
          (head (car-safe form)))
     (if (memq head '(headings links files)) head 'headings)))
 
-(defun org-files-db--fetch-query (query columns config-file &optional origin)
-  "Fetch QUERY using COLUMNS and effective CONFIG-FILE.
-Return a plist containing normalized :results, :columns, :target, and
+(defun org-files-db--fetch-query
+    (query columns config-file &optional origin sort)
+  "Fetch QUERY using COLUMNS, effective CONFIG-FILE, and optional SORT.
+Return a plist containing normalized :results, :columns, :sort, :target, and
 :includes.  ORIGIN identifies configuration and CLI errors."
   (let* ((requested-columns columns)
          (inferred-target (org-files-db--query-target query))
@@ -2419,7 +2886,15 @@ Return a plist containing normalized :results, :columns, :target, and
               (org-files-db--default-columns inferred-target nil)))
          (normalized-columns
           (org-files-db--normalize-columns initial-columns))
-         (includes (org-files-db--column-includes normalized-columns))
+         (request-sort
+          (org-files-db--normalize-sort
+           sort normalized-columns inferred-target origin))
+         (includes
+          (delete-dups
+           (append
+            (org-files-db--column-includes normalized-columns)
+            (org-files-db--sort-includes
+             request-sort normalized-columns inferred-target origin))))
          (response
           (org-files-db--execute-query
            query config-file (or origin "Query") includes))
@@ -2433,17 +2908,23 @@ Return a plist containing normalized :results, :columns, :target, and
           (if (or requested-columns (eq target inferred-target))
               normalized-columns
             (org-files-db--normalize-columns
-             (org-files-db--default-columns target results)))))
+             (org-files-db--default-columns target results))))
+         (final-sort
+          (if (and (eq target inferred-target)
+                   (eq final-columns normalized-columns))
+              request-sort
+            (org-files-db--normalize-sort sort final-columns target origin))))
     (list :results results
           :columns final-columns
+          :sort final-sort
           :target target
           :includes includes)))
 
 (defun org-files-db--fetch-search
-    (expression columns scope config-file &optional origin)
-  "Fetch EXPRESSION using COLUMNS, SCOPE, and effective CONFIG-FILE.
-Return a plist containing normalized :results and :columns.  ORIGIN identifies
-configuration and CLI errors."
+    (expression columns scope config-file &optional origin sort)
+  "Fetch EXPRESSION using COLUMNS, SCOPE, effective CONFIG-FILE, and SORT.
+Return a plist containing normalized :results, :columns, and :sort.  ORIGIN
+identifies configuration and CLI errors."
   (let* ((response
           (org-files-db--execute-search
            expression scope config-file (or origin "Search")))
@@ -2454,9 +2935,13 @@ configuration and CLI errors."
          (normalized-columns
           (org-files-db--normalize-columns
            (or columns
-               (org-files-db--default-columns 'search results)))))
+               (org-files-db--default-columns 'search results))))
+         (normalized-sort
+          (org-files-db--normalize-sort
+           sort normalized-columns 'search origin)))
     (list :results results
           :columns normalized-columns
+          :sort normalized-sort
           :scope scope)))
 
 (defun org-files-db--present-presentation (presentation action &optional prompt)
@@ -2465,10 +2950,14 @@ configuration and CLI errors."
     (funcall (or action org-files-db-query-action) result)
     result))
 
-(defun org-files-db--present-results (results columns action &optional prompt)
-  "Present RESULTS in COLUMNS, then apply ACTION using PROMPT."
+(defun org-files-db--present-results
+    (results columns action &optional prompt sort context origin row-source)
+  "Present RESULTS in COLUMNS, then apply ACTION using PROMPT and optional SORT.
+CONTEXT and ORIGIN describe validation context; ROW-SOURCE describes expanded
+rows."
   (org-files-db--present-presentation
-   (org-files-db--prepare-presentation results columns)
+   (org-files-db--prepare-presentation
+    results columns sort context origin row-source)
    action prompt))
 
 ;;;###autoload

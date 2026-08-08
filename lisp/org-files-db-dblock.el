@@ -30,6 +30,8 @@
 (require 'org-files-db-export)
 (require 'org-files-db-views)
 
+(defvar read-eval)
+
 (defun org-files-db-dblock--value (value)
   "Return dynamic-block VALUE in its useful scalar form."
   (cond
@@ -101,6 +103,55 @@ The symbol or string `none' disables --config."
          supplied-p
          (format "Dynamic %s block" command))))))
 
+(defun org-files-db-dblock--sort-value (value)
+  "Return safely parsed dynamic-block sort VALUE."
+  (cond
+   ((null value) nil)
+   ((listp value) value)
+   ((eq value 'nil) nil)
+   ((stringp value)
+    (if (string= (string-trim value) "nil")
+        nil
+      (condition-case err
+          (let* ((read-eval nil)
+                 (parsed (read-from-string value))
+                 (sort (car parsed))
+                 (rest (substring value (cdr parsed))))
+            (unless (string-match-p "\\`[[:space:]]*\\'" rest)
+              (user-error "Invalid dynamic-block :sort value: %S" value))
+            sort)
+        (error
+         (user-error "Invalid dynamic-block :sort value %S: %s"
+                     value (error-message-string err))))))
+   (t (user-error "Invalid dynamic-block :sort value: %S" value))))
+
+(defun org-files-db-dblock--sort (params command context columns)
+  "Return effective validated sort for PARAMS, COMMAND, CONTEXT, and COLUMNS."
+  (let* ((view (org-files-db-dblock--view params command))
+         (direct-p (not (null (plist-member params :sort))))
+         (view-properties (and view (cdr view)))
+         (view-p (and view
+                      (not (null (plist-member view-properties :sort)))))
+         (sort
+          (cond
+           (direct-p (org-files-db-dblock--sort-value (plist-get params :sort)))
+           (view-p (plist-get view-properties :sort))
+           (t nil)))
+         (supplied-p (or direct-p view-p))
+         (effective (org-files-db--effective-sort context sort supplied-p))
+         (origin
+          (if view
+              (format "View `%s' dynamic %s block" (car view) command)
+            (format "Dynamic %s block" command))))
+    (org-files-db--normalize-sort effective columns context origin)))
+
+(defun org-files-db-dblock--columns (params command context)
+  "Return columns relevant to PARAMS, COMMAND, and sort CONTEXT."
+  (let ((view (org-files-db-dblock--view params command)))
+    (org-files-db--normalize-columns
+     (or (and view (plist-get (cdr view) :columns))
+         (org-files-db--default-columns context nil)))))
+
 (defun org-files-db-dblock--query-definition (params)
   "Return the query expression represented by PARAMS."
   (let ((query (plist-get params :query))
@@ -160,10 +211,11 @@ The symbol or string `none' disables --config."
 
 ;;;###autoload
 (cl-defun org-files-db-dblock-insert-query
-    (query &key (config-file nil config-file-supplied-p))
+    (query &key (config-file nil config-file-supplied-p)
+           (sort nil sort-supplied-p))
   "Insert and update an org-files-db query dynamic block for QUERY.
 CONFIG-FILE overrides the global configuration; an explicit nil writes
-:config-file none."
+:config-file none.  SORT optionally controls result ordering."
   (interactive
    (list (prin1-to-string (org-files-db--read-sexp "Query: "))))
   (unless (derived-mode-p 'org-mode)
@@ -174,6 +226,8 @@ CONFIG-FILE overrides the global configuration; an explicit nil writes
     (when config-file-supplied-p
       (setq params (plist-put params :config-file
                               (or config-file 'none))))
+    (when sort-supplied-p
+      (setq params (plist-put params :sort (prin1-to-string sort))))
     (org-create-dblock params))
   (org-update-dblock))
 
@@ -183,22 +237,36 @@ CONFIG-FILE overrides the global configuration; an explicit nil writes
    "org-files-db-query"
    (lambda ()
      (let* ((query (org-files-db-dblock--query-definition params))
+            (context (org-files-db--query-target query))
+            (columns (org-files-db-dblock--columns params 'query context))
+            (sort (org-files-db-dblock--sort
+                   params 'query context columns))
             (config-file (org-files-db-dblock--config-file params 'query))
+            (includes
+             (delete-dups
+              (append
+               (org-files-db-dblock--query-includes params)
+               (org-files-db--sort-includes
+                sort columns context "Dynamic query block"))))
             (response (org-files-db--execute-query
                        query config-file "Dynamic query block"
-                       (org-files-db-dblock--query-includes params)))
+                       includes))
             (results
              (org-files-db--results-with-config
               (org-files-db--normalize-results response)
-              config-file)))
-       (org-files-db-dblock--render results params)))))
+              config-file))
+            (sorted
+             (org-files-db--sort-results
+              results columns sort context "Dynamic query block")))
+       (org-files-db-dblock--render sorted params)))))
 
 ;;;###autoload
 (cl-defun org-files-db-dblock-insert-search
-    (expression &key (config-file nil config-file-supplied-p))
+    (expression &key (config-file nil config-file-supplied-p)
+                (sort nil sort-supplied-p))
   "Insert and update an org-files-db search dynamic block for EXPRESSION.
 CONFIG-FILE overrides the global configuration; an explicit nil writes
-:config-file none."
+:config-file none.  SORT optionally controls result ordering."
   (interactive (list (read-string "FTS5 search: ")))
   (unless (derived-mode-p 'org-mode)
     (user-error "Org-files-db dynamic blocks require Org mode"))
@@ -209,6 +277,8 @@ CONFIG-FILE overrides the global configuration; an explicit nil writes
     (when config-file-supplied-p
       (setq params (plist-put params :config-file
                               (or config-file 'none))))
+    (when sort-supplied-p
+      (setq params (plist-put params :sort (prin1-to-string sort))))
     (org-create-dblock params))
   (org-update-dblock))
 
@@ -219,6 +289,11 @@ CONFIG-FILE overrides the global configuration; an explicit nil writes
    (lambda ()
      (pcase-let* ((`(,expression . ,scope)
                    (org-files-db-dblock--search-definition params))
+                  (columns
+                   (org-files-db-dblock--columns params 'search 'search))
+                  (sort
+                   (org-files-db-dblock--sort
+                    params 'search 'search columns))
                   (config-file
                    (org-files-db-dblock--config-file params 'search))
                   (response (org-files-db--execute-search
@@ -227,8 +302,11 @@ CONFIG-FILE overrides the global configuration; an explicit nil writes
                   (results
                    (org-files-db--results-with-config
                     (org-files-db--normalize-results response)
-                    config-file)))
-       (org-files-db-dblock--render results params)))))
+                    config-file))
+                  (sorted
+                   (org-files-db--sort-results
+                    results columns sort 'search "Dynamic search block")))
+       (org-files-db-dblock--render sorted params)))))
 
 ;;;###autoload
 (cl-defun org-files-db-dblock-insert-backlinks

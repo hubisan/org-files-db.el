@@ -100,6 +100,40 @@ The package infers required CLI includes from the configured columns.  ~source-o
 
 Truncation is available for every displayed column.  Customize the defaults with ~org-files-db-truncate-position~ and ~org-files-db-truncate-marker~, or override them per column with ~:truncate (:position left|middle|right :marker STRING)~.  The marker counts toward the final column width, and an empty marker performs hard truncation.  Truncation is visual only: standard Emacs completion and Consult continue to search the complete untruncated column value, including text that is not currently visible.
 
+** Result sorting
+
+Query and search results can be sorted by one or more public columns before completion, export, or dynamic-block rendering.  A sort column does not need to be displayed:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (not (done)))
+ '((todo-keyword)
+   (outline-path :width (max 80))
+   (file-name :width (max 30)))
+ nil
+ :sort
+ '((priority :direction asc :missing last)
+   (deadline-raw :direction asc :missing last)
+   (outline-path :direction asc)))
+#+end_src
+
+Each sort key accepts ~:direction asc|desc~, ~:missing first|last~, and ~:case-fold t|nil~.  Defaults are ascending order, missing values last, and case-insensitive text comparison.  Equal rows retain their original ~orgfdb~ order.
+
+Text is compared using complete untruncated values.  ~line-number~ and search ~rank~ are numeric, Org priorities use their natural ~A~, ~B~, ~C~ order, planning timestamps are chronological, outline paths are compared by path components rather than their display separator, and ~tags~ compares the complete tag collection.
+
+Default sorting can be configured separately:
+
+#+begin_src emacs-lisp
+(setq org-files-db-heading-sort nil)
+(setq org-files-db-file-sort nil)
+(setq org-files-db-link-sort nil)
+(setq org-files-db-search-sort nil)
+#+end_src
+
+Nil defaults preserve the order returned by ~orgfdb~.  This is especially important for search, where the normal order represents relevance.  Omitting ~:sort~ inherits the corresponding default; an explicit ~:sort nil~ preserves the CLI order for that invocation even when a default is configured.
+
+Supported heading sort columns include ~title~, ~todo-keyword~, ~todo-type~, ~priority~, ~outline-path~, ~tags~, ~file-title~, ~file-name~, ~file-path~, ~line-number~, ~scheduled-raw~, ~deadline-raw~, and ~closed-raw~.  File results support ~file-title~, ~file-name~, ~file-path~, ~tags~, and ~line-number~.  Link results support ~link-type~, ~link-target~, ~link-description~, ~resolution-status~, ~source-outline-path~, ~target-outline-path~, ~file-name~, ~file-path~, and ~line-number~.  Search supports ~title~, ~outline-path~, ~file-name~, ~file-path~, ~line-number~, and ~rank~.
+
 ** Large result sets
 
 Query and search presentation is eager and synchronous.  The package normalizes column definitions once, extracts each displayed value once per row, calculates shared widths from cached cell widths, sanitizes each distinct face once, and formats every completion candidate once.  Completion filtering and redisplay operate only on the prepared candidate strings; selected actions and Embark still receive the original result object.
@@ -117,6 +151,8 @@ Run ~M-x org-files-db-benchmark-query~ to separate real CLI execution, JSON pars
 
 Run ~M-x org-files-db-benchmark-view-cache~ to compare synthetic cold preparation, warm cache lookup, compact worker-result transfer, main-process publication, a small affected-file patch, and a complete rebuild.
 
+Run ~M-x org-files-db-benchmark-sorting~ to benchmark 1,000 and 10,000 prepared rows with multiple text keys, numeric keys, timestamp keys, and complete tag collections.  The report measures sort-key preparation and sorting separately from value extraction, width calculation, face preparation, and candidate formatting.
+
 * Search
 
 Perform one FTS5 search:
@@ -127,6 +163,7 @@ Perform one FTS5 search:
  nil
  nil
  :scope 'all
+ :sort nil
  :config-file "~/work/org-files-db.toml")
 #+end_src
 
@@ -142,6 +179,8 @@ Start Consult-powered live search with ~M-x org-files-db-search-live~.  Search s
 
 The former leading positional search scope remains accepted for compatibility, including before ~:config-file~, but keyword arguments are preferred.
 
+Search accepts the same ~:sort~ syntax as queries.  With no configured search sort, results remain in ~orgfdb~ relevance order.  For example, ~:sort '((title :direction asc))~ alphabetizes one invocation, while ~:sort nil~ explicitly keeps relevance order.
+
 * Predefined views
 
 #+begin_src emacs-lisp
@@ -150,6 +189,8 @@ The former leading positional search scope remains accepted for compatibility, i
          :command query
          :config-file "~/org/private/org-files-db.toml"
          :query (headings (not (done)))
+         :sort ((priority :direction asc :missing last)
+                (outline-path :direction asc))
          :columns ((todo-keyword :width (fixed 8))
                    (outline-path :width (max 80))))
         ("project-search"
@@ -171,6 +212,8 @@ The former leading positional search scope remains accepted for compatibility, i
 Use ~M-x org-files-db-views-query~ or ~M-x org-files-db-views-search~.  From Lisp, pass the view name directly.
 
 A view without ~:config-file~ inherits ~org-files-db-config-file~.  A path selects that configuration for the delegated query or search, while an explicit ~nil~ disables ~--config~ for the view.
+
+A view without ~:sort~ inherits the configured default for its result type.  A view-specific sort overrides that default, while an explicit ~:sort nil~ preserves ~orgfdb~ order.
 
 ** Generation-aware pre-caching
 
@@ -275,6 +318,9 @@ The package registers these block types:
 ,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :layout flat
 ,#+END:
 
+,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :sort "((priority :direction asc) (outline-path :direction asc))" :layout flat
+,#+END:
+
 ,#+BEGIN: org-files-db-query :view "open-tasks" :layout outline
 ,#+END:
 
@@ -294,6 +340,8 @@ The package registers these block types:
 Update a block with ~org-update-dblock~ or all blocks with ~org-update-all-dblocks~.  Generated entries link back to their indexed source locations.
 
 Direct blocks inherit the global configuration when ~:config-file~ is absent.  A path overrides it, and the dedicated value ~none~ disables ~--config~.  Blocks using ~:view~ inherit the selected view's configuration and must not also specify ~:config-file~.
+
+Direct query and search blocks accept ~:sort~ as a safely read Lisp expression.  Blocks using ~:view~ inherit that view's sorting unless the block supplies its own ~:sort~.  An explicit ~:sort "nil"~ preserves the CLI order even when a global sort default is configured.
 
 * API naming
 

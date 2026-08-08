@@ -2956,10 +2956,12 @@ Do not claim the cache is fixed merely because tests pass. Reason through the re
 
 [[./archive/2026-08-08--searchable-visual-truncation.org][Task details]]
 
-* TODO Add configurable result sorting
+* REVIEW Add configurable result sorting
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
+
+[[./2026-08-09--configurable-result-sorting.org][Task details]]
 
 Goal: Allow query and search results to be sorted by one or more user-facing columns before they are presented, exported, or rendered in dynamic blocks.
 
