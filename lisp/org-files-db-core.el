@@ -1968,9 +1968,9 @@ TOTAL-WIDTH may supply the previously calculated display width of STRING."
 
 (defun org-files-db--format-presentation-row (row columns widths)
   "Format cached ROW once using normalized COLUMNS and WIDTHS."
-  (car (org-files-db--format-presentation-row-data
-        row columns widths
-        (org-files-db--presentation-make-padding-cache widths))))
+  (org-files-db--format-presentation-row-data
+   row columns widths
+   (org-files-db--presentation-make-padding-cache widths)))
 
 (defun org-files-db--presentation-padding (width cache)
   "Return WIDTH spaces reused through presentation CACHE."
@@ -1989,8 +1989,10 @@ TOTAL-WIDTH may supply the previously calculated display width of STRING."
 
 (defun org-files-db--format-presentation-row-data
     (row columns widths padding-cache)
-  "Return formatted display and hidden search text for prepared ROW.
-COLUMNS and WIDTHS describe the table, and PADDING-CACHE reuses space strings."
+  "Return one complete propertized completion string for prepared ROW.
+COLUMNS and WIDTHS describe the table, and PADDING-CACHE reuses space strings.
+The returned string keeps complete cell values for matching.  Visually
+truncated cells use `display' properties instead of removing logical text."
   (let ((column-count (length columns)))
     (if (= column-count 1)
         (org-files-db--format-single-presentation-row-data
@@ -1998,77 +2000,69 @@ COLUMNS and WIDTHS describe the table, and PADDING-CACHE reuses space strings."
       (org-files-db--format-multiple-presentation-row-data
        row columns widths padding-cache))))
 
+(defun org-files-db--format-presentation-cell-segment
+    (cell column width padding-cache)
+  "Return one searchable, visually formatted segment for CELL.
+COLUMN and WIDTH describe the presentation column.  PADDING-CACHE reuses
+space strings.  When CELL exceeds WIDTH, keep the complete underlying value
+and attach the truncated representation with a `display' text property."
+  (let* ((value (org-files-db--presentation-cell-display cell))
+         (value-width (org-files-db--presentation-cell-display-width cell))
+         (face (org-files-db--presentation-cell-face cell)))
+    (if (> value-width width)
+        (let* ((text
+                (org-files-db--truncate-presentation-value
+                 value value-width width column))
+               (text-width (string-width text))
+               (padding-width (max 0 (- width text-width)))
+               (replacement
+                (concat text
+                        (org-files-db--presentation-padding
+                         padding-width padding-cache)))
+               (segment (copy-sequence value)))
+          (when (and face (> (length segment) 0))
+            (add-text-properties 0 (length segment) (list 'face face) segment))
+          (when (and face (> (length text) 0))
+            (add-text-properties 0 (length text) (list 'face face) replacement))
+          (when (> (length segment) 0)
+            (add-text-properties
+             0 (length segment) (list 'display replacement) segment))
+          segment)
+      (let* ((padding-width (max 0 (- width value-width)))
+             (segment
+              (concat value
+                      (org-files-db--presentation-padding
+                       padding-width padding-cache))))
+        (when (and face (> (length value) 0))
+          (add-text-properties 0 (length value) (list 'face face) segment))
+        segment))))
+
 (defun org-files-db--format-single-presentation-row-data
     (row column width padding-cache)
-  "Return formatted display and hidden search text for one-column ROW.
+  "Return one searchable, visually formatted candidate body for ROW.
 COLUMN and WIDTH control formatting, and PADDING-CACHE reuses space strings."
-  (let* ((cell (aref (org-files-db--presentation-row-cells row) 0))
-         (value (org-files-db--presentation-cell-display cell))
-         (value-width (org-files-db--presentation-cell-display-width cell))
-         (text
-          (org-files-db--truncate-presentation-value
-           value value-width width column))
-         (text-width (if (eq text value) value-width (string-width text)))
-         (padding-width (max 0 (- width text-width)))
-         (display
-          (concat text
-                  (org-files-db--presentation-padding
-                   padding-width padding-cache)))
-         (face (org-files-db--presentation-cell-face cell)))
-    (when (and face (> (length text) 0))
-      (add-text-properties 0 (length text) (list 'face face) display))
-    (cons
-     display
-     (when (> value-width width)
-       (concat "\u2063" value)))))
+  (org-files-db--format-presentation-cell-segment
+   (aref (org-files-db--presentation-row-cells row) 0)
+   column width padding-cache))
 
 (defun org-files-db--format-multiple-presentation-row-data
     (row columns widths padding-cache)
-  "Return formatted display and hidden search text for multi-column ROW.
+  "Return one searchable, visually formatted candidate body for ROW.
 COLUMNS and WIDTHS control formatting, and PADDING-CACHE reuses space strings."
   (let* ((column-count (length columns))
          (cells (org-files-db--presentation-row-cells row))
-         (position 0)
-         segments face-ranges search-values)
+         segments)
     (dotimes (column-index column-count)
-      (let* ((cell (aref cells column-index))
-             (column (aref columns column-index))
-             (width (aref widths column-index))
-             (value (org-files-db--presentation-cell-display cell))
-             (value-width
-              (org-files-db--presentation-cell-display-width cell))
-             (text
-              (org-files-db--truncate-presentation-value
-               value value-width width column))
-             (text-length (length text))
-             (text-width
-              (if (eq text value) value-width (string-width text)))
-             (padding-width (max 0 (- width text-width)))
-             (face (org-files-db--presentation-cell-face cell)))
-        (push text segments)
-        (when (> padding-width 0)
-          (push
-           (org-files-db--presentation-padding
-            padding-width padding-cache)
-           segments))
-        (when (and face (> text-length 0))
-          (push (list position (+ position text-length) face)
-                face-ranges))
-        (when (> value-width width)
-          (push value search-values))
-        (setq position (+ position text-length padding-width))
-        (when (< column-index (1- column-count))
-          (push "  " segments)
-          (setq position (+ position 2)))))
-    (let ((display (apply #'concat (nreverse segments))))
-      (dolist (range face-ranges)
-        (add-text-properties
-         (nth 0 range) (nth 1 range) (list 'face (nth 2 range)) display))
-      (cons
-       display
-       (when search-values
-         (concat "\u2063"
-                 (mapconcat #'identity (nreverse search-values) "\u2063")))))))
+      (push
+       (org-files-db--format-presentation-cell-segment
+        (aref cells column-index)
+        (aref columns column-index)
+        (aref widths column-index)
+        padding-cache)
+       segments)
+      (when (< column-index (1- column-count))
+        (push "  " segments)))
+    (apply #'concat (nreverse segments))))
 
 (defconst org-files-db--candidate-identity-base #x1900
   "Number of Unicode private-use characters used for candidate identities.")
@@ -2121,18 +2115,16 @@ COLUMNS and WIDTHS control formatting, and PADDING-CACHE reuses space strings."
       (let* ((row (aref rows index))
              (result (org-files-db--presentation-row-result row))
              (row-source (org-files-db--presentation-row-row-source row))
-             (formatted
+             (candidate-body
               (org-files-db--format-presentation-row-data
                row columns widths padding-cache))
-             (display (car formatted))
-             (display-length (length display))
+             (candidate-body-length (length candidate-body))
              (candidate
-              (concat display
-                      (or (cdr formatted) "")
+              (concat candidate-body
                       (org-files-db--candidate-identity index)))
              (properties
               (list 'org-files-db-result result
-                    'org-files-db-visible-length display-length
+                    'org-files-db-visible-length candidate-body-length
                     'consult--candidate result
                     'rear-nonsticky t)))
         (when row-source
@@ -2144,9 +2136,9 @@ COLUMNS and WIDTHS control formatting, and PADDING-CACHE reuses space strings."
                   'org-files-db-row-source row-source
                   'org-files-db-row-value
                   (org-files-db--presentation-row-row-value row)))))
-        (add-text-properties 0 display-length properties candidate)
+        (add-text-properties 0 candidate-body-length properties candidate)
         (add-text-properties
-         display-length (length candidate)
+         candidate-body-length (length candidate)
          '(display "" invisible t)
          candidate)
         (aset lookup index result)

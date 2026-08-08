@@ -50,6 +50,16 @@
     (file-name :width (max 30)))
   "Representative higher-cost benchmark columns.")
 
+(defconst org-files-db-benchmark--truncation-columns
+  '((todo-keyword :width (fixed 8))
+    (title :width (fixed 24)
+           :truncate (:position middle :marker "…"))
+    (outline-path :width (max 36)
+                  :truncate (:position right :marker "…"))
+    (file-name :width (fixed 20)
+               :truncate (:position left :marker "…")))
+  "Representative columns that exercise visual-only truncation.")
+
 (defconst org-files-db-benchmark--directory
   (file-name-directory (or load-file-name buffer-file-name))
   "Directory containing this benchmark file.")
@@ -442,7 +452,13 @@ ITERATIONS defaults to three.  The 50,000-row case may take substantial time."
              (format "%d rows, expensive columns" count)
              (org-files-db-benchmark--presentation
               results org-files-db-benchmark--expensive-columns
-              :iterations iterations))))
+              :iterations iterations))
+            (when (memq count '(1000 10000))
+              (org-files-db-benchmark--insert-summary
+               (format "%d rows, visual truncation" count)
+               (org-files-db-benchmark--presentation
+                results org-files-db-benchmark--truncation-columns
+                :iterations iterations)))))
         (insert "\nRepresentative JSON response\n")
         (insert "----------------------------\n")
         (let ((text (org-files-db-benchmark--fixture-text)))

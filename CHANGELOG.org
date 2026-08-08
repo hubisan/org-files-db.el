@@ -2,6 +2,10 @@
 
 * Unreleased
 
+- =CHANGED= Made column truncation presentation-only while retaining complete completion text.
+  - Truncated columns now keep their full logical value in the completion candidate and use ~display~ text properties for the shortened visual representation.
+  - Standard completion and Consult can match text that is hidden by left, middle, right, fixed-width, or maximum-width truncation without appending duplicate hidden search strings.
+  - Candidate text properties survive readable Lisp print/read round trips, preparing the representation for future async cache dumps.
 - =ADDED= Added generation-aware asynchronous pre-caching for predefined query and search views.
   - Views opt in with ~:pre-cache t~, while the global ~org-files-db-cache-mode~ controls whether caching is active; enabling the mode immediately queues all opted-in views so they can be warm before first use.
   - Patch-safe structural query views use ~orgfdb changes~ and file-restricted reruns for exact upsert paths; search and unsafe query views rebuild completely.

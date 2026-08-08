@@ -98,15 +98,15 @@ Heading and search results use the ~outline-path~ column.  Link results use two 
 
 The package infers required CLI includes from the configured columns.  ~source-outline-path~ requests source path context and ~target-outline-path~ requests structured target context; both are retrieved in the same flat query invocation.  Users do not need to add ~--include~ or switch to outline output.  For compatibility, ~outline-path~ on link results currently behaves like ~source-outline-path~, but new configurations should use the explicit link column name.
 
-Truncation is available for every displayed column.  Customize the defaults with ~org-files-db-truncate-position~ and ~org-files-db-truncate-marker~, or override them per column with ~:truncate (:position left|middle|right :marker STRING)~.  The marker counts toward the final column width, and an empty marker performs hard truncation.
+Truncation is available for every displayed column.  Customize the defaults with ~org-files-db-truncate-position~ and ~org-files-db-truncate-marker~, or override them per column with ~:truncate (:position left|middle|right :marker STRING)~.  The marker counts toward the final column width, and an empty marker performs hard truncation.  Truncation is visual only: standard Emacs completion and Consult continue to search the complete untruncated column value, including text that is not currently visible.
 
 ** Large result sets
 
 Query and search presentation is eager and synchronous.  The package normalizes column definitions once, extracts each displayed value once per row, calculates shared widths from cached cell widths, sanitizes each distinct face once, and formats every completion candidate once.  Completion filtering and redisplay operate only on the prepared candidate strings; selected actions and Embark still receive the original result object.
 
-Duplicate visible candidates retain separate invisible identities and direct result metadata.  Prepared CLI order is preserved, selection does not scan the complete candidate list, and values shortened for display remain available to completion filtering through hidden untruncated text.
+Duplicate visible candidates retain separate invisible identities and direct result metadata.  Prepared CLI order is preserved, selection does not scan the complete candidate list, and visually shortened values remain complete in the underlying completion candidate.  Truncated column regions use presentation-only ~display~ properties instead of appended hidden search copies.
 
-For a real invocation, profile Emacs with ~M-x profiler-start~, run the query, and inspect ~M-x profiler-report~.  The development benchmark covers synthetic sets of 100, 1,000, 10,000, and 50,000 rows, representative inexpensive and expensive columns, and alist versus hash-table JSON parsing:
+For a real invocation, profile Emacs with ~M-x profiler-start~, run the query, and inspect ~M-x profiler-report~.  The development benchmark covers synthetic sets of 100, 1,000, 10,000, and 50,000 rows, representative inexpensive and expensive columns, visual-only truncation at 1,000 and 10,000 rows, and alist versus hash-table JSON parsing:
 
 #+begin_src shell
 emacs -Q -L lisp -l benchmarks/org-files-db-benchmark.el \
