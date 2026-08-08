@@ -3017,6 +3017,8 @@ Acceptance criteria:
 - Fresh, synchronously prepared, asynchronously prepared, and warm cached candidates have identical search semantics.
 - All existing tests continue to pass.
 - ~make ci~ passes.
+  
+* TODO Move all defcustoms to core if possible
 
 * TODO Add row expansion for tags, effective properties, and keywords
 :PROPERTIES:
