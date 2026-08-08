@@ -2952,10 +2952,6 @@ At the end provide:
 
 Do not claim the cache is fixed merely because tests pass. Reason through the real interactive lifecycle as well.
 
-* REVIEW Reduce asynchronous view-cache prewarm latency
-
-[[./2026-08-07--reduce-async-cache-prewarm-latency.org][Task details]]
-
 * BUILD Keep truncated completion columns fully searchable
 
 Goal:
