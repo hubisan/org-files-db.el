@@ -756,15 +756,9 @@ uses deterministic synthetic results and does not execute orgfdb."
            (lambda (result)
              (member (org-files-db-cache--result-owner-path result) affected))
            results))
-         (logical-preparation
-          (org-files-db-benchmark--time-call
-           (lambda ()
-             (org-files-db-cache--prepare-logical-data results normalized))
-           iterations))
-         (full-logical
-          (org-files-db-cache--prepare-logical-data results normalized))
          (worker-payload
           (list :ok t
+                :format-version org-files-db-cache--format-version
                 :database-id "benchmark"
                 :source-generation 0
                 :target-generation 1
@@ -772,7 +766,17 @@ uses deterministic synthetic results and does not execute orgfdb."
                 :view-token "benchmark-view"
                 :refresh-token 1
                 :refresh-type 'full
-                :logical-data full-logical))
+                :payload-kind 'complete
+                :results results
+                :columns
+                (org-files-db-cache--column-definitions normalized)))
+         (worker-payload-file
+          (make-temp-file "org-files-db-benchmark-cache-size-"))
+         (worker-payload-bytes
+          (unwind-protect
+              (org-files-db-cache--write-data-file
+               worker-payload-file worker-payload)
+            (org-files-db-cache--delete-transport-file worker-payload-file)))
          (worker-transfer
           (org-files-db-benchmark--time-call
            (lambda ()
@@ -783,22 +787,18 @@ uses deterministic synthetic results and does not execute orgfdb."
                      (org-files-db-cache--read-data-file file))
                  (org-files-db-cache--delete-transport-file file))))
            iterations))
-         (logical
-          (org-files-db-cache--prepare-logical-data replacement normalized))
          (publication
           (org-files-db-benchmark--time-call
            (lambda ()
-             (org-files-db-cache--presentation-from-logical-data full-logical))
+             (org-files-db-cache--prepare results normalized))
            iterations))
          (patch
           (org-files-db-benchmark--time-call
            (lambda ()
-             (let* ((restricted-rows
-                     (org-files-db-cache--rows-from-logical-data logical))
-                    (rows
-                     (org-files-db-cache--apply-patch-rows
-                      entry affected nil restricted-rows)))
-               (org-files-db-cache--presentation-from-rows rows normalized)))
+             (let ((patched
+                    (org-files-db-cache--merge-patch-results
+                     results affected nil replacement)))
+               (org-files-db-cache--prepare patched normalized)))
            iterations))
          (rebuild
           (org-files-db-benchmark--time-call
@@ -813,11 +813,12 @@ uses deterministic synthetic results and does not execute orgfdb."
         (insert (format "Rows: %d, iterations: %d\n" count iterations))
         (insert (format "Estimated retained bytes: %d\n\n"
                         (org-files-db-cache--entry-estimated-memory entry)))
+        (insert (format "Worker result payload bytes: %d\n\n"
+                        worker-payload-bytes))
         (dolist (measurement
                  `((cold . ,cold)
                    (warm . ,warm)
                    (warm-completion . ,warm-completion)
-                   (logical-preparation . ,logical-preparation)
                    (worker-transfer . ,worker-transfer)
                    (main-publication . ,publication)
                    (patch . ,patch)
@@ -836,8 +837,8 @@ uses deterministic synthetic results and does not execute orgfdb."
     (list :count count :iterations iterations
           :estimated-memory
           (org-files-db-cache--entry-estimated-memory entry)
+          :worker-payload-bytes worker-payload-bytes
           :cold cold :warm warm :warm-completion warm-completion
-          :logical-preparation logical-preparation
           :worker-transfer worker-transfer
           :main-publication publication
           :patch patch :rebuild rebuild)))

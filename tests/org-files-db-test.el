@@ -1597,6 +1597,23 @@
       (expect (< (- (float-time) started-at) 0.5) :to-equal t)
       (expect (hash-table-count org-files-db-cache--failures) :to-equal 1)))
 
+  (it "prioritizes an interactively awaited queued view"
+    (let* ((other
+            (make-org-files-db-cache--job
+             :view-name "other" :refresh-token 1))
+           (wanted
+            (make-org-files-db-cache--job
+             :view-name "cached" :refresh-token 9))
+           (later
+            (make-org-files-db-cache--job
+             :view-name "later" :refresh-token 2)))
+      (puthash "cached" 9 org-files-db-cache--refresh-tokens)
+      (setq org-files-db-cache--queue (list other wanted later))
+      (org-files-db-cache--prioritize-refresh "cached")
+      (expect (mapcar #'org-files-db-cache--job-view-name
+                      org-files-db-cache--queue)
+              :to-equal '("cached" "other" "later"))))
+
   (it "force refresh bypasses an otherwise valid prepared entry"
     (let* ((view (org-files-db-views-get "cached"))
            (state '(:schema-version 12 :database-id "db-one" :generation 7))
@@ -1933,51 +1950,7 @@
         (org-files-db-actions--ensure-result-property result "ID"))
       (expect (cadr notified) :to-equal (list file))))
 
-  (it "prepares serializable logical rows and reconstructs candidates"
-    (let* ((result
-            '((kind . "heading")
-              (title . "Überblick 東京")
-              (level . 2)
-              (location . ((file_path . "/tmp/a.org") (line . 1)))))
-           (data
-            (org-files-db-cache--prepare-logical-data
-             (list result) '((title :width (max 40)))))
-           (presentation
-            (org-files-db-cache--presentation-from-logical-data data))
-           (candidate
-            (car (org-files-db--presentation-candidates presentation))))
-      (expect (org-files-db-cache--plain-data-p data) :to-equal t)
-      (expect (vectorp (org-files-db--presentation-rows presentation))
-              :to-equal t)
-      (expect (get-text-property 0 'org-files-db-result candidate)
-              :to-equal result)
-      (expect (org-files-db-test--candidate-visible candidate)
-              :to-match "Überblick 東京")))
-
-  (it "rehydrates worker candidates without reformatting them in main Emacs"
-    (let* ((result
-            '((kind . "heading")
-              (title . "Worker formatted")
-              (level . 2)
-              (location . ((file_path . "/tmp/a.org") (line . 1)))))
-           (data
-            (org-files-db-cache--prepare-logical-data
-             (list result) '((title :width (max 40)))))
-           presentation)
-      (expect (length (plist-get data :candidate-templates)) :to-equal 1)
-      (cl-letf (((symbol-function 'org-files-db--presentation-format-candidates)
-                 (lambda (&rest _)
-                   (error "Main process must reuse worker candidate strings"))))
-        (setq presentation
-              (org-files-db-cache--presentation-from-logical-data data)))
-      (let ((candidate
-             (car (org-files-db--presentation-candidates presentation))))
-        (expect (get-text-property 0 'org-files-db-result candidate)
-                :to-equal result)
-        (expect (org-files-db-test--candidate-visible candidate)
-                :to-match "Worker formatted"))))
-
-  (it "builds a complete patched presentation payload inside the worker"
+  (it "returns only restricted replacement results from a patch worker"
     (let* ((request
             '(:view ("cached" :command query :query (headings)
                               :columns ((title)))
@@ -1991,13 +1964,6 @@
               :refresh-type patch
               :upsert-files ("/tmp/a.org")
               :deleted-files ("/tmp/deleted.org")
-              :base-results
-              (((kind . "heading") (title . "A old")
-                (location . ((file_path . "/tmp/a.org") (line . 1))))
-               ((kind . "heading") (title . "B")
-                (location . ((file_path . "/tmp/b.org") (line . 1))))
-               ((kind . "heading") (title . "Deleted")
-                (location . ((file_path . "/tmp/deleted.org") (line . 1)))))
               :columns ((title))))
            (replacement
             '((kind . "heading") (title . "A new")
@@ -2012,53 +1978,14 @@
                    (list replacement))))
         (setq response (org-files-db-cache--worker-run request)))
       (expect (plist-get response :ok) :to-equal t)
-      (let ((data (plist-get response :logical-data)))
-        (expect (mapcar #'org-files-db--result-title
-                        (plist-get data :results))
-                :to-equal '("A new" "B"))
-        (expect (length (plist-get data :candidate-templates)) :to-equal 2)
-        (expect (length (plist-get data :rows)) :to-equal 2))))
-
-  (it "patches retained logical rows without mutating the published entry"
-    (let* ((old-results
-            '(((kind . "heading") (title . "A old")
-               (location . ((file_path . "/tmp/a.org") (line . 1))))
-              ((kind . "heading") (title . "B")
-               (location . ((file_path . "/tmp/b.org") (line . 1))))))
-           (columns (org-files-db--normalize-columns '((title))))
-           (entry
-            (make-org-files-db-cache--entry
-             :results old-results
-             :columns columns
-             :complete-p t
-             :presentation
-             (org-files-db-cache--prepare old-results columns)))
-           (restricted-data
-            (org-files-db-cache--prepare-logical-data
-             '(((kind . "heading") (title . "A new")
-                (location . ((file_path . "/tmp/a.org") (line . 2)))))
-             columns))
-           (restricted-rows
-            (org-files-db-cache--rows-from-logical-data restricted-data))
-           (patched-rows
-            (org-files-db-cache--apply-patch-rows
-             entry '("/tmp/a.org") nil restricted-rows)))
-      (expect
-       (mapcar
-        (lambda (row)
-          (org-files-db--result-title
-           (org-files-db--presentation-row-result row)))
-        (append patched-rows nil))
-       :to-equal '("A new" "B"))
+      (expect (plist-get response :format-version)
+              :to-equal org-files-db-cache--format-version)
+      (expect (plist-get response :payload-kind) :to-equal 'restricted)
       (expect (mapcar #'org-files-db--result-title
-                      (org-files-db-cache--entry-results entry))
-              :to-equal '("A old" "B"))
-      (expect
-       (length
-        (org-files-db--presentation-candidates
-         (org-files-db-cache--presentation-from-rows
-          patched-rows columns)))
-       :to-equal 2)))
+                      (plist-get response :results))
+              :to-equal '("A new"))
+      (expect (plist-member response :logical-data) :to-equal nil)
+      (expect (plist-member response :candidate-templates) :to-equal nil)))
 
   (it "transfers worker payloads through a bounded readable artifact"
     (let* ((result-file (make-temp-file "org-files-db-worker-test-"))
@@ -2071,15 +1998,16 @@
              :view-token "view-token"
              :refresh-token 4
              :refresh-type 'full))
-           (logical
-            (org-files-db-cache--prepare-logical-data
-             '(((title . "One"))) '((title))))
            (payload
-            (list :ok t :database-id "db-one"
+            (list :ok t
+                  :format-version org-files-db-cache--format-version
+                  :database-id "db-one"
                   :source-generation 2 :target-generation 3
                   :cache-key "cache-key" :view-token "view-token"
                   :refresh-token 4 :refresh-type 'full
-                  :logical-data logical))
+                  :payload-kind 'complete
+                  :results '(((title . "One")))
+                  :columns '((title))))
            control decoded)
       (setf (org-files-db-cache--job-result-file job) result-file)
       (unwind-protect
@@ -2090,7 +2018,7 @@
                   decoded
                   (org-files-db-cache--read-data-file result-file))
             (expect (org-files-db-cache--plain-data-p control) :to-equal t)
-            (expect (plist-member control :logical-data) :to-equal nil)
+            (expect (plist-member control :results) :to-equal nil)
             (expect (< (length (prin1-to-string control)) 1024) :to-equal t)
             (expect (org-files-db-cache--worker-result-valid-p job control)
                     :to-equal t)
@@ -2101,7 +2029,73 @@
                     :to-equal nil))
         (org-files-db-cache--cleanup-job-transport job))))
 
-  (it "moves patch base results through the request artifact"
+  (it "publishes compact worker results through one main presentation build"
+    (let* ((view (org-files-db-views-get "cached"))
+           (state '(:database-id "db-one" :generation 2))
+           (view-token (org-files-db-cache--view-token view nil))
+           (cache-key (org-files-db-cache--cache-key view nil state))
+           (result
+            '((kind . "heading") (title . "Compact")
+              (location . ((file_path . "/tmp/a.org") (line . 1)))))
+           (result-file (make-temp-file "org-files-db-worker-compact-"))
+           (job
+            (make-org-files-db-cache--job
+             :view-name "cached" :view-token view-token
+             :cache-key cache-key :database-id "db-one"
+             :target-generation 2 :refresh-token 12
+             :refresh-type 'full :result-file result-file))
+           (payload
+            (list :ok t
+                  :format-version org-files-db-cache--format-version
+                  :database-id "db-one"
+                  :source-generation nil :target-generation 2
+                  :cache-key cache-key :view-token view-token
+                  :refresh-token 12 :refresh-type 'full
+                  :payload-kind 'complete
+                  :results (list result)
+                  :columns '((title))))
+           (payload-bytes
+            (org-files-db-cache--write-data-file result-file payload))
+           (control
+            (list :ok t
+                  :format-version org-files-db-cache--format-version
+                  :database-id "db-one"
+                  :source-generation nil :target-generation 2
+                  :cache-key cache-key :view-token view-token
+                  :refresh-token 12 :refresh-type 'full
+                  :payload-bytes payload-bytes))
+           (original-prepare
+            (symbol-function 'org-files-db-cache--prepare))
+           (preparations 0)
+           published-results published-presentation)
+      (puthash "cached" 12 org-files-db-cache--refresh-tokens)
+      (setq org-files-db-cache--current-job job
+            org-files-db-cache--current-worker 'worker)
+      (cl-letf (((symbol-function 'org-files-db-cache--read-index-state)
+                 (lambda (_config) state))
+                ((symbol-function 'org-files-db-cache--prepare)
+                 (lambda (results columns)
+                   (setq preparations (1+ preparations))
+                   (funcall original-prepare results columns)))
+                ((symbol-function 'org-files-db-cache--publish)
+                 (lambda (_view _config _state results _columns presentation
+                                _refresh-token)
+                   (setq published-results results
+                         published-presentation presentation)
+                   'published))
+                ((symbol-function 'org-files-db-cache--start-next-worker)
+                 #'ignore))
+        (org-files-db-cache--worker-finished job control))
+      (expect preparations :to-equal 1)
+      (expect published-results :to-equal (list result))
+      (expect
+       (length
+        (org-files-db--presentation-candidates published-presentation))
+       :to-equal 1)
+      (expect org-files-db-cache--current-job :to-equal nil)
+      (expect (file-exists-p result-file) :to-equal nil)))
+
+  (it "does not copy complete patch base results into the worker request"
     (let* ((view (org-files-db-views-get "cached"))
            (state '(:database-id "db-one" :generation 3))
            (results
@@ -2127,9 +2121,11 @@
             (org-files-db-cache--prepare-job-transport job entry)
             (setq request (org-files-db-cache--worker-request job view))
             (expect (plist-member request :base-results) :to-equal nil)
-            (expect (org-files-db-cache--read-data-file
-                     (plist-get request :base-results-file))
-                    :to-equal results))
+            (expect (plist-member request :base-results-file) :to-equal nil)
+            (expect (org-files-db-cache--job-request-file job) :to-equal nil)
+            (expect (file-exists-p
+                     (org-files-db-cache--job-result-file job))
+                    :to-equal t))
         (org-files-db-cache--cleanup-job-transport job))))
 
   (it "rechecks generation immediately before worker publication"
@@ -2380,7 +2376,7 @@
         (org-files-db-cache--debounced-check "/tmp/config.toml"))
       (expect scheduled :to-equal 1)))
 
-  (it "prepares complete logical data inside the async worker"
+  (it "returns complete fetched results without worker-side presentation"
     (let* ((request
             '(:view ("cached" :command query :query (headings)
                               :columns ((title)))
@@ -2410,13 +2406,41 @@
       (expect (plist-get response :cache-key) :to-equal "cache-key")
       (expect (plist-get response :view-token) :to-equal "view-token")
       (expect (plist-get response :refresh-token) :to-equal 9)
-      (expect (length (plist-get (plist-get response :logical-data) :rows))
-              :to-equal 1)
-      (expect (length
-               (plist-get (plist-get response :logical-data)
-                          :candidate-templates))
-              :to-equal 1)
+      (expect (plist-get response :payload-kind) :to-equal 'complete)
+      (expect (plist-get response :results) :to-equal (list result))
+      (expect (plist-get response :columns) :to-equal '((title)))
+      (expect (plist-member response :logical-data) :to-equal nil)
       (expect (org-files-db-cache--plain-data-p response) :to-equal t)))
+
+  (it "keeps worker results fully searchable after main-process publication"
+    (let* ((result
+            '((kind . "heading")
+              (title . "Visible prefix and hidden needle")
+              (location . ((file_path . "/tmp/a.org") (line . 1)))))
+           (job (make-org-files-db-cache--job :refresh-type 'full))
+           (payload
+            `(:payload-kind complete
+              :results (,result)
+              :columns ((title :width (fixed 10)
+                               :truncate (:position right :marker "…")))))
+           (results
+            (org-files-db-cache--complete-worker-results job payload))
+           (presentation
+            (org-files-db-cache--prepare
+             results
+             (org-files-db--normalize-columns
+              (plist-get payload :columns))))
+           (candidates
+            (org-files-db--presentation-candidates presentation))
+           (completion-styles '(substring)))
+      (expect
+       (length
+        (completion-all-completions
+         "hidden needle"
+         (org-files-db--completion-table candidates)
+         nil
+         (length "hidden needle")))
+       :to-equal 1)))
 
   (it "does not publish a synchronous build when generation keeps changing"
     (let* ((view (org-files-db-views-get "cached"))

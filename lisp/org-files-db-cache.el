@@ -91,7 +91,7 @@ and timing events.  The default nil keeps normal cache operation quiet."
   :type 'boolean
   :group 'org-files-db)
 
-(defconst org-files-db-cache--format-version 3
+(defconst org-files-db-cache--format-version 4
   "Version of the prepared predefined-view cache representation.")
 
 (defconst org-files-db-cache--failure-backoff-seconds 60.0
@@ -677,76 +677,6 @@ values have been prepared, rows no longer need presentation-source objects."
   (mapcar #'org-files-db--presentation-column-definition
           (append columns nil)))
 
-(defun org-files-db-cache--cell-data (cell)
-  "Return serializable logical data for prepared CELL."
-  (list :logical-value
-        (org-files-db--presentation-cell-logical-value cell)
-        :display (org-files-db--presentation-cell-display cell)
-        :display-width
-        (org-files-db--presentation-cell-display-width cell)
-        :source-face
-        (org-files-db--presentation-cell-source-face cell)))
-
-(defun org-files-db-cache--row-data (row)
-  "Return serializable logical data for prepared ROW."
-  (list :result-index
-        (org-files-db--presentation-row-original-position row)
-        :original-position
-        (org-files-db--presentation-row-original-position row)
-        :row-source (org-files-db--presentation-row-row-source row)
-        :row-value (org-files-db--presentation-row-row-value row)
-        :sort-keys (org-files-db--presentation-row-sort-keys row)
-        :cells
-        (mapcar #'org-files-db-cache--cell-data
-                (append (org-files-db--presentation-row-cells row) nil))))
-
-(defun org-files-db-cache--worker-candidate-template-data (candidate)
-  "Return plain serializable data for formatted worker CANDIDATE."
-  (let* ((visible-length
-          (and (> (length candidate) 0)
-               (get-text-property
-                0 'org-files-db-visible-length candidate)))
-         (position 0)
-         faces)
-    (unless (and (integerp visible-length)
-                 (>= visible-length 0)
-                 (<= visible-length (length candidate)))
-      (signal 'org-files-db-error
-              (list "Formatted worker candidate has an invalid visible length")))
-    (while (< position visible-length)
-      (let* ((source-face (get-text-property position 'face candidate))
-             (next
-              (or (next-single-property-change
-                   position 'face candidate visible-length)
-                  visible-length)))
-        (when source-face
-          (unless (symbolp source-face)
-            (signal 'org-files-db-error
-                    (list "Formatted worker candidate has an invalid face")))
-          (push (list position next source-face) faces))
-        (setq position next)))
-    (list :text (substring-no-properties candidate)
-          :visible-length visible-length
-          :faces (nreverse faces))))
-
-(defun org-files-db-cache--worker-candidate-templates (rows columns widths)
-  "Return serializable candidate templates for ROWS, COLUMNS, and WIDTHS.
-The shared formatter performs truncation, padding, hidden search text, and
-identity creation in the worker.  Templates contain only plain strings,
-visible lengths, and source-face ranges; process-local result and row metadata
-never cross the async boundary."
-  (dotimes (row-index (length rows))
-    (let ((cells
-           (org-files-db--presentation-row-cells (aref rows row-index))))
-      (dotimes (cell-index (length cells))
-        (let ((cell (aref cells cell-index)))
-          (setf (org-files-db--presentation-cell-face cell)
-                (org-files-db--presentation-cell-source-face cell))))))
-  (mapcar
-   #'org-files-db-cache--worker-candidate-template-data
-   (car (org-files-db--presentation-format-candidates
-         rows columns widths))))
-
 (defun org-files-db-cache--plain-data-p (value)
   "Return non-nil when VALUE is acyclic readable async worker data."
   (let ((states (make-hash-table :test #'eq))
@@ -779,9 +709,9 @@ never cross the async boundary."
 
 (defun org-files-db-cache--write-data-file (file value)
   "Write readable Lisp VALUE to transport FILE and return its byte size.
-Worker payloads are assembled exclusively from normalized JSON and internal
-plain presentation records.  Avoid another full graph walk here: malformed
-artifacts are rejected by metadata and reconstruction validation in the parent."
+Worker payloads are assembled exclusively from normalized JSON result objects
+and plain column definitions.  Avoid another full graph walk here: malformed
+artifacts are rejected by metadata and publication validation in the parent."
   (let ((coding-system-for-write 'utf-8-emacs-unix)
         print-level
         print-length
@@ -827,274 +757,6 @@ artifacts are rejected by metadata and reconstruction validation in the parent."
      (org-files-db-cache--job-result-file job))
     (setf (org-files-db-cache--job-request-file job) nil
           (org-files-db-cache--job-result-file job) nil)))
-
-(defun org-files-db-cache--prepare-logical-data (results columns)
-  "Prepare serializable worker presentation data for RESULTS using COLUMNS.
-The worker performs result extraction, shared-width calculation, and candidate
-formatting.  Candidate templates retain only serializable presentation data;
-theme-sensitive face sanitization and process-local result metadata are
-restored in the main Emacs process before publication."
-  (let* ((normalized (org-files-db--normalize-columns columns))
-         (sources (org-files-db--presentation-build-sources results))
-         (rows (org-files-db--presentation-build-rows sources))
-         widths candidate-templates)
-    (org-files-db--presentation-populate-cells rows normalized)
-    (setq widths (org-files-db--presentation-calculate-widths rows normalized)
-          candidate-templates
-          (org-files-db-cache--worker-candidate-templates
-           rows normalized widths))
-    (list :results results
-          :columns (org-files-db-cache--column-definitions normalized)
-          :widths (append widths nil)
-          :rows
-          (mapcar #'org-files-db-cache--row-data
-                  (append rows nil))
-          :candidate-templates candidate-templates)))
-
-(defun org-files-db-cache--logical-cell (data context)
-  "Return a presentation cell from plain DATA in CONTEXT."
-  (let ((display (plist-get data :display))
-        (display-width (plist-get data :display-width))
-        (source-face (plist-get data :source-face)))
-    (unless (stringp display)
-      (signal 'org-files-db-error
-              (list (format "%s has a non-string cell display" context))))
-    (unless (and (integerp display-width) (>= display-width 0))
-      (signal 'org-files-db-error
-              (list (format "%s has an invalid cell display width" context))))
-    (unless (or (null source-face) (symbolp source-face))
-      (signal 'org-files-db-error
-              (list (format "%s has an invalid source face" context))))
-    (make-org-files-db--presentation-cell
-     :logical-value (plist-get data :logical-value)
-     :display display
-     :display-width display-width
-     :source-face source-face)))
-
-(defun org-files-db-cache--rows-from-logical-data (data)
-  "Return prepared row vector reconstructed from logical DATA."
-  (let* ((results-value (plist-get data :results))
-         (results
-          (cond
-           ((vectorp results-value) results-value)
-           ((listp results-value) (vconcat results-value))
-           (t
-            (signal 'org-files-db-error
-                    (list "Cache worker results are not a list or vector")))))
-         (row-values (plist-get data :rows))
-         (row-list
-          (cond
-           ((vectorp row-values) (append row-values nil))
-           ((listp row-values) row-values)
-           (t
-            (signal 'org-files-db-error
-                    (list "Cache worker rows are not a list or vector")))))
-         (rows (make-vector (length row-list) nil))
-         (row-index 0))
-    (dolist (row-data row-list)
-      (let* ((context (format "Cache worker row %d" row-index))
-             (result-index (plist-get row-data :result-index))
-             (original-position
-              (or (plist-get row-data :original-position) result-index))
-             (cell-values (plist-get row-data :cells))
-             (cell-list
-              (cond
-               ((vectorp cell-values) (append cell-values nil))
-               ((listp cell-values) cell-values)
-               (t
-                (signal 'org-files-db-error
-                        (list (format "%s has invalid cells" context))))))
-             (cells (make-vector (length cell-list) nil))
-             (cell-index 0))
-        (unless (and (integerp result-index)
-                     (>= result-index 0)
-                     (< result-index (length results)))
-          (signal 'org-files-db-error
-                  (list (format "%s has invalid result index %S"
-                                context result-index))))
-        (unless (and (integerp original-position)
-                     (>= original-position 0))
-          (signal 'org-files-db-error
-                  (list (format "%s has invalid original position %S"
-                                context original-position))))
-        (dolist (cell-data cell-list)
-          (aset cells cell-index
-                (org-files-db-cache--logical-cell cell-data context))
-          (setq cell-index (1+ cell-index)))
-        (aset rows row-index
-              (make-org-files-db--presentation-row
-               :result (aref results result-index)
-               :original-position original-position
-               :row-source (plist-get row-data :row-source)
-               :row-value (plist-get row-data :row-value)
-               :cells cells
-               :sort-keys (plist-get row-data :sort-keys)))
-        (setq row-index (1+ row-index))))
-    rows))
-
-(defun org-files-db-cache--presentation-from-rows
-    (rows columns &optional widths)
-  "Build theme-sensitive presentation from logical ROWS and COLUMNS.
-When WIDTHS is nil, recalculate complete shared column sizes from cached cells."
-  (let* ((normalized (org-files-db--normalize-columns columns))
-         (column-count (length normalized))
-         (width-vector
-          (if widths
-              (if (vectorp widths) widths (vconcat widths))
-            (org-files-db--presentation-calculate-widths rows normalized))))
-    (unless (= (length width-vector) column-count)
-      (signal 'org-files-db-error
-              (list "Cached logical widths do not match configured columns")))
-    (dotimes (column-index column-count)
-      (unless (and (integerp (aref width-vector column-index))
-                   (> (aref width-vector column-index) 0))
-        (signal 'org-files-db-error
-                (list "Cached logical data has an invalid column width"))))
-    (dotimes (row-index (length rows))
-      (unless (= (length (org-files-db--presentation-row-cells
-                          (aref rows row-index)))
-                 column-count)
-        (signal 'org-files-db-error
-                (list "Cached logical row does not match configured columns"))))
-    (let* ((face-cache (org-files-db--presentation-prepare-faces rows))
-           (formatted
-            (org-files-db--presentation-format-candidates
-             rows normalized width-vector))
-           (candidates (car formatted))
-           (lookup (cdr formatted))
-           (presentation
-            (make-org-files-db--presentation
-             :columns normalized
-             :sources nil
-             :rows rows
-             :widths width-vector
-             :face-cache nil
-             :candidates candidates
-             :lookup lookup
-             :timings nil
-             :phase-metrics nil)))
-      (when candidates
-        (puthash candidates lookup org-files-db--candidate-lookups))
-      (ignore face-cache)
-      presentation)))
-
-(defun org-files-db-cache--rehydrate-candidate-template
-    (template row face-cache)
-  "Restore worker TEMPLATE for prepared ROW using main-process FACE-CACHE."
-  (let* ((text (plist-get template :text))
-         (visible-length (plist-get template :visible-length))
-         (face-ranges (plist-get template :faces))
-         (result (org-files-db--presentation-row-result row)))
-    (unless (stringp text)
-      (signal 'org-files-db-error
-              (list "Cache worker candidate template has invalid text")))
-    (unless (and (integerp visible-length)
-                 (>= visible-length 0)
-                 (<= visible-length (length text)))
-      (signal 'org-files-db-error
-              (list "Cache worker candidate has an invalid visible length")))
-    (unless (listp face-ranges)
-      (signal 'org-files-db-error
-              (list "Cache worker candidate has invalid face ranges")))
-    (let ((candidate (copy-sequence text)))
-      (dolist (range face-ranges)
-        (pcase range
-          (`(,start ,end ,source-face)
-           (unless (and (integerp start)
-                        (integerp end)
-                        (<= 0 start end visible-length)
-                        (symbolp source-face))
-             (signal 'org-files-db-error
-                     (list "Cache worker candidate has an invalid face range")))
-           (let ((face
-                  (gethash
-                   source-face face-cache
-                   org-files-db--presentation-uncomputed)))
-             (when (and (not (eq face org-files-db--presentation-uncomputed))
-                        face)
-               (add-text-properties start end (list 'face face) candidate))))
-          (_
-           (signal 'org-files-db-error
-                   (list "Cache worker candidate has a malformed face range")))))
-      (let ((properties
-             (list 'org-files-db-result result
-                   'org-files-db-visible-length visible-length
-                   'consult--candidate result
-                   'rear-nonsticky t))
-            (row-source (org-files-db--presentation-row-row-source row)))
-        (when row-source
-          (setq properties
-                (append
-                 properties
-                 (list
-                  'org-files-db-presentation-row row
-                  'org-files-db-row-source row-source
-                  'org-files-db-row-value
-                  (org-files-db--presentation-row-row-value row)))))
-        (add-text-properties 0 visible-length properties candidate))
-      (when (< visible-length (length candidate))
-        (add-text-properties
-         visible-length (length candidate)
-         '(display "" invisible t)
-         candidate))
-      candidate)))
-
-(defun org-files-db-cache--presentation-from-logical-data (data)
-  "Build a prepared main-process presentation from worker DATA.
-When DATA contains preformatted candidate templates, retain the expensive
-worker formatting and only restore theme-sensitive faces and process-local
-metadata.  Older logical data without templates uses the full local formatter
-as a compatibility fallback."
-  (unless (and (listp data)
-               (plist-member data :results)
-               (plist-member data :columns)
-               (plist-member data :rows)
-               (plist-member data :widths))
-    (signal 'org-files-db-error
-            (list "Cache worker returned malformed logical data")))
-  (let* ((columns (plist-get data :columns))
-         (normalized (org-files-db--normalize-columns columns))
-         (rows (org-files-db-cache--rows-from-logical-data data))
-         (widths-value (plist-get data :widths))
-         (widths (if (vectorp widths-value) widths-value (vconcat widths-value)))
-         (templates (plist-get data :candidate-templates)))
-    (if (not (plist-member data :candidate-templates))
-        (org-files-db-cache--presentation-from-rows rows normalized widths)
-      (unless (= (length widths) (length normalized))
-        (signal 'org-files-db-error
-                (list "Cache worker widths do not match configured columns")))
-      (unless (and (listp templates) (= (length templates) (length rows)))
-        (signal 'org-files-db-error
-                (list "Cache worker candidates do not match logical rows")))
-      (let* ((face-cache (org-files-db--presentation-prepare-faces rows))
-             (lookup (make-vector (length rows) nil))
-             (candidates (copy-sequence templates))
-             (tail candidates)
-             (index 0))
-        (while tail
-          (let* ((row (aref rows index))
-                 (result (org-files-db--presentation-row-result row))
-                 (candidate
-                  (org-files-db-cache--rehydrate-candidate-template
-                   (car tail) row face-cache)))
-            (setcar tail candidate)
-            (aset lookup index result)
-            (setq tail (cdr tail)
-                  index (1+ index))))
-        (let ((presentation
-               (make-org-files-db--presentation
-                :columns normalized
-                :sources nil
-                :rows rows
-                :widths widths
-                :face-cache nil
-                :candidates candidates
-                :lookup lookup
-                :timings nil
-                :phase-metrics nil)))
-          (when candidates
-            (puthash candidates lookup org-files-db--candidate-lookups))
-          presentation)))))
 
 (defun org-files-db-cache--estimated-memory (results presentation)
   "Return an approximate retained byte cost for RESULTS and PRESENTATION."
@@ -1344,6 +1006,22 @@ plist keys :presentation, :results, :columns, and optional :entry."
                 (= latest (org-files-db-cache--job-refresh-token job))))
          org-files-db-cache--queue))))
 
+(defun org-files-db-cache--prioritize-refresh (name)
+  "Move NAME's latest queued refresh ahead of other queued prewarm jobs."
+  (let ((latest (gethash name org-files-db-cache--refresh-tokens -1))
+        prioritized retained)
+    (dolist (job org-files-db-cache--queue)
+      (if (and (equal name (org-files-db-cache--job-view-name job))
+               (= latest (org-files-db-cache--job-refresh-token job)))
+          (push job prioritized)
+        (push job retained)))
+    (when prioritized
+      (setq org-files-db-cache--queue
+            (nconc (nreverse prioritized) (nreverse retained)))
+      (org-files-db-cache--debug
+       "interactive refresh prioritized view=%s queue=%d"
+       name (length org-files-db-cache--queue)))))
+
 (defun org-files-db-cache--known-index-state (config-file fallback)
   "Return latest known state for CONFIG-FILE, or FALLBACK when unavailable."
   (or (gethash (org-files-db-cache--config-key config-file)
@@ -1364,6 +1042,7 @@ entry, or nil after a worker failure, missing replacement, or timeout."
      "interactive lookup waiting view=%s db=%s gen=%s timeout=%.1fs"
      name (plist-get state :database-id) (plist-get state :generation) timeout)
     (org-files-db-cache--request-refresh view config-file nil state)
+    (org-files-db-cache--prioritize-refresh name)
     (while (not done)
       (setq state (org-files-db-cache--known-index-state config-file state))
       (let ((key (and state
@@ -1385,6 +1064,7 @@ entry, or nil after a worker failure, missing replacement, or timeout."
           ;; before this loop iteration.  Ask once more for the latest known
           ;; state; failure backoff prevents a tight retry loop.
           (org-files-db-cache--request-refresh view config-file nil state)
+          (org-files-db-cache--prioritize-refresh name)
           (unless (org-files-db-cache--refresh-active-p name)
             (setq entry nil
                   done t)))
@@ -1527,78 +1207,6 @@ file delta."
    (org-files-db-cache--entry-results entry)
    upsert-files deleted-files restricted-results))
 
-(defun org-files-db-cache--copy-cell (cell)
-  "Return an independent logical copy of prepared CELL."
-  (make-org-files-db--presentation-cell
-   :logical-value (org-files-db--presentation-cell-logical-value cell)
-   :display (org-files-db--presentation-cell-display cell)
-   :display-width (org-files-db--presentation-cell-display-width cell)
-   :source-face (org-files-db--presentation-cell-source-face cell)))
-
-(defun org-files-db-cache--copy-row (row)
-  "Return an independent logical copy of prepared ROW."
-  (make-org-files-db--presentation-row
-   :result (org-files-db--presentation-row-result row)
-   :original-position (org-files-db--presentation-row-original-position row)
-   :row-source (org-files-db--presentation-row-row-source row)
-   :row-value (org-files-db--presentation-row-row-value row)
-   :cells
-   (vconcat
-    (mapcar #'org-files-db-cache--copy-cell
-            (append (org-files-db--presentation-row-cells row) nil)))
-   :sort-keys (copy-tree (org-files-db--presentation-row-sort-keys row))))
-
-(defun org-files-db-cache--apply-patch-rows
-    (entry upsert-files deleted-files restricted-rows)
-  "Return complete logical rows by patching cache ENTRY.
-UPSERT-FILES and DELETED-FILES remove existing owning-file groups before
-RESTRICTED-ROWS are merged.  The published ENTRY is never mutated."
-  (let* ((presentation (org-files-db-cache--entry-presentation entry))
-         (cached-rows
-          (and presentation (org-files-db--presentation-rows presentation)))
-         (affected (make-hash-table :test #'equal))
-         (groups (make-hash-table :test #'equal)))
-    (unless (vectorp cached-rows)
-      (signal 'org-files-db-error
-              (list "Cached query view has no retained logical rows")))
-    (dolist (path (append upsert-files deleted-files))
-      (puthash path t affected))
-    (cl-loop for row across cached-rows
-             for result = (org-files-db--presentation-row-result row)
-             for path = (org-files-db-cache--result-owner-path result)
-             do (unless path
-                  (signal 'org-files-db-error
-                          (list "Cached query row lacks a stable owning path")))
-             unless (gethash path affected)
-             do (puthash path
-                         (cons (org-files-db-cache--copy-row row)
-                               (gethash path groups))
-                         groups))
-    (cl-loop for row across restricted-rows
-             for result = (org-files-db--presentation-row-result row)
-             for path = (org-files-db-cache--result-owner-path result)
-             do (unless path
-                  (signal 'org-files-db-error
-                          (list "Restricted query row lacks a stable owning path")))
-             do (puthash path
-                         (cons (org-files-db-cache--copy-row row)
-                               (gethash path groups))
-                         groups))
-    (let (paths merged)
-      (maphash
-       (lambda (path rows)
-         (puthash path (nreverse rows) groups)
-         (push path paths))
-       groups)
-      (dolist (path (sort paths #'string<))
-        (setq merged (nconc merged (gethash path groups))))
-      (let ((rows (vconcat merged)))
-        (dotimes (index (length rows))
-          (setf (org-files-db--presentation-row-original-position
-                 (aref rows index))
-                index))
-        rows))))
-
 (defun org-files-db-cache--next-refresh-token (view-name)
   "Return and store the next refresh token for VIEW-NAME."
   (setq org-files-db-cache--refresh-counter
@@ -1718,18 +1326,15 @@ wake-up events cannot obsolete the only worker for that state."
           :columns (copy-tree (plist-get properties :columns)))))
 
 (defun org-files-db-cache--prepare-job-transport (job entry)
-  "Create transport artifacts for JOB using optional source ENTRY."
+  "Create the result transport artifact for JOB and source ENTRY.
+ENTRY is intentionally not serialized.  Patch jobs no longer copy the complete
+retained cache into a request artifact.  The worker returns only restricted
+replacement results, which the main Emacs merges with the still-published
+source entry after validating its generation."
+  (ignore entry)
   (org-files-db-cache--cleanup-job-transport job)
   (setf (org-files-db-cache--job-result-file job)
         (make-temp-file "org-files-db-cache-result-"))
-  (when (eq (org-files-db-cache--job-refresh-type job) 'patch)
-    (unless entry
-      (signal 'org-files-db-error
-              (list "Patch cache source disappeared before worker start")))
-    (let ((request-file (make-temp-file "org-files-db-cache-request-")))
-      (setf (org-files-db-cache--job-request-file job) request-file)
-      (org-files-db-cache--write-data-file
-       request-file (org-files-db-cache--entry-results entry))))
   job)
 
 (defun org-files-db-cache--worker-request (job view)
@@ -1762,8 +1367,6 @@ wake-up events cannot obsolete the only worker for that state."
                  :refresh-type (org-files-db-cache--job-refresh-type job)
                  :upsert-files (org-files-db-cache--job-upsert-files job)
                  :deleted-files (org-files-db-cache--job-deleted-files job)
-                 :base-results-file
-                 (and patch-p (org-files-db-cache--job-request-file job))
                  :columns
                  (and entry
                       (org-files-db-cache--column-definitions
@@ -1784,7 +1387,9 @@ wake-up events cannot obsolete the only worker for that state."
       request)))
 
 (defun org-files-db-cache--worker-run (request)
-  "Execute serializable cache worker REQUEST and return plain Lisp data."
+  "Execute serializable cache worker REQUEST and return compact plain data.
+Complete jobs return fetched results.  Patch jobs return only restricted
+upsert results; the main Emacs merges them with the retained source entry."
   (condition-case err
       (let* ((options (plist-get request :presentation-options))
              (org-files-db-heading-columns
@@ -1834,17 +1439,6 @@ wake-up events cannot obsolete the only worker for that state."
                   (list "Index changed before cache worker started")))
         (let* ((refresh-type (plist-get request :refresh-type))
                (patch-p (eq refresh-type 'patch))
-               (base-results
-                (when patch-p
-                  (cond
-                   ((plist-member request :base-results)
-                    (plist-get request :base-results))
-                   ((plist-get request :base-results-file)
-                    (org-files-db-cache--read-data-file
-                     (plist-get request :base-results-file)))
-                   (t
-                    (signal 'org-files-db-error
-                            (list "Patch worker lacks complete base results"))))))
                (fetched
                 (unless patch-p
                   (org-files-db-cache--fetch-view view config-file)))
@@ -1861,17 +1455,10 @@ wake-up events cannot obsolete the only worker for that state."
                    (plist-get request :upsert-files)
                    columns)))
                (results
-                (if patch-p
-                    (org-files-db-cache--merge-patch-results
-                     base-results
-                     (plist-get request :upsert-files)
-                     (plist-get request :deleted-files)
-                     restricted-results)
-                  (plist-get fetched :results)))
-               (logical-data
-                (org-files-db-cache--prepare-logical-data results columns))
+                (if patch-p restricted-results (plist-get fetched :results)))
                (response
                 (list :ok t
+                      :format-version org-files-db-cache--format-version
                       :database-id expected-id
                       :source-generation
                       (plist-get request :source-generation)
@@ -1880,7 +1467,10 @@ wake-up events cannot obsolete the only worker for that state."
                       :view-token (plist-get request :view-token)
                       :refresh-token (plist-get request :refresh-token)
                       :refresh-type refresh-type
-                      :logical-data logical-data)))
+                      :payload-kind (if patch-p 'restricted 'complete)
+                      :results results
+                      :columns
+                      (org-files-db-cache--column-definitions columns))))
           response))
     (error
      (list :ok nil :error (error-message-string err)))))
@@ -1897,6 +1487,8 @@ Return only small control data suitable for async.el serialization."
               (org-files-db-cache--write-data-file result-file response))
              (control
               (list :ok t
+                    :format-version
+                    (plist-get response :format-version)
                     :database-id (plist-get response :database-id)
                     :source-generation (plist-get response :source-generation)
                     :target-generation (plist-get response :target-generation)
@@ -2079,6 +1671,8 @@ Return only small control data suitable for async.el serialization."
   "Return non-nil when RESULT metadata identifies JOB."
   (and (listp result)
        (plist-get result :ok)
+       (equal (plist-get result :format-version)
+              org-files-db-cache--format-version)
        (equal (plist-get result :database-id)
               (org-files-db-cache--job-database-id job))
        (equal (plist-get result :source-generation)
@@ -2109,14 +1703,15 @@ Return only small control data suitable for async.el serialization."
 (defun org-files-db-cache--worker-payload-valid-p (job result)
   "Return non-nil when complete worker payload RESULT is valid for JOB."
   (and (org-files-db-cache--worker-metadata-valid-p job result)
-       (let ((logical-data (plist-get result :logical-data)))
-         (and (listp logical-data)
-              (plist-member logical-data :results)
-              (plist-member logical-data :columns)
-              (plist-member logical-data :rows)
-              (plist-member logical-data :widths)
-              (plist-member logical-data :candidate-templates)
-              t))))
+       (memq (plist-get result :payload-kind) '(complete restricted))
+       (eq (plist-get result :payload-kind)
+           (if (eq (org-files-db-cache--job-refresh-type job) 'patch)
+               'restricted
+             'complete))
+       (let ((results (plist-get result :results))
+             (columns (plist-get result :columns)))
+         (and (or (listp results) (vectorp results))
+              (or (listp columns) (vectorp columns))))))
 
 (defun org-files-db-cache--publish-worker-presentation
     (job view results columns presentation)
@@ -2139,6 +1734,43 @@ Return only small control data suitable for async.el serialization."
         (org-files-db-cache--request-refresh
          view (org-files-db-cache--job-config-file job) nil state))
       nil)))
+
+(defun org-files-db-cache--worker-result-list (payload)
+  "Return worker PAYLOAD results as a list."
+  (let ((results (plist-get payload :results)))
+    (cond
+     ((null results) nil)
+     ((vectorp results) (append results nil))
+     ((listp results) results)
+     (t
+      (signal 'org-files-db-error
+              (list "Cache worker payload has invalid results"))))))
+
+(defun org-files-db-cache--patch-source-entry (job)
+  "Return the unchanged retained source entry required by patch JOB."
+  (let ((entry
+         (org-files-db-cache--entry-for-view
+          (org-files-db-cache--job-view-name job))))
+    (unless (and entry
+                 (equal (org-files-db-cache--entry-database-id entry)
+                        (org-files-db-cache--job-database-id job))
+                 (= (org-files-db-cache--entry-generation entry)
+                    (org-files-db-cache--job-source-generation job)))
+      (signal 'org-files-db-error
+              (list "Patch cache source changed while the worker was running")))
+    entry))
+
+(defun org-files-db-cache--complete-worker-results (job payload)
+  "Return complete results represented by worker JOB PAYLOAD."
+  (let ((worker-results (org-files-db-cache--worker-result-list payload)))
+    (if (eq (plist-get payload :payload-kind) 'restricted)
+        (let ((entry (org-files-db-cache--patch-source-entry job)))
+          (org-files-db-cache--merge-patch-results
+           (org-files-db-cache--entry-results entry)
+           (org-files-db-cache--job-upsert-files job)
+           (org-files-db-cache--job-deleted-files job)
+           worker-results))
+      worker-results)))
 
 (defun org-files-db-cache--worker-finished (job result)
   "Validate and publish async JOB RESULT, then continue the queue."
@@ -2197,40 +1829,39 @@ Return only small control data suitable for async.el serialization."
                                job payload)
                         (signal 'org-files-db-error
                                 (list "Cache worker payload metadata is invalid")))
-                      (let* ((logical-data (plist-get payload :logical-data))
-                             (results (plist-get logical-data :results))
+                      (let* ((results
+                              (org-files-db-cache--complete-worker-results
+                               job payload))
                              (columns
                               (org-files-db--normalize-columns
-                               (plist-get logical-data :columns)))
-                             (reconstruction-started-at (float-time))
+                               (plist-get payload :columns)))
+                             (publication-started-at (float-time))
                              (presentation
-                              (org-files-db-cache--presentation-from-logical-data
-                               logical-data))
-                             (reconstruction-seconds
+                              (org-files-db-cache--prepare results columns))
+                             (publication-seconds
                               (org-files-db-cache--elapsed
-                               reconstruction-started-at))
-                             (rows
-                              (org-files-db--presentation-rows presentation)))
+                               publication-started-at))
+                             (result-count (length results)))
                         (org-files-db-cache--debug
                          (concat "worker finished view=%s target=%s token=%s "
                                  "worker=%.3fs write=%.3fs bytes=%d "
-                                 "read=%.3fs reconstruct=%.3fs total=%.3fs")
+                                 "read=%.3fs publish=%.3fs total=%.3fs")
                          (org-files-db-cache--job-view-name job)
                          (org-files-db-cache--job-target-generation job)
                          (org-files-db-cache--job-refresh-token job)
                          (or (plist-get result :worker-seconds) 0.0)
                          (or (plist-get result :payload-write-seconds) 0.0)
                          (plist-get result :payload-bytes)
-                         read-seconds reconstruction-seconds
+                         read-seconds publication-seconds
                          (or (org-files-db-cache--elapsed
                               (org-files-db-cache--job-started-at job))
                              0.0))
                         (if (not (org-files-db-cache--entry-eligible-p
-                                  (length rows)))
+                                  result-count))
                             (progn
                               (org-files-db-cache--record-result-limit-skip
                                view (org-files-db-cache--job-config-file job)
-                               state (length rows))
+                               state result-count)
                               (org-files-db-cache--retire-obsolete-view-entry
                                (org-files-db-cache--job-view-name job)))
                           (org-files-db-cache--publish-worker-presentation

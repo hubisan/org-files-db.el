@@ -2952,7 +2952,11 @@ At the end provide:
 
 Do not claim the cache is fixed merely because tests pass. Reason through the real interactive lifecycle as well.
 
-* TODO Keep truncated completion columns fully searchable
+* REVIEW Reduce asynchronous view-cache prewarm latency
+
+[[./2026-08-07--reduce-async-cache-prewarm-latency.org][Task details]]
+
+* BUILD Keep truncated completion columns fully searchable
 
 Goal:
 
@@ -3017,369 +3021,6 @@ Acceptance criteria:
 - Fresh, synchronously prepared, asynchronously prepared, and warm cached candidates have identical search semantics.
 - All existing tests continue to pass.
 - ~make ci~ passes.
-  
-* TODO Move all defcustoms to core if possible
-
-* TODO Add row expansion for tags, effective properties, and keywords
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Allow one heading or file result to produce one displayed row per tag, effective property, or keyword.
-
-Currently, multi-valued fields are formatted as one combined column value. Provide a shared row-expansion mechanism instead of implementing separate presentation paths for tags, properties, and keywords.
-
-** Row-source option
-
-Add an optional ~:row-source~ keyword to query execution:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings (tags "project"))
- '((tag :width (max 30))
-   (outline-path :width (max 60))
-   (file-name :width (max 30)))
- nil
- :row-source 'tags)
-#+end_src
-
-Supported values are:
-
-- ~nil~: one displayed row per query result
-- ~tags~: one displayed row per tag
-- ~effective-properties~: one displayed row per effective property
-- ~keywords~: one displayed row per keyword
-
-The default is ~nil~, preserving the current behaviour.
-
-A result containing three tags therefore produces three completion candidates.
-
-Ordinary result columns such as ~outline-path~, ~file-name~, and ~title~ are repeated for every expanded row.
-
-** Tags
-
-With:
-
-#+begin_src emacs-lisp
-:row-source 'tags
-#+end_src
-
-provide the singular column:
-
-#+begin_src emacs-lisp
-(tag)
-#+end_src
-
-Example source heading:
-
-#+begin_src org
-,* Example :project:emacs:active:
-#+end_src
-
-Example rows:
-
-#+begin_example
-project  Example  notes.org
-emacs    Example  notes.org
-active   Example  notes.org
-#+end_example
-
-The existing plural ~tags~ column may continue to display all tags together when no row expansion is requested.
-
-The singular ~tag~ column is valid only with ~:row-source tags~.
-
-Preserve the tag order returned by ~orgfdb~.
-
-Do not add or remove Org tag delimiters unless explicitly configured as part of column formatting.
-
-** Effective properties
-
-With:
-
-#+begin_src emacs-lisp
-:row-source 'effective-properties
-#+end_src
-
-provide the columns:
-
-#+begin_src emacs-lisp
-(property-name)
-(property-value)
-#+end_src
-
-Example effective properties:
-
-#+begin_example
-CATEGORY=work
-OWNER=Daniel
-STATUS=active
-#+end_example
-
-Example rows:
-
-#+begin_example
-CATEGORY  work
-OWNER     Daniel
-STATUS    active
-#+end_example
-
-Each effective property name and its resolved value form one row.
-
-The query command must automatically request:
-
-#+begin_src sh
---include effective_properties
-#+end_src
-
-Users must not need to specify this include manually.
-
-Effective properties represent the resolved values used by query matching. They must not be confused with raw property rows.
-
-If the CLI representation does not provide a stable order, sort effective properties by property name for deterministic output.
-
-** Keywords
-
-With:
-
-#+begin_src emacs-lisp
-:row-source 'keywords
-#+end_src
-
-provide the columns:
-
-#+begin_src emacs-lisp
-(keyword-name)
-(keyword-value)
-#+end_src
-
-Example keywords:
-
-#+begin_src org
-,#+TITLE: Example
-,#+FILETAGS: :project:
-,#+CATEGORY: work
-#+end_src
-
-Example rows:
-
-#+begin_example
-TITLE     Example
-FILETAGS  :project:
-CATEGORY  work
-#+end_example
-
-The query command must automatically request:
-
-#+begin_src sh
---include keywords
-#+end_src
-
-Users must not need to specify this include manually.
-
-Preserve duplicate keyword entries when they are returned separately by ~orgfdb~.
-
-Preserve source order when the CLI provides it. Otherwise, use a deterministic order without merging entries.
-
-** Views
-
-Allow predefined query views to configure ~:row-source~:
-
-#+begin_src emacs-lisp
-(setq org-files-db-views
-      '(("heading-tags"
-         :command query
-         :query (headings)
-         :row-source tags
-         :columns
-         ((tag :width (max 30))
-          (outline-path :width (max 60))
-          (file-name :width (max 30))))
-
-        ("effective-properties"
-         :command query
-         :query (headings)
-         :row-source effective-properties
-         :columns
-         ((property-name :width (max 30))
-          (property-value :width (max 60))
-          (outline-path :width (max 60))))
-
-        ("file-keywords"
-         :command query
-         :query (files)
-         :row-source keywords
-         :columns
-         ((keyword-name :width (max 30))
-          (keyword-value :width (max 60))
-          (file-name :width (max 30))))))
-#+end_src
-
-Query views pass ~:row-source~ to ~org-files-db-query~.
-
-They must not implement a separate expansion or completion path.
-
-** Dynamic blocks
-
-Allow direct query blocks to define ~:row-source~:
-
-#+begin_src org
-,#+BEGIN: org-files-db-query :query "(headings)" :row-source tags :layout flat
-,#+END:
-#+end_src
-
-Views referenced by dynamic blocks inherit their configured ~:row-source~.
-
-Supported dynamic-block values are:
-
-- ~tags~
-- ~effective-properties~
-- ~keywords~
-
-An absent value keeps the normal one-row-per-result behaviour.
-
-** Candidate representation
-
-Keep the matched query result separate from the expanded row data.
-
-Conceptually, each displayed candidate contains:
-
-#+begin_example
-original result
-row-source
-row value
-formatted columns
-#+end_example
-
-Selecting an expanded row continues to execute the configured action on the original heading or file result.
-
-Existing actions such as opening a result, inserting a link, or renaming a file must continue to work without modification.
-
-The row metadata is used for formatting and exporting but must not replace or mutate the original query result.
-
-** Empty collections
-
-When a result has no entries for the selected row source, it produces no displayed rows.
-
-Examples:
-
-- a heading without tags produces no rows for ~:row-source tags~
-- a result without effective properties produces no property rows
-- a result without keywords produces no keyword rows
-
-Do not create an artificial empty row.
-
-A future option may add empty rows if a concrete use case requires them.
-
-** Column validation
-
-Validate singular row columns against the selected row source:
-
-- ~tag~ requires ~:row-source tags~
-- ~property-name~ and ~property-value~ require ~:row-source effective-properties~
-- ~keyword-name~ and ~keyword-value~ require ~:row-source keywords~
-
-Report a clear error for incompatible combinations.
-
-Do not allow multiple row sources in one invocation.
-
-In particular, do not create Cartesian products between tags, properties, and keywords.
-
-** Include inference
-
-Infer required CLI includes from ~:row-source~:
-
-#+begin_example
-tags                  → no additional include when tags are already part of the result
-effective-properties  → effective_properties
-keywords              → keywords
-#+end_example
-
-Combine inferred includes with includes required by configured columns and actions.
-
-Use one ~orgfdb~ invocation for the complete result set.
-
-** Width and truncation
-
-Expanded row columns support the same width and truncation options as all other columns:
-
-#+begin_src emacs-lisp
-(tag
- :width (max 20)
- :truncate (:position right :marker "…"))
-
-(property-value
- :width (fixed 40)
- :truncate (:position middle :marker "…"))
-#+end_src
-
-Shared column widths are calculated across all expanded rows, not separately for each original result.
-
-** Embark export
-
-~embark-export~ must preserve the currently filtered expanded rows.
-
-It must not collapse several tag, property, or keyword rows back into one result.
-
-For flat export:
-
-- produce one exported entry per expanded row
-- retain a link to the original heading or file
-- include the singular row value in the exported description
-
-For outline export:
-
-- preserve the original file and heading hierarchy
-- group expanded rows below their matched result where necessary
-- avoid repeating identical ancestor hierarchy for every row
-
-The exact presentation may reuse the configured columns, but every expanded row must remain distinguishable.
-
-** Supported result kinds
-
-Initial support applies to:
-
-- heading results
-- file results
-- synthetic file-root results where the corresponding data is available
-
-Reject row expansion for link results unless a later feature explicitly defines whether source or target metadata should be expanded.
-
-Search-result support may be added only when the search CLI output provides the required structured data and includes.
-
-** README documentation
-
-Document:
-
-- the purpose of ~:row-source~
-- one row per tag
-- one row per effective property
-- one row per keyword
-- the singular columns available for each mode
-- views and dynamic-block examples
-- empty collections producing no rows
-- automatic include inference
-- the difference between aggregate ~tags~ and singular ~tag~
-
-Avoid describing the feature as JSON expansion or exposing internal candidate structures.
-
-** Acceptance criteria
-
-- Query results can expand to one row per tag.
-- Query results can expand to one row per effective property.
-- Query results can expand to one row per keyword.
-- Normal columns are repeated for every expanded row.
-- ~tag~, ~property-name~, ~property-value~, ~keyword-name~, and ~keyword-value~ are supported.
-- Effective properties automatically request ~effective_properties~.
-- Keywords automatically request ~keywords~.
-- Only one row source can be active per invocation.
-- No Cartesian products are created.
-- Empty collections produce no rows.
-- Existing result actions continue to receive the original matched result.
-- Views pass their row source to the generic query function.
-- Dynamic blocks support direct and view-provided row sources.
-- Embark export preserves individual expanded rows.
-- Width and truncation are calculated across all expanded rows.
-- Tests cover multiple tags, no tags, effective-property ordering, keyword duplicates, empty collections, include inference, column validation, views, dynamic blocks, filtering, actions, flat export, outline export, and non-ASCII values.
 
 * TODO Add configurable result sorting
 :PROPERTIES:
@@ -3830,6 +3471,1233 @@ Use practical examples rather than implementation details.
 - Tests cover all comparison types, multiple keys, missing values, explicit ~nil~, global defaults, view overrides, row expansion, duplicate values, stable ordering, Embark export, and non-ASCII text.
 - Benchmarks document sorting performance for approximately 1,000 and 10,000 rows.
   
+* TODO Rewrite generation-aware asynchronous predefined-view cache
+
+Goal:
+
+- Replace the current cache implementation with a small, predictable architecture built around asynchronous full rebuilds first and incremental refresh only afterwards.
+- Keep warm predefined views immediately usable from an in-memory Emacs variable.
+- Use ~file-notify~ as the only mechanism for detecting database changes.
+- Remove polling and unnecessary timer activity.
+- Measure the complete cache lifecycle so performance regressions are visible instead of inferred.
+- Keep Rust authoritative for ~database_path~, ~database_id~, and ~generation~.
+- Keep all user-facing ~defcustom~ definitions in ~org-files-db-core.el~, not in specialised modules.
+
+The rewrite has two phases:
+
+- Phase 1: simple async full-rebuild cache
+- Phase 2: incremental generation-aware refresh
+
+Do not implement Phase 2 optimisations until Phase 1 is stable, fast, measurable, and idle when no database changes occur.
+
+** Phase 1: Simple async full-rebuild cache
+
+Goal:
+
+- Build the simplest correct predefined-view cache.
+- Pre-cache eligible views asynchronously.
+- Build complete ready-to-use completion candidates in the child Emacs.
+- Use a temporary dump file as the large-data transport from child to parent.
+- Keep the published cache entirely in memory in the parent Emacs.
+- Rebuild the complete affected view when the committed database generation changes.
+- Cancel obsolete rebuilds immediately when a newer generation requires another rebuild.
+
+*** Cache mode
+
+Use one global minor mode:
+
+#+begin_src emacs-lisp
+org-files-db-cache-mode
+#+end_src
+
+When enabled:
+
+1. Resolve the effective database status through ~orgfdb status~.
+2. Obtain:
+   - ~database_path~
+   - ~database_id~
+   - ~generation~
+3. Install the required ~file-notify~ watch.
+4. Find all predefined views with:
+
+#+begin_src emacs-lisp
+:pre-cache t
+#+end_src
+
+5. Queue an asynchronous initial rebuild for every eligible view.
+
+When disabled:
+
+- cancel predefined views with:
+
+#+begin_src emacs-lisp
+:pre-cache t
+#+end_src
+
+5. Queue an asynchronous all running cache workers
+- clear queued rebuilds
+- remove all file-notify watches
+- remove temporary dump files owned by the cache
+- clear published cache entries
+- leave no cache timers or background activity running
+
+~:pre-cache t~ only marks a predefined view as eligible for caching.
+
+It does not enable the cache by itself.
+
+Direct calls to:
+
+#+begin_src emacs-lisp
+org-files-db-query
+org-files-db-search
+#+end_src
+
+remain fresh and continue to bypass the predefined-view cache.
+
+*** User options
+
+Define all user-facing options in:
+
+#+begin_example
+org-files-db-core.el
+#+end_example
+
+Do not add ~defcustom~ forms to ~org-files-db-cache.el~ or other specialised modules.
+
+Cache-specific implementation variables may remain private variables in the cache module.
+
+Do not add a polling interval option in Phase 1.
+
+There is no polling fallback.
+
+*** async.el model
+
+Before implementing the cache worker, inspect and benchmark the intended ~async.el~ usage.
+
+Use a simple model:
+
+#+begin_example
+one async worker
+→ one complete view rebuild
+→ one temporary dump
+→ one small final async result
+#+end_example
+
+Do not build bidirectional worker RPC or a persistent worker protocol.
+
+Avoid transferring complete candidate lists through the normal ~async.el~ return value.
+
+The child should return only small metadata, conceptually:
+
+#+begin_src emacs-lisp
+(:status success
+ :job-id ...
+ :view ...
+ :database-id ...
+ :generation ...
+ :dump-file ...
+ :result-count ...
+ :candidate-count ...
+ :dump-size ...)
+#+end_src
+
+Cache the result of ~locate-library~ for ~async.el~ while starting multiple workers where useful instead of resolving the library path repeatedly.
+
+*** Worker responsibility
+
+The child Emacs performs the complete expensive preparation for one view:
+
+#+begin_example
+query/search
+→ JSON parsing
+→ result normalization
+→ row preparation
+→ sorting when configured
+→ shared-width calculation
+→ visible formatting and truncation
+→ complete searchable candidate construction
+→ candidate metadata
+→ dump
+#+end_example
+
+The dump should contain the complete published representation required for a warm completion invocation.
+
+The parent must not rerun:
+
+- value extraction
+- sorting
+- shared-width calculation
+- truncation
+- candidate formatting
+
+merely to publish a completed worker result.
+
+The dump format may use readable Lisp initially.
+
+Prefer simplicity over introducing compression or a custom binary format.
+
+*** Candidate dump
+
+The worker writes the prepared cache entry to a unique temporary file.
+
+Use safe serialization settings such as:
+
+#+begin_src emacs-lisp
+(let ((print-length nil)
+      (print-level nil)
+      (print-circle t))
+  ...)
+#+end_src
+
+The parent reads the completed dump once.
+
+Use safe reading with:
+
+#+begin_src emacs-lisp
+(let ((read-eval nil))
+  ...)
+#+end_src
+
+After successful reading:
+
+1. validate the job and generation
+2. atomically publish the new cache entry in an Emacs variable
+3. delete the temporary dump
+
+The dump is transport only.
+
+A warm view must never reread the dump.
+
+After publication the normal path is conceptually:
+
+#+begin_example
+cache lookup
+→ prepared candidates
+→ completing-read
+#+end_example
+
+*** Publication
+
+Maintain one published complete cache entry per predefined view and effective cache key.
+
+A published entry should contain enough information to verify ownership and freshness, including at least:
+
+#+begin_example
+view
+cache key
+database id
+generation
+prepared candidates
+result/candidate count
+publication timestamp
+#+end_example
+
+Publication must be atomic from the point of view of consumers.
+
+Never partially mutate the currently published complete entry while a full rebuild is running.
+
+The old published entry may remain available internally until the new entry is successfully published.
+
+*** Warm lookup
+
+A valid warm lookup must not perform:
+
+- ~orgfdb status~
+- query/search execution
+- JSON parsing
+- value extraction
+- sorting
+- width calculation
+- candidate formatting
+- dump reading
+- file access for cache data
+
+It should retrieve the already prepared candidate collection from memory and enter completion.
+
+*** File-notify
+
+Use ~file-notify~ as the only change-detection mechanism.
+
+Do not poll.
+
+Use the canonical ~database_path~ returned by ~orgfdb status~.
+
+Watch whatever filesystem location is necessary to reliably observe SQLite activity for:
+
+#+begin_example
+database
+database-wal
+database-shm
+#+end_example
+
+Handle creation, deletion, rename, attribute, and change events as required by the backend.
+
+Do not assume one SQLite transaction produces one file-notify event.
+
+Record every raw file-notify event for debugging and benchmarking.
+
+Conceptually log:
+
+#+begin_example
+timestamp
+descriptor
+action
+path
+second path when supplied by rename events
+#+end_example
+
+Several raw events belonging to one database commit must not cause several completed rebuilds for the same generation.
+
+A short event coalescing/debounce mechanism is allowed when necessary.
+
+It must exist only around actual file-notify activity and must not become a permanent polling timer.
+
+*** Generation handling
+
+File-notify is only a wakeup signal.
+
+After relevant filesystem activity:
+
+1. run ~orgfdb status~
+2. compare ~database_id~ and ~generation~
+3. rebuild only when the committed generation requires it
+
+Do not treat WAL activity itself as a committed generation.
+
+If source files are changing but Rust still reports the same committed generation, keep the existing published cache.
+
+*** Complete rebuild
+
+In Phase 1, any relevant committed generation change triggers a complete async rebuild of each eligible predefined view.
+
+Do not use:
+
+#+begin_example
+orgfdb changes
+--restrict-files-json
+incremental candidate patching
+incremental width updates
+#+end_example
+
+yet.
+
+Correctness and simplicity come first.
+
+*** Superseding a running rebuild
+
+A rebuild always belongs to a specific:
+
+#+begin_example
+job-id
+database-id
+generation
+view
+#+end_example
+
+If generation ~N~ is rebuilding and a newer committed generation ~N+1~ becomes necessary before it finishes:
+
+1. mark the running job obsolete
+2. terminate its async child process
+3. remove any temporary dump it produced
+4. start a new rebuild for the newest known generation
+
+Do not wait for an obsolete rebuild to finish.
+
+Do not queue an obsolete generation behind another obsolete generation.
+
+Prefer:
+
+#+begin_example
+running generation 71
+new generation 72 detected
+→ cancel 71
+→ rebuild 72
+#+end_example
+
+If generations 72 and 73 are observed before a replacement worker begins useful work, rebuild only the newest known generation.
+
+A callback from a cancelled or superseded job must never publish data.
+
+Before publication verify at least:
+
+- the callback belongs to the currently expected job
+- the database identity still matches
+- the generation still matches the generation required by that job
+
+Stale callbacks perform cleanup only.
+
+*** Using a view during rebuild
+
+If a predefined view is requested while its required generation is currently rebuilding:
+
+- wait for that rebuild rather than starting a second synchronous query
+- keep processing process output so the async worker can finish
+- when the worker publishes successfully, use the new cache immediately
+- if that worker is superseded by a newer generation, continue waiting for the replacement worker
+- use a bounded error/failure path rather than waiting forever
+
+Do not cancel a current valid worker merely because the user opened its view.
+
+If no valid cache exists because initial pre-cache is still running, wait for the initial worker in the same way.
+
+*** Failure handling
+
+A failed worker must:
+
+- never replace a valid published cache
+- clean up its dump file
+- clear its running-job state
+- report a concise useful error in debug/diagnostic output
+
+A cancelled worker is not a cache failure.
+
+Differentiate at least:
+
+#+begin_example
+success
+failed
+cancelled
+superseded
+#+end_example
+
+If the database identity changes, treat existing entries as belonging to another database and rebuild them.
+
+*** No idle overhead
+
+After initial pre-cache has completed and the database remains unchanged:
+
+- no cache worker runs
+- no cache polling occurs
+- no periodic cache timer runs
+- no CLI process is started
+- no candidate work occurs
+- cursor movement does not trigger cache allocations
+- ~timer-event-handler~ should show no meaningful ongoing org-files-db cache activity
+
+This is a core Phase 1 acceptance criterion.
+
+** Phase 1 benchmark and tracing
+
+Add a benchmark/trace facility together with the new implementation.
+
+Do not postpone instrumentation until after the cache is complete.
+
+The benchmark should support at least:
+
+- initial pre-cache
+- rebuild caused by file-notify / generation change
+- rebuild superseded by a newer generation
+- warm view lookup
+- interactive wait for a running rebuild
+
+*** Worker timings
+
+Measure separately where practical:
+
+#+begin_example
+async-start requested
+child worker entered
+worker startup delay
+query/search start
+query/search end
+JSON parse / normalization
+presentation preparation
+sorting
+width calculation
+candidate formatting
+dump write
+worker finished
+#+end_example
+
+Report both individual phases and total worker wall-clock time.
+
+*** Dump measurements
+
+Record at least:
+
+#+begin_example
+dump size in bytes
+dump write duration
+dump read duration
+dump delete duration where meaningful
+candidate count
+result count
+#+end_example
+
+Optionally calculate approximate throughput:
+
+#+begin_example
+dump write MB/s
+dump read MB/s
+#+end_example
+
+Do not optimise based on throughput alone; total latency is the primary metric.
+
+*** Main Emacs blocking
+
+Explicitly measure how long the parent Emacs is blocked when publishing a completed dump.
+
+At minimum measure:
+
+#+begin_example
+parent dump read
+validation
+publication
+total main-thread blocked time
+#+end_example
+
+Also record GC behaviour around this section:
+
+#+begin_example
+GC count
+GC elapsed time
+#+end_example
+
+The benchmark should make it obvious whether a rebuild was mostly asynchronous or whether substantial work still happened in the main Emacs process.
+
+*** File-notify tracing
+
+Record every raw file-notify event.
+
+For a logical refresh also report:
+
+#+begin_example
+raw event count
+first raw event timestamp
+status check timestamp
+old generation
+new generation
+rebuild requested timestamp
+worker started timestamp
+cache published timestamp
+#+end_example
+
+This should allow calculation of:
+
+#+begin_example
+first event → generation detection
+generation detection → worker start
+worker start → dump ready
+dump ready → publication
+first event → usable cache
+#+end_example
+
+Do not describe each raw file-notify event as a rebuild.
+
+Distinguish raw filesystem events from the one logical generation-triggered rebuild.
+
+*** Cancellation metrics
+
+For superseded rebuilds record:
+
+#+begin_example
+cancelled job id
+cancelled generation
+replacement generation
+time spent before cancellation
+whether a dump had already been created
+cleanup duration where useful
+#+end_example
+
+Track the number of cancelled/superseded jobs.
+
+*** Benchmark output
+
+Provide concise human-readable output.
+
+Example shape:
+
+#+begin_example
+org-files-db cache benchmark
+
+View: all-headings
+Reason: initial
+Generation: 71
+Results: 9903
+Candidates: 9903
+
+worker startup:       0.070 s
+query + parse:        0.580 s
+presentation:         0.145 s
+dump write:           0.090 s
+worker total:         0.900 s
+
+dump size:            8.4 MB
+parent dump read:     0.210 s
+parent publish:       0.002 s
+main Emacs blocked:   0.212 s
+parent GC:            1 / 0.055 s
+
+total rebuild:        1.112 s
+#+end_example
+
+For a file-notify refresh additionally show relevant event/generation information.
+
+Keep structured benchmark data internally where useful so tests do not have to parse human-readable messages.
+
+*** Phase 1 tests
+
+Cover at least:
+
+- enabling the mode queues every ~:pre-cache t~ view
+- non-pre-cached views are not queued
+- initial pre-cache runs asynchronously
+- worker writes a candidate dump
+- parent reads and publishes the dump
+- successful publication deletes the dump
+- warm lookup does not reread the dump
+- warm lookup performs no CLI invocation
+- warm lookup performs no presentation rebuilding
+- file-notify events are recorded
+- several raw SQLite events for one generation cause one logical rebuild
+- unchanged generation causes no rebuild
+- changed generation causes a complete rebuild
+- database identity change invalidates the old entry
+- a newer generation cancels a running older rebuild
+- cancelled jobs cannot publish
+- superseded dump files are cleaned up
+- requesting a view during rebuild waits for the current valid worker
+- waiting follows a superseding replacement worker
+- worker failure does not replace a valid cache
+- disabling the mode cancels workers and removes watches
+- disabling the mode leaves no cache timers
+- idle cache mode performs no repeated work
+
+*** Phase 1 acceptance criteria
+
+- ~org-files-db-cache-mode~ asynchronously pre-caches all eligible predefined views.
+- Complete prepared candidates are produced outside the main Emacs process.
+- Large worker results are transported through temporary dump files rather than normal ~async.el~ result serialization.
+- Dumps are read once at publication and never during normal warm use.
+- Warm views use the in-memory cache directly.
+- File-notify is the only database-change wakeup mechanism.
+- No polling exists.
+- A committed generation change triggers a complete async rebuild.
+- A newer required generation cancels and replaces an older running rebuild.
+- Stale/cancelled callbacks cannot publish.
+- Opening a view during rebuild waits for the current newest rebuild.
+- Main-thread dump-read/publication blocking is measured explicitly.
+- Every raw file-notify event can be inspected in benchmark/debug output.
+- Initial and file-notify-triggered rebuilds have comparable detailed timing output.
+- After pre-cache completes and the database is unchanged, cache mode is effectively idle.
+- Existing query, search, completion, metadata, actions, and view semantics remain unchanged.
+- All ~defcustom~ definitions remain in ~org-files-db-core.el~.
+- ~make ci~ passes.
+
+** Phase 2: Incremental cache refresh
+
+Goal:
+
+- Keep the Phase 1 lifecycle, publication, cancellation, file-notify, generation handling, and benchmark infrastructure.
+- Replace complete rebuilds after ordinary generation changes with small incremental updates when Rust reports that patching is safe.
+- Fall back to the proven Phase 1 complete rebuild whenever incremental refresh is unavailable or unsafe.
+
+Do not change warm-cache semantics.
+
+*** Changes contract
+
+After detecting a newer generation, use the Rust generation/change contract to determine whether the cached view can be patched.
+
+Use:
+
+#+begin_example
+database_id
+generation
+changes
+cache_action
+#+end_example
+
+Rust remains authoritative.
+
+If the change information requires a full rebuild, use the Phase 1 full-rebuild path unchanged.
+
+Search caches are not patch-safe unless the Rust contract explicitly provides such semantics later.
+
+*** Restricted structural queries
+
+For patch-safe structural query views:
+
+1. obtain changed paths from ~orgfdb changes~
+2. separate deleted files from files requiring upsert
+3. query only the required upsert files using the restricted-file query mechanism
+4. build replacement rows/candidates asynchronously
+5. transport only the delta through a small dump
+6. patch the existing parent cache
+
+Do not send the complete existing cache to the worker.
+
+The parent already owns the published cache.
+
+*** Incremental parent state
+
+Store enough metadata in the published cache to update it without rebuilding every existing candidate.
+
+At minimum retain the relationship between:
+
+#+begin_example
+candidate / presentation row
+original result
+source file
+sort information
+width information
+#+end_example
+
+Keep original result metadata intact so actions continue to operate on the matched result.
+
+*** Column width metadata
+
+For every displayed column retain its actual effective width.
+
+For variable-width columns also retain enough information to determine whether a patch changes that width.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(:width-mode auto
+ :effective-width 43
+ :max-width-count 7)
+#+end_src
+
+For:
+
+#+begin_example
+fixed N
+#+end_example
+
+the effective width never changes because of row contents.
+
+For:
+
+#+begin_example
+max N
+#+end_example
+
+once the effective width has reached ~N~, longer inserted values cannot increase it.
+
+For:
+
+#+begin_example
+auto
+#+end_example
+
+a new value wider than the current effective width increases the shared width.
+
+When deleting or replacing rows, maintain the number of rows that use the current maximum width.
+
+If:
+
+#+begin_example
+max-width-count > 0
+#+end_example
+
+after the patch, no full width rescan is required for that column.
+
+Only when the last row providing the current maximum disappears is a rescan of the remaining rows necessary to discover the new effective width.
+
+Where useful, retain the unformatted cell display widths on prepared rows so old rows do not require repeated ~string-width~ calls.
+
+*** Candidate rebuilding
+
+If a delta does not change any shared column width and does not otherwise invalidate global presentation state:
+
+- keep unaffected prepared candidates unchanged
+- remove candidates belonging to deleted/replaced source files
+- build candidates only for new/replacement rows
+- merge them into the prepared collection
+
+Do not reformat all existing candidates merely because one file changed.
+
+If a shared width changes, rebuild only as much presentation state as correctness requires.
+
+Prefer correctness over a complicated partial update when a rare global width change occurs.
+
+*** Sorting
+
+When configurable sorting exists:
+
+- cache normalized sort keys per presentation row
+- compute sort keys once for new/replacement rows
+- merge/reorder using complete logical values
+- preserve stable tie ordering
+
+Do not sort using truncated or propertized display strings.
+
+If maintaining an incremental sorted structure becomes more complex than useful, a complete in-memory re-sort of already prepared sort keys is acceptable initially.
+
+Avoid rerunning value extraction for unaffected rows.
+
+*** Truncation and searchable values
+
+Truncation remains visual only.
+
+Incremental candidates must retain the same complete searchable values as fresh and full-rebuild candidates.
+
+Do not recover full searchable text by rerunning extraction during warm lookup.
+
+*** Row expansion
+
+If row expansion is implemented before Phase 2, incremental updates operate on expanded presentation rows using the same generic row pipeline.
+
+Do not add a separate incremental implementation for:
+
+- tags
+- effective properties
+- keywords
+
+A changed source result may remove zero, one, or several expanded rows and insert zero, one, or several replacement rows.
+
+*** Superseding incremental work
+
+The Phase 1 cancellation rule also applies to incremental jobs.
+
+If a newer committed generation appears while a patch for an older generation is running:
+
+#+begin_example
+cancel old patch
+→ discard its delta dump
+→ calculate work for newest generation
+#+end_example
+
+Never apply an obsolete delta to a newer published generation.
+
+If the required generation chain can no longer be patched safely, perform a full rebuild.
+
+*** Phase 2 benchmark additions
+
+Keep all Phase 1 metrics and add:
+
+#+begin_example
+changes query duration
+cache action
+deleted file count
+upsert file count
+restricted query duration
+delta result count
+delta candidate count
+delta dump size
+delta dump write/read duration
+merge duration
+sort update duration
+width update duration
+number of columns rescanned
+number of existing candidates reformatted
+main Emacs blocked time
+#+end_example
+
+Make it possible to compare:
+
+#+begin_example
+full rebuild
+vs.
+one-file incremental refresh
+vs.
+multi-file incremental refresh
+#+end_example
+
+A normal one-file update should visibly demonstrate that unrelated rows are not reformatted.
+
+*** Phase 2 tests
+
+Cover at least:
+
+- patch-safe generation uses ~changes~
+- full-rebuild cache action uses the Phase 1 path
+- only upsert files are included in the restricted query
+- deleted files are removed without requerying them
+- unchanged candidates remain reusable
+- delta dump contains only delta data
+- unchanged shared widths avoid a global candidate rebuild
+- inserted wider value updates an ~auto~ width
+- ~max~ width at its cap does not expand
+- deleting one of several maximum-width values avoids a rescan
+- deleting the last maximum-width value recalculates that column
+- fixed-width columns never require content-driven width recalculation
+- sorting uses cached logical sort values
+- truncated-away text remains searchable after a delta update
+- newer generation cancels an in-progress patch
+- obsolete delta cannot publish
+- unsafe generation chains fall back to complete rebuild
+- benchmarks report delta-specific metrics
+
+*** Phase 2 acceptance criteria
+
+- Ordinary patch-safe structural-query changes do not require a complete view rebuild.
+- Workers receive only the information required for the delta.
+- The complete existing cache is not serialized to the worker.
+- Delta dumps contain only changed data.
+- Unchanged candidates are reused whenever presentation state permits.
+- Effective width metadata avoids unnecessary shared-width rescans.
+- Fixed and capped maximum widths avoid unnecessary formatting work.
+- Deleting the last current maximum correctly recalculates the affected width.
+- Sorting and truncation preserve the same semantics as complete rebuilds.
+- Unsafe or unsupported changes fall back to the Phase 1 full rebuild.
+- Superseding generations cancel obsolete incremental work.
+- Benchmark output clearly demonstrates the cost difference between full rebuild and incremental refresh.
+- Warm lookup remains a direct in-memory cache lookup.
+- The idle cache remains free of polling and periodic work.
+- ~make ci~ passes.
+  
+* TODO Add row expansion for tags, effective properties, and keywords
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Allow one heading or file result to produce one displayed row per tag, effective property, or keyword.
+
+Currently, multi-valued fields are formatted as one combined column value. Provide a shared row-expansion mechanism instead of implementing separate presentation paths for tags, properties, and keywords.
+
+** Row-source option
+
+Add an optional ~:row-source~ keyword to query execution:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (tags "project"))
+ '((tag :width (max 30))
+   (outline-path :width (max 60))
+   (file-name :width (max 30)))
+ nil
+ :row-source 'tags)
+#+end_src
+
+Supported values are:
+
+- ~nil~: one displayed row per query result
+- ~tags~: one displayed row per tag
+- ~effective-properties~: one displayed row per effective property
+- ~keywords~: one displayed row per keyword
+
+The default is ~nil~, preserving the current behaviour.
+
+A result containing three tags therefore produces three completion candidates.
+
+Ordinary result columns such as ~outline-path~, ~file-name~, and ~title~ are repeated for every expanded row.
+
+** Tags
+
+With:
+
+#+begin_src emacs-lisp
+:row-source 'tags
+#+end_src
+
+provide the singular column:
+
+#+begin_src emacs-lisp
+(tag)
+#+end_src
+
+Example source heading:
+
+#+begin_src org
+,* Example :project:emacs:active:
+#+end_src
+
+Example rows:
+
+#+begin_example
+project  Example  notes.org
+emacs    Example  notes.org
+active   Example  notes.org
+#+end_example
+
+The existing plural ~tags~ column may continue to display all tags together when no row expansion is requested.
+
+The singular ~tag~ column is valid only with ~:row-source tags~.
+
+Preserve the tag order returned by ~orgfdb~.
+
+Do not add or remove Org tag delimiters unless explicitly configured as part of column formatting.
+
+** Effective properties
+
+With:
+
+#+begin_src emacs-lisp
+:row-source 'effective-properties
+#+end_src
+
+provide the columns:
+
+#+begin_src emacs-lisp
+(property-name)
+(property-value)
+#+end_src
+
+Example effective properties:
+
+#+begin_example
+CATEGORY=work
+OWNER=Daniel
+STATUS=active
+#+end_example
+
+Example rows:
+
+#+begin_example
+CATEGORY  work
+OWNER     Daniel
+STATUS    active
+#+end_example
+
+Each effective property name and its resolved value form one row.
+
+The query command must automatically request:
+
+#+begin_src sh
+--include effective_properties
+#+end_src
+
+Users must not need to specify this include manually.
+
+Effective properties represent the resolved values used by query matching. They must not be confused with raw property rows.
+
+If the CLI representation does not provide a stable order, sort effective properties by property name for deterministic output.
+
+** Keywords
+
+With:
+
+#+begin_src emacs-lisp
+:row-source 'keywords
+#+end_src
+
+provide the columns:
+
+#+begin_src emacs-lisp
+(keyword-name)
+(keyword-value)
+#+end_src
+
+Example keywords:
+
+#+begin_src org
+,#+TITLE: Example
+,#+FILETAGS: :project:
+,#+CATEGORY: work
+#+end_src
+
+Example rows:
+
+#+begin_example
+TITLE     Example
+FILETAGS  :project:
+CATEGORY  work
+#+end_example
+
+The query command must automatically request:
+
+#+begin_src sh
+--include keywords
+#+end_src
+
+Users must not need to specify this include manually.
+
+Preserve duplicate keyword entries when they are returned separately by ~orgfdb~.
+
+Preserve source order when the CLI provides it. Otherwise, use a deterministic order without merging entries.
+
+** Views
+
+Allow predefined query views to configure ~:row-source~:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("heading-tags"
+         :command query
+         :query (headings)
+         :row-source tags
+         :columns
+         ((tag :width (max 30))
+          (outline-path :width (max 60))
+          (file-name :width (max 30))))
+
+        ("effective-properties"
+         :command query
+         :query (headings)
+         :row-source effective-properties
+         :columns
+         ((property-name :width (max 30))
+          (property-value :width (max 60))
+          (outline-path :width (max 60))))
+
+        ("file-keywords"
+         :command query
+         :query (files)
+         :row-source keywords
+         :columns
+         ((keyword-name :width (max 30))
+          (keyword-value :width (max 60))
+          (file-name :width (max 30))))))
+#+end_src
+
+Query views pass ~:row-source~ to ~org-files-db-query~.
+
+They must not implement a separate expansion or completion path.
+
+** Dynamic blocks
+
+Allow direct query blocks to define ~:row-source~:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :query "(headings)" :row-source tags :layout flat
+,#+END:
+#+end_src
+
+Views referenced by dynamic blocks inherit their configured ~:row-source~.
+
+Supported dynamic-block values are:
+
+- ~tags~
+- ~effective-properties~
+- ~keywords~
+
+An absent value keeps the normal one-row-per-result behaviour.
+
+** Candidate representation
+
+Keep the matched query result separate from the expanded row data.
+
+Conceptually, each displayed candidate contains:
+
+#+begin_example
+original result
+row-source
+row value
+formatted columns
+#+end_example
+
+Selecting an expanded row continues to execute the configured action on the original heading or file result.
+
+Existing actions such as opening a result, inserting a link, or renaming a file must continue to work without modification.
+
+The row metadata is used for formatting and exporting but must not replace or mutate the original query result.
+
+** Empty collections
+
+When a result has no entries for the selected row source, it produces no displayed rows.
+
+Examples:
+
+- a heading without tags produces no rows for ~:row-source tags~
+- a result without effective properties produces no property rows
+- a result without keywords produces no keyword rows
+
+Do not create an artificial empty row.
+
+A future option may add empty rows if a concrete use case requires them.
+
+** Column validation
+
+Validate singular row columns against the selected row source:
+
+- ~tag~ requires ~:row-source tags~
+- ~property-name~ and ~property-value~ require ~:row-source effective-properties~
+- ~keyword-name~ and ~keyword-value~ require ~:row-source keywords~
+
+Report a clear error for incompatible combinations.
+
+Do not allow multiple row sources in one invocation.
+
+In particular, do not create Cartesian products between tags, properties, and keywords.
+
+** Include inference
+
+Infer required CLI includes from ~:row-source~:
+
+#+begin_example
+tags                  → no additional include when tags are already part of the result
+effective-properties  → effective_properties
+keywords              → keywords
+#+end_example
+
+Combine inferred includes with includes required by configured columns and actions.
+
+Use one ~orgfdb~ invocation for the complete result set.
+
+** Width and truncation
+
+Expanded row columns support the same width and truncation options as all other columns:
+
+#+begin_src emacs-lisp
+(tag
+ :width (max 20)
+ :truncate (:position right :marker "…"))
+
+(property-value
+ :width (fixed 40)
+ :truncate (:position middle :marker "…"))
+#+end_src
+
+Shared column widths are calculated across all expanded rows, not separately for each original result.
+
+** Embark export
+
+~embark-export~ must preserve the currently filtered expanded rows.
+
+It must not collapse several tag, property, or keyword rows back into one result.
+
+For flat export:
+
+- produce one exported entry per expanded row
+- retain a link to the original heading or file
+- include the singular row value in the exported description
+
+For outline export:
+
+- preserve the original file and heading hierarchy
+- group expanded rows below their matched result where necessary
+- avoid repeating identical ancestor hierarchy for every row
+
+The exact presentation may reuse the configured columns, but every expanded row must remain distinguishable.
+
+** Supported result kinds
+
+Initial support applies to:
+
+- heading results
+- file results
+- synthetic file-root results where the corresponding data is available
+
+Reject row expansion for link results unless a later feature explicitly defines whether source or target metadata should be expanded.
+
+Search-result support may be added only when the search CLI output provides the required structured data and includes.
+
+** README documentation
+
+Document:
+
+- the purpose of ~:row-source~
+- one row per tag
+- one row per effective property
+- one row per keyword
+- the singular columns available for each mode
+- views and dynamic-block examples
+- empty collections producing no rows
+- automatic include inference
+- the difference between aggregate ~tags~ and singular ~tag~
+
+Avoid describing the feature as JSON expansion or exposing internal candidate structures.
+
+** Acceptance criteria
+
+- Query results can expand to one row per tag.
+- Query results can expand to one row per effective property.
+- Query results can expand to one row per keyword.
+- Normal columns are repeated for every expanded row.
+- ~tag~, ~property-name~, ~property-value~, ~keyword-name~, and ~keyword-value~ are supported.
+- Effective properties automatically request ~effective_properties~.
+- Keywords automatically request ~keywords~.
+- Only one row source can be active per invocation.
+- No Cartesian products are created.
+- Empty collections produce no rows.
+- Existing result actions continue to receive the original matched result.
+- Views pass their row source to the generic query function.
+- Dynamic blocks support direct and view-provided row sources.
+- Embark export preserves individual expanded rows.
+- Width and truncation are calculated across all expanded rows.
+- Tests cover multiple tags, no tags, effective-property ordering, keyword duplicates, empty collections, include inference, column validation, views, dynamic blocks, filtering, actions, flat export, outline export, and non-ASCII values.
+
 * TODO Improve user-facing README documentation
 :PROPERTIES:
 :VISIBILITY: folded
