@@ -20,25 +20,13 @@
 ;;; Commentary:
 
 ;; Named wrappers around the generic query and search entry points, including
-;; optional generation-aware prepared completion caches.
+;; optional asynchronous prepared completion caches.
 
 ;;; Code:
 
 (require 'org-files-db-cache)
 (require 'org-files-db-query)
 (require 'org-files-db-search)
-
-(defcustom org-files-db-views nil
-  "Named predefined query and search views.
-Each entry has the form (NAME :command COMMAND ...), where COMMAND is
-`query' or `search'.  An optional :config-file overrides
-`org-files-db-config-file'; an explicit nil disables --config for that view.
-An optional :sort overrides the configured default sorting; an explicit nil
-preserves the order returned by orgfdb.
-An optional :pre-cache t opts the view into generation-aware prepared
-completion caching while `org-files-db-cache-mode' is enabled."
-  :type '(repeat sexp)
-  :group 'org-files-db)
 
 (defun org-files-db-views--validate-name (view)
   "Return VIEW's validated name."
@@ -157,21 +145,11 @@ When PRE-CACHE-ONLY is non-nil, offer only views with :pre-cache t."
      (not (null (plist-member properties :config-file)))
      (format "View `%s'" (car view)))))
 
-(defun org-files-db-views--read-index-state (config-file)
-  "Return authoritative index state for effective CONFIG-FILE."
-  (org-files-db-cache--read-index-state config-file))
-
-(defun org-files-db-views--read-changes
-    (config-file cached-database-id cached-generation)
-  "Return CONFIG-FILE changes for CACHED-DATABASE-ID since CACHED-GENERATION."
-  (org-files-db-cache--read-changes
-   config-file cached-database-id cached-generation))
-
 ;;;###autoload
 (cl-defun org-files-db-views-query (&optional name &key force-refresh)
   "Execute predefined query view NAME.
 Interactively, offer only query views through standard completion.  A prefix
-argument or FORCE-REFRESH bypasses and replaces any prepared cache."
+argument or FORCE-REFRESH requests and waits for an async full rebuild."
   (interactive (list nil :force-refresh (not (null current-prefix-arg))))
   (let* ((name (or name (org-files-db-views--read-name 'query)))
          (view (org-files-db-views-get name)))
@@ -195,7 +173,7 @@ argument or FORCE-REFRESH bypasses and replaces any prepared cache."
 (cl-defun org-files-db-views-search (&optional name &key force-refresh)
   "Execute predefined search view NAME.
 Interactively, offer only search views through standard completion.  A prefix
-argument or FORCE-REFRESH bypasses and replaces any prepared cache."
+argument or FORCE-REFRESH requests and waits for an async full rebuild."
   (interactive (list nil :force-refresh (not (null current-prefix-arg))))
   (let* ((name (or name (org-files-db-views--read-name 'search)))
          (view (org-files-db-views-get name)))
@@ -224,7 +202,7 @@ argument or FORCE-REFRESH bypasses and replaces any prepared cache."
 (defun org-files-db-views-refresh-cache (name &optional synchronous)
   "Refresh prepared cache for predefined view NAME.
 By default, refresh asynchronously.  With a prefix argument or SYNCHRONOUS
-non-nil, perform a complete refresh immediately."
+non-nil, wait for the asynchronous full rebuild to publish."
   (interactive
    (list (org-files-db-views--read-any-pre-cache-name)
          (not (null current-prefix-arg))))
@@ -236,7 +214,7 @@ non-nil, perform a complete refresh immediately."
 (defun org-files-db-views-refresh-all-caches (&optional synchronous)
   "Refresh all configured prepared view caches.
 By default, refresh asynchronously.  With a prefix argument or SYNCHRONOUS
-non-nil, perform complete refreshes immediately."
+non-nil, wait for the asynchronous full rebuilds to publish."
   (interactive (list (not (null current-prefix-arg))))
   (org-files-db-cache-refresh-all synchronous))
 

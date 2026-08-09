@@ -34,16 +34,6 @@
 
 (autoload 'org-files-db-query "org-files-db-query" nil t)
 
-(defcustom org-files-db-file-link-style 'file
-  "Default link style for file query results."
-  :type '(choice (const file) (const id) (const custom-id))
-  :group 'org-files-db)
-
-(defcustom org-files-db-heading-link-style 'id
-  "Default link style for heading query results."
-  :type '(choice (const id) (const custom-id) (const heading))
-  :group 'org-files-db)
-
 (defun org-files-db-actions-open-result (result)
   "Open RESULT and jump to its stored source location.
 RESULT may be an original result object or a propertized completion candidate."

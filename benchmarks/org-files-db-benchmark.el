@@ -774,153 +774,129 @@ interactively because each measurement briefly opens a minibuffer."
 
 ;;;###autoload
 (defun org-files-db-benchmark-view-cache (&optional count iterations)
-  "Benchmark cold, warm, patched, and rebuilt prepared-view paths.
+  "Benchmark Phase 1 cache preparation, dump transport, and warm lookup.
 COUNT defaults to 10,000 rows and ITERATIONS defaults to three.  This helper
-uses deterministic synthetic results and does not execute orgfdb."
+uses deterministic synthetic results and does not execute orgfdb or spawn a
+child Emacs; live async lifecycle timings are recorded by
+`org-files-db-cache-benchmark-report'."
   (interactive)
   (let* ((count (or count 10000))
          (iterations (or iterations 3))
          (results (org-files-db-benchmark--results count))
          (columns org-files-db-benchmark--expensive-columns)
-         (normalized (org-files-db--normalize-columns columns))
          (state '(:database-id "benchmark" :generation 1))
          (view `("benchmark"
                  :command query
                  :pre-cache t
                  :query (headings)
                  :columns ,columns))
-         (cold
+         (view-token (org-files-db-cache--view-token view nil))
+         (cache-key (org-files-db-cache--cache-key view nil state))
+         (worker-preparation
           (org-files-db-benchmark--time-call
            (lambda ()
-             (org-files-db-cache--prepare results normalized))
+             (org-files-db--prepare-presentation
+              results columns nil 'headings "Benchmark"))
            iterations))
          (presentation
-          (org-files-db-cache--prepare results normalized))
-         (entry
-          (make-org-files-db-cache--entry
-           :key (org-files-db-cache--cache-key view nil state)
-           :view-name "benchmark"
-           :view-token (org-files-db-cache--view-token view nil)
-           :database-id "benchmark"
-           :generation 1
-           :complete-p t
-           :results results
-           :columns normalized
-           :presentation presentation
-           :result-count count
-           :estimated-memory
-           (org-files-db-cache--estimated-memory results presentation)
-           :last-used 0.0))
-         (warm
-          (org-files-db-benchmark--time-call
-           (lambda ()
-             (unless
-                 (org-files-db-cache--entry-current-p
-                  entry state (org-files-db-cache--entry-key entry))
-               (error "Benchmark cache unexpectedly stale"))
-             (org-files-db--presentation-candidates
-              (org-files-db-cache--entry-presentation entry)))
-           iterations))
-         (warm-completion
-          (org-files-db-benchmark--time-call
-           (lambda ()
-             (org-files-db-benchmark--completion
-              (org-files-db--presentation-candidates presentation)
-              "Heading 999"))
-           iterations))
-         (affected
-          (list (org-files-db-cache--result-owner-path (car results))))
-         (replacement
-          (seq-filter
-           (lambda (result)
-             (member (org-files-db-cache--result-owner-path result) affected))
-           results))
-         (worker-payload
-          (list :ok t
-                :format-version org-files-db-cache--format-version
+          (org-files-db--prepare-presentation
+           results columns nil 'headings "Benchmark"))
+         (candidates (org-files-db--presentation-candidates presentation))
+         (lookup (org-files-db--presentation-lookup presentation))
+         (dump
+          (list :format-version org-files-db-cache--format-version
+                :job-id 1
+                :view "benchmark"
+                :view-token view-token
+                :cache-key cache-key
                 :database-id "benchmark"
-                :source-generation 0
-                :target-generation 1
-                :cache-key "benchmark-key"
-                :view-token "benchmark-view"
-                :refresh-token 1
-                :refresh-type 'full
-                :payload-kind 'complete
-                :results results
-                :columns
-                (org-files-db-cache--column-definitions normalized)))
-         (worker-payload-file
-          (make-temp-file "org-files-db-benchmark-cache-size-"))
-         (worker-payload-bytes
-          (unwind-protect
-              (org-files-db-cache--write-data-file
-               worker-payload-file worker-payload)
-            (org-files-db-cache--delete-transport-file worker-payload-file)))
-         (worker-transfer
-          (org-files-db-benchmark--time-call
-           (lambda ()
-             (let ((file (make-temp-file "org-files-db-benchmark-cache-")))
-               (unwind-protect
-                   (progn
-                     (org-files-db-cache--write-data-file file worker-payload)
-                     (org-files-db-cache--read-data-file file))
-                 (org-files-db-cache--delete-transport-file file))))
-           iterations))
-         (publication
-          (org-files-db-benchmark--time-call
-           (lambda ()
-             (org-files-db-cache--prepare results normalized))
-           iterations))
-         (patch
-          (org-files-db-benchmark--time-call
-           (lambda ()
-             (let ((patched
-                    (org-files-db-cache--merge-patch-results
-                     results affected nil replacement)))
-               (org-files-db-cache--prepare patched normalized)))
-           iterations))
-         (rebuild
-          (org-files-db-benchmark--time-call
-           (lambda ()
-             (org-files-db-cache--prepare results normalized))
-           iterations))
-         (buffer (get-buffer-create "*org-files-db cache benchmark*")))
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert "org-files-db prepared view cache benchmark\n")
-        (insert (format "Rows: %d, iterations: %d\n" count iterations))
-        (insert (format "Estimated retained bytes: %d\n\n"
-                        (org-files-db-cache--entry-estimated-memory entry)))
-        (insert (format "Worker result payload bytes: %d\n\n"
-                        worker-payload-bytes))
-        (dolist (measurement
-                 `((cold . ,cold)
-                   (warm . ,warm)
-                   (warm-completion . ,warm-completion)
-                   (worker-transfer . ,worker-transfer)
-                   (main-publication . ,publication)
-                   (patch . ,patch)
-                   (rebuild . ,rebuild)))
-          (insert
-           (format "%-20s min=%s median=%s max=%s\n"
-                   (car measurement)
-                   (org-files-db-benchmark--seconds
-                    (plist-get (cdr measurement) :minimum))
-                   (org-files-db-benchmark--seconds
-                    (plist-get (cdr measurement) :median))
-                   (org-files-db-benchmark--seconds
-                    (plist-get (cdr measurement) :maximum)))))
-        (special-mode)))
-    (pop-to-buffer buffer)
-    (list :count count :iterations iterations
-          :estimated-memory
-          (org-files-db-cache--entry-estimated-memory entry)
-          :worker-payload-bytes worker-payload-bytes
-          :cold cold :warm warm :warm-completion warm-completion
-          :worker-transfer worker-transfer
-          :main-publication publication
-          :patch patch :rebuild rebuild)))
+                :generation 1
+                :candidates candidates
+                :lookup lookup
+                :result-count count
+                :candidate-count (length candidates)))
+         (dump-file (make-temp-file "org-files-db-benchmark-cache-" nil ".el"))
+         dump-size dump-write dump-read read-back entry warm warm-completion)
+    (unwind-protect
+        (progn
+          (setq dump-write
+                (org-files-db-benchmark--time-call
+                 (lambda ()
+                   (setq dump-size
+                         (org-files-db-cache--write-dump dump-file dump)))
+                 iterations))
+          (setq dump-read
+                (org-files-db-benchmark--time-call
+                 (lambda ()
+                   (setq read-back
+                         (org-files-db-cache--read-dump dump-file)))
+                 iterations))
+          (setq entry
+                (make-org-files-db-cache--entry
+                 :view-name "benchmark"
+                 :view-token view-token
+                 :cache-key cache-key
+                 :config-file nil
+                 :config-key :no-config
+                 :database-id "benchmark"
+                 :generation 1
+                 :candidates (plist-get read-back :candidates)
+                 :lookup (plist-get read-back :lookup)
+                 :presentation
+                 (make-org-files-db--presentation
+                  :candidates (plist-get read-back :candidates)
+                  :lookup (plist-get read-back :lookup))
+                 :result-count count
+                 :candidate-count (length candidates)
+                 :published-at (float-time)))
+          (setq warm
+                (org-files-db-benchmark--time-call
+                 (lambda ()
+                   (unless (org-files-db-cache--entry-valid-p
+                            entry view nil state)
+                     (error "Benchmark cache unexpectedly stale"))
+                   (org-files-db-cache--entry-candidates entry))
+                 iterations))
+          (setq warm-completion
+                (org-files-db-benchmark--time-call
+                 (lambda ()
+                   (org-files-db-benchmark--completion
+                    (org-files-db-cache--entry-candidates entry)
+                    "Heading 999"))
+                 iterations)))
+      (ignore-errors (delete-file dump-file)))
+    (let ((buffer (get-buffer-create "*org-files-db cache benchmark*")))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert "org-files-db Phase 1 cache transport benchmark\n")
+          (insert (format "Rows: %d, iterations: %d\n" count iterations))
+          (insert (format "Dump bytes: %d\n\n" dump-size))
+          (dolist (measurement
+                   `((worker-preparation . ,worker-preparation)
+                     (dump-write . ,dump-write)
+                     (dump-read . ,dump-read)
+                     (warm-lookup . ,warm)
+                     (warm-completion . ,warm-completion)))
+            (insert
+             (format "%-20s min=%s median=%s max=%s\n"
+                     (car measurement)
+                     (org-files-db-benchmark--seconds
+                      (plist-get (cdr measurement) :minimum))
+                     (org-files-db-benchmark--seconds
+                      (plist-get (cdr measurement) :median))
+                     (org-files-db-benchmark--seconds
+                      (plist-get (cdr measurement) :maximum)))))
+          (special-mode)))
+      (pop-to-buffer buffer))
+    (list :count count
+          :iterations iterations
+          :dump-bytes dump-size
+          :worker-preparation worker-preparation
+          :dump-write dump-write
+          :dump-read dump-read
+          :warm-lookup warm
+          :warm-completion warm-completion)))
 
 (provide 'org-files-db-benchmark)
 

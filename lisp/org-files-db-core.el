@@ -150,6 +150,50 @@ do not pass the --config option unless a command-specific path is supplied."
   :type '(choice (const preserve) (const resolve))
   :group 'org-files-db)
 
+(defcustom org-files-db-file-link-style 'file
+  "Default link style for file query results."
+  :type '(choice (const file) (const id) (const custom-id))
+  :group 'org-files-db)
+
+(defcustom org-files-db-heading-link-style 'id
+  "Default link style for heading query results."
+  :type '(choice (const id) (const custom-id) (const heading))
+  :group 'org-files-db)
+
+(defcustom org-files-db-search-min-input 3
+  "Minimum number of characters required before live search starts."
+  :type 'natnum
+  :group 'org-files-db)
+
+(defcustom org-files-db-views nil
+  "Named predefined query and search views.
+Each entry has the form (NAME :command COMMAND ...), where COMMAND is
+`query' or `search'.  An optional :config-file overrides
+`org-files-db-config-file'; an explicit nil disables --config for that view.
+An optional :sort overrides the configured default sorting; an explicit nil
+preserves the order returned by orgfdb.
+An optional :pre-cache t marks the view as eligible for asynchronous
+in-memory caching while `org-files-db-cache-mode' is enabled."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-cache-file-notify-debounce 0.20
+  "Seconds to coalesce SQLite file-notify activity before one status check.
+This timer exists only after relevant file-notify activity.  It is not a
+polling interval and no periodic cache timer is installed."
+  :type 'number
+  :group 'org-files-db)
+
+(defcustom org-files-db-cache-wait-timeout 60.0
+  "Maximum seconds an interactive cached view waits for its async rebuild."
+  :type 'number
+  :group 'org-files-db)
+
+(defcustom org-files-db-cache-debug nil
+  "Non-nil means emit concise predefined-view cache diagnostics."
+  :type 'boolean
+  :group 'org-files-db)
+
 (define-error 'org-files-db-error "org-files-db error")
 (define-error 'org-files-db-cli-error "orgfdb command failed" 'org-files-db-error)
 (define-error 'org-files-db-cli-usage-error

@@ -33,11 +33,6 @@
                   (selected candidates input narrow))
 (declare-function consult--read "consult" (candidates &rest options))
 
-(defcustom org-files-db-search-min-input 3
-  "Minimum number of characters required before live search starts."
-  :type 'natnum
-  :group 'org-files-db)
-
 (defun org-files-db-search--parse-options (options)
   "Return normalized search OPTIONS.
 Support a legacy leading positional scope plus :scope and :config-file keyword
