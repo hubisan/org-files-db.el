@@ -1590,8 +1590,6 @@ Allow direct dynamic blocks to specify sorting:
 ,#+END:
 #+end_src
 
-Parse the sort expression safely with ~read-eval~ disabled.
-
 Dynamic blocks referencing a view inherit that view's sorting.
 
 Exported and rendered entries must follow the same order as interactive completion.

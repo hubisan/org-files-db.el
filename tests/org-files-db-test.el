@@ -1227,8 +1227,7 @@
                   (print-circle t))
               (prin1-to-string candidate)))
            (restored
-            (let ((read-eval nil))
-              (car (read-from-string printed)))))
+            (car (read-from-string printed))))
       (expect (org-files-db-test--candidate-logical restored)
               :to-match "hidden needle")
       (expect

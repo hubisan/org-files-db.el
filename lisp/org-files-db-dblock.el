@@ -30,8 +30,6 @@
 (require 'org-files-db-export)
 (require 'org-files-db-views)
 
-(defvar read-eval)
-
 (defun org-files-db-dblock--value (value)
   "Return dynamic-block VALUE in its useful scalar form."
   (cond
@@ -113,8 +111,7 @@ The symbol or string `none' disables --config."
     (if (string= (string-trim value) "nil")
         nil
       (condition-case err
-          (let* ((read-eval nil)
-                 (parsed (read-from-string value))
+          (let* ((parsed (read-from-string value))
                  (sort (car parsed))
                  (rest (substring value (cdr parsed))))
             (unless (string-match-p "\\`[[:space:]]*\\'" rest)

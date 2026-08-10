@@ -32,8 +32,6 @@
 (require 'seq)
 (require 'subr-x)
 
-(defvar read-eval)
-
 (declare-function org-files-db-actions-open-result
                   "org-files-db-actions"
                   (result))
@@ -512,8 +510,7 @@ success.  ERROR is a plist containing :status and :stderr on failure."
   (let* ((input (read-from-minibuffer prompt nil nil nil
                                       'org-files-db-query-history))
          (parsed (condition-case err
-                     (let ((read-eval nil))
-                       (read-from-string input))
+                     (read-from-string input)
                    (error
                     (user-error "Invalid query expression: %s"
                                 (error-message-string err))))))
@@ -2911,8 +2908,7 @@ rows."
   "Infer the orgfdb query target from QUERY."
   (let* ((form (if (stringp query)
                    (condition-case nil
-                       (let ((read-eval nil))
-                         (car (read-from-string query)))
+                       (car (read-from-string query))
                      (error nil))
                  query))
          (head (car-safe form)))

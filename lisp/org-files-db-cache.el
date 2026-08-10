@@ -34,13 +34,7 @@
 (require 'seq)
 (require 'subr-x)
 
-(defvar org-files-db-views)
-(defvar org-files-db-cache-mode nil)
-(defvar async-process-noquery-on-exit)
-(defvar async-prompt-for-password)
-
-(declare-function file-notify-add-watch "filenotify" (file flags callback))
-(declare-function file-notify-rm-watch "filenotify" (descriptor))
+(defvar org-files-db-cache-mode)
 
 (defconst org-files-db-cache--format-version 1
   "Version of the Phase 1 predefined-view cache representation.")
