@@ -950,6 +950,30 @@ Because the command uses the normal query completion category, the currently fil
 - Standard completion and Embark export remain available.
 - Missing identifiers, unindexed targets, and non-Org buffers produce clear errors.
   
+* TODO New Feature
+
+Links in Headings auflösen und das Folgefile anzeigen, also die Headings.
+
+z. B.
+
+Coding with AI > Prompting > (links to File)
+
+Weiteren Einträge mit den Headings aus dem File:
+
+Coding with AI > Prompting > Ablauf
+Coding with AI > Prompting > Ablauf > Ziel des Projektes definieren
+Coding with AI > Prompting > Ablauf > Brainstorming
+...
+
+Oder mit einem Link zu einer Heading:
+
+Coding with AI > Brainstorming > (links to Heading)
+Coding with AI > Brainstorming > Brainstorming Subheading 1
+Coding with AI > Brainstorming > Brainstorming Subheading 2
+Coding with AI > Brainstorming > Brainstorming Subheading 2 > Subheading
+
+Ahh, werden überhaupt alle Parents und Childs angezeigt?
+
 * TODO Define linked-heading actions and export representations
 :PROPERTIES:
 :VISIBILITY: folded
