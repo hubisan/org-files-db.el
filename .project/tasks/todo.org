@@ -954,6 +954,8 @@ Because the command uses the normal query completion category, the currently fil
 
 Links in Headings auflösen und das Folgefile anzeigen, also die Headings.
 
+Am besten aber nur 1 Level, sonst kann es plötzlich übel werden :-) rekursiv.
+
 z. B.
 
 Coding with AI > Prompting > (links to File)
