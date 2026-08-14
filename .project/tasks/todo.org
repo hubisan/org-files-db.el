@@ -2917,6 +2917,32 @@ Avoid describing the feature as JSON expansion or exposing internal candidate st
 - Width and truncation are calculated across all expanded rows.
 - Tests cover multiple tags, no tags, effective-property ordering, keyword duplicates, empty collections, include inference, column validation, views, dynamic blocks, filtering, actions, flat export, outline export, and non-ASCII values.
 
+* TODO New Feature > Linked Heading auflösen
+
+Links in Headings auflösen und das Folgefile anzeigen, also die Headings.
+
+Am besten aber nur 1 Level, sonst kann es plötzlich übel werden :-) rekursiv.
+
+z. B.
+
+Coding with AI > Prompting > (links to File)
+
+Weiteren Einträge mit den Headings aus dem File:
+
+Coding with AI > Prompting > Ablauf
+Coding with AI > Prompting > Ablauf > Ziel des Projektes definieren
+Coding with AI > Prompting > Ablauf > Brainstorming
+...
+
+Oder mit einem Link zu einer Heading:
+
+Coding with AI > Brainstorming > (links to Heading)
+Coding with AI > Brainstorming > Brainstorming Subheading 1
+Coding with AI > Brainstorming > Brainstorming Subheading 2
+Coding with AI > Brainstorming > Brainstorming Subheading 2 > Subheading
+
+Ahh, werden überhaupt alle Parents und Childs angezeigt?
+
 * TODO Improve user-facing README documentation
 :PROPERTIES:
 :VISIBILITY: folded
