@@ -294,7 +294,7 @@ Embark is used only for exporting the currently filtered candidate set. Consult 
 - Exported objects link to their original locations.
 - Flat and outline Org-buffer layouts are supported.
   
-* REVIEW Define query actions for inserting links
+* DONE Define query actions for inserting links
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -445,7 +445,7 @@ Keep description generation separate from link-target generation so it can be ma
 - Duplicate heading titles do not affect ~id~ or ~custom-id~ links.
 - Tests cover every link style, identifier creation, existing identifiers, insertion position, invalid result kinds, save failures, and non-ASCII targets.
   
-* REVIEW Define file rename with link updates
+* DONE Define file rename with link updates
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -586,7 +586,7 @@ Stale index locations must produce an actionable error asking the user to reinde
 - Invalid result kinds, stale locations, conflicts, and partial failures are reported clearly.
 - Tests cover relative and absolute links, heading and custom-ID search options, multiple source directories, multiple links per file, unchanged ID links, stale index data, destination conflicts, and unsaved buffers.
   
-* REVIEW Define predefined views
+* DONE Define predefined views
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -728,7 +728,7 @@ The query and search wrappers must reject views of the wrong command type with a
 - Unknown, malformed, duplicate, or incorrectly typed views produce clear errors.
 - Tests cover lookup, completion filtering, delegation, overrides, defaults, and invalid views.
   
-* REVIEW Define Org dynamic blocks
+* DONE Define Org dynamic blocks
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -896,7 +896,7 @@ The error should identify the affected dynamic block.
 - Dynamic blocks reuse the existing query, search, view, and rendering code.
 - Tests cover insertion, updating, empty results, layouts, relative levels, links, invalid parameters, and stubbed CLI failures.
   
-* REVIEW Define backlinks command
+* DONE Define backlinks command
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -957,7 +957,7 @@ Because the command uses the normal query completion category, the currently fil
 - Standard completion and Embark export remain available.
 - Missing identifiers, unindexed targets, and non-Org buffers produce clear errors.
   
-* REVIEW Define linked-heading actions and export representations
+* DONE Define linked-heading actions and export representations
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -1081,7 +1081,7 @@ The surrounding hierarchy still comes from the query results, while the linked e
 - Unresolvable targets fall back safely without producing nested or broken links.
 - Tests cover both representations, relative links, IDs, custom IDs, heading search options, trailing text, missing links, and unresolved targets.
   
-* REVIEW Define live search command
+* DONE Define live search command
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -1209,7 +1209,7 @@ Errors expected while entering an incomplete FTS5 expression must not interrupt 
 - FTS5 and database failures produce actionable errors.
 - Tests cover minimum input, debounce, process cancellation, stale output, scopes, JSON parsing, selection, Embark metadata, and CLI failures.
   
-* REVIEW Support per-command and per-view configuration files
+* DONE Support per-command and per-view configuration files
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -1217,29 +1217,24 @@ Errors expected while entering an incomplete FTS5 expression must not interrupt 
 Per command geht, pro View noch prüfen.
 
 [[./archive/2026-08-05--support-per-command-view-configuration.org][Task details]]
-
 * DONE Add source and target outline-path columns for links
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
 [[./archive/2026-08-06--add-link-outline-path-columns.org][Task details]]
-
 * DONE Optimize large query result handling
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
 [[./archive/2026-08-06--optimize-large-query-result-handling.org][Task details]]
-
 * DONE Improve performance
 
 [[./archive/2026-08-06--improve-performance.org][Task details]]
-
 * DONE Keep truncated completion columns fully searchable
 
 [[./archive/2026-08-08--searchable-visual-truncation.org][Task details]]
-
 * DONE Add configurable result sorting
 :PROPERTIES:
 :VISIBILITY: folded
@@ -1247,1317 +1242,611 @@ Per command geht, pro View noch prüfen.
 
 [[./archive/2026-08-09--configurable-result-sorting.org][Task details]]
 
-Goal: Allow query and search results to be sorted by one or more user-facing columns before they are presented, exported, or rendered in dynamic blocks.
+* New Implementation after Changing orgfdb
 
-Sorting must reuse the shared result-presentation pipeline and must not introduce separate query, completion, or rendering paths.
+** TODO Define the public API to preserve in the org-files-db.el rewrite
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-** Public syntax
+Goal: Decide which user-facing behaviour from the existing package remains part of the rewritten Emacs client before copying implementation code.
 
-Add an optional ~:sort~ argument to query and search commands.
+Review the current package and classify public functionality into:
 
-Example:
+- preserve
+- adapt
+- postpone
+- remove
 
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings (not (done)))
- '((todo-keyword)
-   (priority :width (fixed 3))
-   (outline-path :width (max 80))
-   (file-name :width (max 30)))
- nil
- :sort
- '((priority :direction asc :missing last)
-   (outline-path :direction asc)))
-#+end_src
+Preserve where practical:
 
-Search example:
+- executable configuration
+- config-file semantics
+- structural query invocation
+- column configuration
+- predefined query views
+- result actions
+- Embark integration
+- dynamic query blocks
 
-#+begin_src emacs-lisp
-(org-files-db-search
- "quarterly report"
- nil
- nil
- :scope 'all
- :sort
- '((rank :direction asc)
-   (title :direction asc)))
-#+end_src
+Keep search outside the new Rust presentation architecture for now.
 
-~:sort nil~ preserves the order returned by ~orgfdb~.
+Do not preserve internal implementation concepts merely for compatibility.
 
-Each sort specification has the form:
+In particular, do not preserve as architecture:
 
-#+begin_src emacs-lisp
-(COLUMN
- :direction asc
- :missing last
- :case-fold t)
-#+end_src
+- Child Emacs presentation workers
+- ~async.el~ presentation preparation
+- presentation dumps
+- obsolete presentation caches
+- Emacs-side sorting
+- Emacs-side width calculation
+- Emacs-side truncation
+- generic Emacs-side column extraction
+- duplicated include inference for presentation columns
 
-Supported options are:
+Acceptance criteria:
 
-- ~:direction asc~ sorts in ascending order.
-- ~:direction desc~ sorts in descending order.
-- ~:missing first~ places missing values before non-missing values.
-- ~:missing last~ places missing values after non-missing values.
-- ~:case-fold t~ compares textual values without case distinctions.
-- ~:case-fold nil~ compares textual values with case distinctions.
+- Public behaviour to preserve is listed explicitly.
+- Internal architecture is not treated as public compatibility.
+- The rewrite has a deliberately smaller scope than the existing implementation.
 
-Defaults are:
+** TODO Create a minimal org-files-db.el package structure
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-#+begin_example
-direction   asc
-missing     last
-case-fold   t
-#+end_example
+Goal: Start the rewritten package from a small client-oriented structure rather than modifying the old presentation architecture in place.
 
-Allow multiple sort keys. Later keys are used only when all earlier keys compare equally.
+Use only as many modules as are useful.
 
-** Supported sort columns
-
-Sorting uses the same public column names as result presentation.
-
-Examples include:
-
-- ~title~
-- ~todo-keyword~
-- ~todo-type~
-- ~priority~
-- ~outline-path~
-- ~source-outline-path~
-- ~target-outline-path~
-- ~tags~
-- ~file-title~
-- ~file-name~
-- ~file-path~
-- ~line-number~
-- ~scheduled-raw~
-- ~deadline-raw~
-- ~closed-raw~
-- ~link-type~
-- ~link-target~
-- ~link-description~
-- ~resolution-status~
-- ~rank~
-
-A sort column does not need to be displayed.
-
-Example:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings)
- '((title)
-   (file-name :width (max 30)))
- nil
- :sort
- '((priority :direction asc)
-   (title :direction asc)))
-#+end_src
-
-Here ~priority~ controls the ordering without appearing as a visible column.
-
-Do not expose arbitrary internal JSON fields as supported sort keys. Sortable columns must use the documented public column API.
-
-** Comparison semantics
-
-Use type-aware comparison.
-
-*** Text
-
-Textual columns are compared as strings.
-
-With the default ~:case-fold t~, values differing only by case compare equally for the current sort key.
-
-Use the original result order as the final tie-breaker so sorting remains stable.
-
-*** Numbers
-
-Numeric columns such as ~line-number~ and ~rank~ are compared numerically rather than as strings.
-
-For example:
+A possible structure is:
 
 #+begin_example
-2
-10
-100
+org-files-db.el
+org-files-db-process.el
+org-files-db-presentation.el
+org-files-db-actions.el
+org-files-db-embark.el
+org-files-db-dblock.el
 #+end_example
 
-must not be ordered as:
+The exact split may be smaller initially.
 
-#+begin_example
-10
-100
-2
-#+end_example
+Responsibilities should remain clear:
 
-*** Priority
+- public configuration and commands
+- orgfdb process invocation
+- presentation request/response handling
+- actions
+- optional integrations
 
-Org priorities use their natural order.
+Do not copy obsolete cache or Child-Emacs infrastructure into the new package.
 
-Ascending order means:
+Acceptance criteria:
 
-#+begin_example
-A
-B
-C
-#+end_example
+- The package loads without the old presentation architecture.
+- Dependencies are minimal.
+- Module responsibilities are clear.
+- No ~async.el~ dependency is introduced.
 
-Missing priorities follow the configured ~:missing~ behaviour.
+** TODO Add Emacs PresentationSpec serialization
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-*** Timestamps
+Goal: Translate user-facing Emacs view and query configuration into the Rust ~PresentationSpec~ format.
 
-Planning columns such as:
+Keep normal Emacs configuration ergonomic.
 
-- ~scheduled-raw~
-- ~deadline-raw~
-- ~closed-raw~
+Users should continue to configure columns using Lisp forms rather than writing JSON manually.
 
-are compared chronologically.
+Translate:
 
-Parse each timestamp at most once per presentation.
-
-Invalid or absent timestamps are treated as missing values and follow the configured ~:missing~ behaviour.
-
-*** Outline paths
-
-~outline-path~, ~source-outline-path~, and ~target-outline-path~ are compared using their complete untruncated path values.
-
-Display truncation must not affect sorting.
-
-Custom separators affect presentation only and must not change the logical path order.
-
-*** Tags
-
-The aggregate ~tags~ column is compared using its complete tag collection, not its truncated display value.
-
-When row expansion is active with:
-
-#+begin_src emacs-lisp
-:row-source 'tags
-#+end_src
-
-the singular ~tag~ column sorts by the individual expanded tag.
-
-** Sorting and cached presentation rows
-
-Integrate sorting with the optimized presentation pipeline.
-
-Conceptually:
-
-#+begin_example
-results
-→ normalized column and sort specifications
-→ cached presentation rows
-→ cached sort keys
-→ stable sorting
-→ shared-width calculation
-→ formatted completion candidates
-#+end_example
-
-Calculate every sort key at most once per presentation row.
-
-When a sort key uses the same value as a displayed column, reuse the already cached value.
-
-Do not call the general column extractor again during individual comparisons.
-
-A comparison function may be called many times by the sorting algorithm, so it must compare already normalized cached values.
-
-Do not sort using truncated, padded, propertized, or otherwise formatted candidate strings.
-
-** Stable ordering
-
-Sorting must be stable.
-
-When all configured sort keys compare equally, preserve the original order returned by ~orgfdb~.
-
-Store the original result position in the presentation row and use it as the final tie-breaker when necessary.
-
-This ensures deterministic handling of:
-
-- duplicate titles
-- identical file names
-- equal priorities
-- missing values
-- row-expanded values with the same text
-
-** Row expansion
-
-Sorting applies after row expansion.
-
-Example:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings)
- '((tag)
-   (outline-path :width (max 60)))
- nil
- :row-source 'tags
- :sort
- '((tag :direction asc)
-   (outline-path :direction asc)))
-#+end_src
-
-This sorts individual tag rows rather than only their original heading results.
-
-The singular row columns are valid only with their matching row source:
-
-- ~tag~ with ~tags~
-- ~property-name~ and ~property-value~ with ~effective-properties~
-- ~keyword-name~ and ~keyword-value~ with ~keywords~
-
-Do not create separate sorting implementations for expanded rows.
-
-** Defaults by result type
-
-Provide configurable default sorting:
-
-#+begin_src emacs-lisp
-(defcustom org-files-db-heading-sort nil
-  "Default sorting for heading query results."
-  :type '(repeat sexp)
-  :group 'org-files-db)
-
-(defcustom org-files-db-file-sort nil
-  "Default sorting for file query results."
-  :type '(repeat sexp)
-  :group 'org-files-db)
-
-(defcustom org-files-db-link-sort nil
-  "Default sorting for link query results."
-  :type '(repeat sexp)
-  :group 'org-files-db)
-
-(defcustom org-files-db-search-sort nil
-  "Default sorting for full-text search results."
-  :type '(repeat sexp)
-  :group 'org-files-db)
-#+end_src
-
-All defaults are ~nil~, preserving the CLI order.
-
-This is especially important for search results, where the default CLI order represents search relevance.
-
-An explicit command-specific ~:sort~ overrides the corresponding global default.
-
-An explicitly supplied ~nil~ preserves the CLI order for that invocation even when a global default is configured.
-
-The implementation must distinguish an omitted ~:sort~ argument from an explicitly supplied ~nil~.
-
-** Views
-
-Allow query and search views to define ~:sort~:
-
-#+begin_src emacs-lisp
-(setq org-files-db-views
-      '(("next-actions"
-         :command query
-         :query (headings (not (done)))
-         :sort
-         ((priority :direction asc :missing last)
-          (deadline-raw :direction asc :missing last)
-          (outline-path :direction asc))
-         :columns
-         ((todo-keyword)
-          (priority :width (fixed 3))
-          (deadline-raw :width (max 20))
-          (outline-path :width (max 80))))
-
-        ("recent-search"
-         :command search
-         :expression "org-files-db"
-         :sort
-         ((title :direction asc))
-         :columns
-         ((title)
-          (file-name :width (max 30))))))
-#+end_src
-
-View-specific sorting overrides the corresponding global default.
-
-A view without ~:sort~ inherits the default for its result type.
-
-An explicit ~:sort nil~ preserves the order returned by ~orgfdb~.
-
-Views continue to delegate to ~org-files-db-query~ or ~org-files-db-search~.
-
-** Dynamic blocks
-
-Allow direct dynamic blocks to specify sorting:
-
-#+begin_src org
-,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :sort "((priority :direction asc) (outline-path :direction asc))" :layout flat
-,#+END:
-#+end_src
-
-Dynamic blocks referencing a view inherit that view's sorting.
-
-Exported and rendered entries must follow the same order as interactive completion.
-
-** Embark export
-
-~embark-export~ preserves the current sorted candidate order.
-
-It must not:
-
-- restore the original CLI order
-- sort candidates alphabetically through the completion framework
-- recalculate sort keys
-- reorder equal candidates unexpectedly
-
-Keep the completion metadata sorting functions set to ~identity~ where required so the prepared order remains authoritative.
-
-For outline export, preserve the requested sort order where it does not conflict with the required ancestor hierarchy.
-
-Matched siblings within the same generated hierarchy must follow the configured sorting.
-
-** Performance
-
-Sorting approximately 10,000 prepared rows must remain practical.
-
-To avoid repeated work:
-
-- normalize sort specifications once
-- extract every sort key once
-- parse timestamps once
-- reuse displayed column values where possible
-- compare cached scalar values
-- avoid allocating new strings inside comparison functions
-- preserve the original position as a numeric tie-breaker
-
-Add sorting benchmarks for approximately:
-
-- 1,000 rows
-- 10,000 rows
-- multiple text keys
-- numeric keys
-- timestamp keys
-- row-expanded tag values
-
-Measure sorting separately from JSON parsing, row preparation, width calculation, and candidate formatting.
-
-** Validation
-
-Report clear errors for:
-
-- unknown sort columns
-- malformed sort specifications
-- unsupported directions
-- unsupported missing-value positions
-- non-boolean ~:case-fold~ values
-- singular row columns without the corresponding row source
-- sort columns unavailable for the selected result type
-
-Include the affected command or view name where available.
-
-** README documentation
-
-Document:
-
-- sorting by one or more columns
-- ascending and descending order
-- missing-value placement
-- case-sensitive and case-insensitive text sorting
-- sort columns not needing to be displayed
-- per-command sorting
-- per-view sorting
-- global defaults by result type
-- search preserving relevance order when no sort is configured
-- row-expanded sorting
-- dynamic-block sorting
-
-Use practical examples rather than implementation details.
-
-** Acceptance criteria
-
-- Query results can be sorted by one or more columns.
-- Search results can be sorted without changing their default relevance order.
-- Sort columns do not need to be displayed.
-- Text, numeric, priority, timestamp, and outline-path values use appropriate comparisons.
-- Missing values can be placed first or last.
-- Ascending and descending ordering are supported.
-- Text comparison supports configurable case folding.
-- Sorting uses complete untruncated values.
-- Every sort key is calculated at most once per presentation row.
-- Sorting reuses cached displayed values where possible.
-- Equal rows preserve their original CLI order.
-- Row-expanded tags, properties, and keywords can be sorted.
-- Views and dynamic blocks support sorting.
-- Embark export preserves the configured ordering.
-- Existing result actions continue to receive their original result objects.
-- Tests cover all comparison types, multiple keys, missing values, explicit ~nil~, global defaults, view overrides, row expansion, duplicate values, stable ordering, Embark export, and non-ASCII text.
-- Benchmarks document sorting performance for approximately 1,000 and 10,000 rows.
-  
-* TODO Rewrite generation-aware asynchronous predefined-view cache
-
-Task file: [[file:2026-08-09--rewrite-generation-aware-async-cache-phase-1.org][Phase 1 implementation record]]
-
-Goal:
-
-- Replace the current cache implementation with a small, predictable architecture built around asynchronous full rebuilds first and incremental refresh only afterwards.
-- Keep warm predefined views immediately usable from an in-memory Emacs variable.
-- Use ~file-notify~ as the only mechanism for detecting database changes.
-- Remove polling and unnecessary timer activity.
-- Measure the complete cache lifecycle so performance regressions are visible instead of inferred.
-- Keep Rust authoritative for ~database_path~, ~database_id~, and ~generation~.
-- Keep all user-facing ~defcustom~ definitions in ~org-files-db-core.el~, not in specialised modules.
-
-The rewrite has two phases:
-
-- Phase 1: simple async full-rebuild cache
-- Phase 2: incremental generation-aware refresh
-
-Do not implement Phase 2 optimisations until Phase 1 is stable, fast, measurable, and idle when no database changes occur.
-
-** REVIEW Phase 1: Simple async full-rebuild cache
-
-Goal:
-
-- Build the simplest correct predefined-view cache.
-- Pre-cache eligible views asynchronously.
-- Build complete ready-to-use completion candidates in the child Emacs.
-- Use a temporary dump file as the large-data transport from child to parent.
-- Keep the published cache entirely in memory in the parent Emacs.
-- Rebuild the complete affected view when the committed database generation changes.
-- Cancel obsolete rebuilds immediately when a newer generation requires another rebuild.
-
-*** Cache mode
-
-Use one global minor mode:
-
-#+begin_src emacs-lisp
-org-files-db-cache-mode
-#+end_src
-
-When enabled:
-
-1. Resolve the effective database status through ~orgfdb status~.
-2. Obtain:
-   - ~database_path~
-   - ~database_id~
-   - ~generation~
-3. Install the required ~file-notify~ watch.
-4. Find all predefined views with:
-
-#+begin_src emacs-lisp
-:pre-cache t
-#+end_src
-
-5. Queue an asynchronous initial rebuild for every eligible view.
-
-When disabled:
-
-- cancel predefined views with:
-
-#+begin_src emacs-lisp
-:pre-cache t
-#+end_src
-
-5. Queue an asynchronous all running cache workers
-- clear queued rebuilds
-- remove all file-notify watches
-- remove temporary dump files owned by the cache
-- clear published cache entries
-- leave no cache timers or background activity running
-
-~:pre-cache t~ only marks a predefined view as eligible for caching.
-
-It does not enable the cache by itself.
-
-Direct calls to:
-
-#+begin_src emacs-lisp
-org-files-db-query
-org-files-db-search
-#+end_src
-
-remain fresh and continue to bypass the predefined-view cache.
-
-*** User options
-
-Define all user-facing options in:
-
-#+begin_example
-org-files-db-core.el
-#+end_example
-
-Do not add ~defcustom~ forms to ~org-files-db-cache.el~ or other specialised modules.
-
-Cache-specific implementation variables may remain private variables in the cache module.
-
-Do not add a polling interval option in Phase 1.
-
-There is no polling fallback.
-
-*** async.el model
-
-Before implementing the cache worker, inspect and benchmark the intended ~async.el~ usage.
-
-Use a simple model:
-
-#+begin_example
-one async worker
-→ one complete view rebuild
-→ one temporary dump
-→ one small final async result
-#+end_example
-
-Do not build bidirectional worker RPC or a persistent worker protocol.
-
-Avoid transferring complete candidate lists through the normal ~async.el~ return value.
-
-The child should return only small metadata, conceptually:
-
-#+begin_src emacs-lisp
-(:status success
- :job-id ...
- :view ...
- :database-id ...
- :generation ...
- :dump-file ...
- :result-count ...
- :candidate-count ...
- :dump-size ...)
-#+end_src
-
-Cache the result of ~locate-library~ for ~async.el~ while starting multiple workers where useful instead of resolving the library path repeatedly.
-
-*** Worker responsibility
-
-The child Emacs performs the complete expensive preparation for one view:
-
-#+begin_example
-query/search
-→ JSON parsing
-→ result normalization
-→ row preparation
-→ sorting when configured
-→ shared-width calculation
-→ visible formatting and truncation
-→ complete searchable candidate construction
-→ candidate metadata
-→ dump
-#+end_example
-
-The dump should contain the complete published representation required for a warm completion invocation.
-
-The parent must not rerun:
-
-- value extraction
+- columns
+- column options
 - sorting
-- shared-width calculation
-- truncation
-- candidate formatting
+- row source
 
-merely to publish a completed worker result.
+into the documented Rust presentation specification.
 
-The dump format may use readable Lisp initially.
+Do not reproduce presentation semantics in Emacs.
 
-Prefer simplicity over introducing compression or a custom binary format.
+Emacs may validate simple Lisp shape errors, but Rust remains authoritative for presentation-column semantics.
 
-*** Candidate dump
+Acceptance criteria:
 
-The worker writes the prepared cache entry to a unique temporary file.
+- Emacs configuration can generate one complete ~PresentationSpec~.
+- Users do not need to write JSON manually.
+- The serializer does not calculate values, sort keys, widths, or truncation.
+- Rust validation errors can be surfaced clearly.
 
-Use safe serialization settings such as:
+** TODO Add action-dependent query data requirements
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-#+begin_src emacs-lisp
-(let ((print-length nil)
-      (print-level nil)
-      (print-circle t))
-  ...)
-#+end_src
+Goal: Ensure actions can request structured result data independently of displayed presentation columns.
 
-The parent reads the completed dump once.
+Keep action requirements outside ~PresentationSpec~.
 
-Use safe reading with:
-
-#+begin_src emacs-lisp
-(let ((read-eval nil))
-  ...)
-#+end_src
-
-After successful reading:
-
-1. validate the job and generation
-2. atomically publish the new cache entry in an Emacs variable
-3. delete the temporary dump
-
-The dump is transport only.
-
-A warm view must never reread the dump.
-
-After publication the normal path is conceptually:
+Conceptually combine:
 
 #+begin_example
-cache lookup
-→ prepared candidates
-→ completing-read
+PresentationSpec-derived requirements
++
+Emacs action requirements
+=
+one orgfdb query invocation
 #+end_example
 
-*** Publication
+Examples:
 
-Maintain one published complete cache entry per predefined view and effective cache key.
+- opening a normal result requires no extra target data
+- opening a resolved link target requires ~target~
 
-A published entry should contain enough information to verify ownership and freshness, including at least:
+Pass required explicit includes to the original ~orgfdb query~ invocation.
 
-#+begin_example
-view
-cache key
-database id
-generation
-prepared candidates
-result/candidate count
-publication timestamp
-#+end_example
+Do not put Emacs action function names into the Rust specification.
 
-Publication must be atomic from the point of view of consumers.
+Do not perform one additional query after candidate selection when the data could have been requested initially.
 
-Never partially mutate the currently published complete entry while a full rebuild is running.
+Acceptance criteria:
 
-The old published entry may remain available internally until the new entry is successfully published.
+- Action-required includes are known before query execution.
+- Explicit includes combine with Rust presentation inference.
+- One query invocation provides both presentation and action data.
+- Actions do not depend accidentally on whether a particular column is displayed.
 
-*** Warm lookup
+** TODO Implement asynchronous orgfdb presentation invocation
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-A valid warm lookup must not perform:
+Goal: Run structural presentation queries in the external Rust process without blocking Emacs while Rust performs expensive work.
 
-- ~orgfdb status~
-- query/search execution
-- JSON parsing
-- value extraction
-- sorting
-- width calculation
-- candidate formatting
-- dump reading
-- file access for cache data
-
-It should retrieve the already prepared candidate collection from memory and enter completion.
-
-*** File-notify
-
-Use ~file-notify~ as the only change-detection mechanism.
-
-Do not poll.
-
-Use the canonical ~database_path~ returned by ~orgfdb status~.
-
-Watch whatever filesystem location is necessary to reliably observe SQLite activity for:
-
-#+begin_example
-database
-database-wal
-database-shm
-#+end_example
-
-Handle creation, deletion, rename, attribute, and change events as required by the backend.
-
-Do not assume one SQLite transaction produces one file-notify event.
-
-Record every raw file-notify event for debugging and benchmarking.
-
-Conceptually log:
-
-#+begin_example
-timestamp
-descriptor
-action
-path
-second path when supplied by rename events
-#+end_example
-
-Several raw events belonging to one database commit must not cause several completed rebuilds for the same generation.
-
-A short event coalescing/debounce mechanism is allowed when necessary.
-
-It must exist only around actual file-notify activity and must not become a permanent polling timer.
-
-*** Generation handling
-
-File-notify is only a wakeup signal.
-
-After relevant filesystem activity:
-
-1. run ~orgfdb status~
-2. compare ~database_id~ and ~generation~
-3. rebuild only when the committed generation requires it
-
-Do not treat WAL activity itself as a committed generation.
-
-If source files are changing but Rust still reports the same committed generation, keep the existing published cache.
-
-*** Complete rebuild
-
-In Phase 1, any relevant committed generation change triggers a complete async rebuild of each eligible predefined view.
+Use the normal Emacs process API.
 
 Do not use:
 
-#+begin_example
-orgfdb changes
---restrict-files-json
-incremental candidate patching
-incremental width updates
-#+end_example
-
-yet.
-
-Correctness and simplicity come first.
-
-*** Superseding a running rebuild
-
-A rebuild always belongs to a specific:
-
-#+begin_example
-job-id
-database-id
-generation
-view
-#+end_example
-
-If generation ~N~ is rebuilding and a newer committed generation ~N+1~ becomes necessary before it finishes:
-
-1. mark the running job obsolete
-2. terminate its async child process
-3. remove any temporary dump it produced
-4. start a new rebuild for the newest known generation
-
-Do not wait for an obsolete rebuild to finish.
-
-Do not queue an obsolete generation behind another obsolete generation.
-
-Prefer:
-
-#+begin_example
-running generation 71
-new generation 72 detected
-→ cancel 71
-→ rebuild 72
-#+end_example
-
-If generations 72 and 73 are observed before a replacement worker begins useful work, rebuild only the newest known generation.
-
-A callback from a cancelled or superseded job must never publish data.
-
-Before publication verify at least:
-
-- the callback belongs to the currently expected job
-- the database identity still matches
-- the generation still matches the generation required by that job
-
-Stale callbacks perform cleanup only.
-
-*** Using a view during rebuild
-
-If a predefined view is requested while its required generation is currently rebuilding:
-
-- wait for that rebuild rather than starting a second synchronous query
-- keep processing process output so the async worker can finish
-- when the worker publishes successfully, use the new cache immediately
-- if that worker is superseded by a newer generation, continue waiting for the replacement worker
-- use a bounded error/failure path rather than waiting forever
-
-Do not cancel a current valid worker merely because the user opened its view.
-
-If no valid cache exists because initial pre-cache is still running, wait for the initial worker in the same way.
-
-*** Failure handling
-
-A failed worker must:
-
-- never replace a valid published cache
-- clean up its dump file
-- clear its running-job state
-- report a concise useful error in debug/diagnostic output
-
-A cancelled worker is not a cache failure.
-
-Differentiate at least:
-
-#+begin_example
-success
-failed
-cancelled
-superseded
-#+end_example
-
-If the database identity changes, treat existing entries as belonging to another database and rebuild them.
-
-*** No idle overhead
-
-After initial pre-cache has completed and the database remains unchanged:
-
-- no cache worker runs
-- no cache polling occurs
-- no periodic cache timer runs
-- no CLI process is started
-- no candidate work occurs
-- cursor movement does not trigger cache allocations
-- ~timer-event-handler~ should show no meaningful ongoing org-files-db cache activity
-
-This is a core Phase 1 acceptance criterion.
-
-** REVIEW Phase 1 benchmark and tracing
-
-Add a benchmark/trace facility together with the new implementation.
-
-Do not postpone instrumentation until after the cache is complete.
-
-The benchmark should support at least:
-
-- initial pre-cache
-- rebuild caused by file-notify / generation change
-- rebuild superseded by a newer generation
-- warm view lookup
-- interactive wait for a running rebuild
-
-*** Worker timings
-
-Measure separately where practical:
-
-#+begin_example
-async-start requested
-child worker entered
-worker startup delay
-query/search start
-query/search end
-JSON parse / normalization
-presentation preparation
-sorting
-width calculation
-candidate formatting
-dump write
-worker finished
-#+end_example
-
-Report both individual phases and total worker wall-clock time.
-
-*** Dump measurements
-
-Record at least:
-
-#+begin_example
-dump size in bytes
-dump write duration
-dump read duration
-dump delete duration where meaningful
-candidate count
-result count
-#+end_example
-
-Optionally calculate approximate throughput:
-
-#+begin_example
-dump write MB/s
-dump read MB/s
-#+end_example
-
-Do not optimise based on throughput alone; total latency is the primary metric.
-
-*** Main Emacs blocking
-
-Explicitly measure how long the parent Emacs is blocked when publishing a completed dump.
-
-At minimum measure:
-
-#+begin_example
-parent dump read
-validation
-publication
-total main-thread blocked time
-#+end_example
-
-Also record GC behaviour around this section:
-
-#+begin_example
-GC count
-GC elapsed time
-#+end_example
-
-The benchmark should make it obvious whether a rebuild was mostly asynchronous or whether substantial work still happened in the main Emacs process.
-
-*** File-notify tracing
-
-Record every raw file-notify event.
-
-For a logical refresh also report:
-
-#+begin_example
-raw event count
-first raw event timestamp
-status check timestamp
-old generation
-new generation
-rebuild requested timestamp
-worker started timestamp
-cache published timestamp
-#+end_example
-
-This should allow calculation of:
-
-#+begin_example
-first event → generation detection
-generation detection → worker start
-worker start → dump ready
-dump ready → publication
-first event → usable cache
-#+end_example
-
-Do not describe each raw file-notify event as a rebuild.
-
-Distinguish raw filesystem events from the one logical generation-triggered rebuild.
-
-*** Cancellation metrics
-
-For superseded rebuilds record:
-
-#+begin_example
-cancelled job id
-cancelled generation
-replacement generation
-time spent before cancellation
-whether a dump had already been created
-cleanup duration where useful
-#+end_example
-
-Track the number of cancelled/superseded jobs.
-
-*** Benchmark output
-
-Provide concise human-readable output.
-
-Example shape:
-
-#+begin_example
-org-files-db cache benchmark
-
-View: all-headings
-Reason: initial
-Generation: 71
-Results: 9903
-Candidates: 9903
-
-worker startup:       0.070 s
-query + parse:        0.580 s
-presentation:         0.145 s
-dump write:           0.090 s
-worker total:         0.900 s
-
-dump size:            8.4 MB
-parent dump read:     0.210 s
-parent publish:       0.002 s
-main Emacs blocked:   0.212 s
-parent GC:            1 / 0.055 s
-
-total rebuild:        1.112 s
-#+end_example
-
-For a file-notify refresh additionally show relevant event/generation information.
-
-Keep structured benchmark data internally where useful so tests do not have to parse human-readable messages.
-
-*** Phase 1 tests
-
-Cover at least:
-
-- enabling the mode queues every ~:pre-cache t~ view
-- non-pre-cached views are not queued
-- initial pre-cache runs asynchronously
-- worker writes a candidate dump
-- parent reads and publishes the dump
-- successful publication deletes the dump
-- warm lookup does not reread the dump
-- warm lookup performs no CLI invocation
-- warm lookup performs no presentation rebuilding
-- file-notify events are recorded
-- several raw SQLite events for one generation cause one logical rebuild
-- unchanged generation causes no rebuild
-- changed generation causes a complete rebuild
-- database identity change invalidates the old entry
-- a newer generation cancels a running older rebuild
-- cancelled jobs cannot publish
-- superseded dump files are cleaned up
-- requesting a view during rebuild waits for the current valid worker
-- waiting follows a superseding replacement worker
-- worker failure does not replace a valid cache
-- disabling the mode cancels workers and removes watches
-- disabling the mode leaves no cache timers
-- idle cache mode performs no repeated work
-
-*** Phase 1 acceptance criteria
-
-- ~org-files-db-cache-mode~ asynchronously pre-caches all eligible predefined views.
-- Complete prepared candidates are produced outside the main Emacs process.
-- Large worker results are transported through temporary dump files rather than normal ~async.el~ result serialization.
-- Dumps are read once at publication and never during normal warm use.
-- Warm views use the in-memory cache directly.
-- File-notify is the only database-change wakeup mechanism.
-- No polling exists.
-- A committed generation change triggers a complete async rebuild.
-- A newer required generation cancels and replaces an older running rebuild.
-- Stale/cancelled callbacks cannot publish.
-- Opening a view during rebuild waits for the current newest rebuild.
-- Main-thread dump-read/publication blocking is measured explicitly.
-- Every raw file-notify event can be inspected in benchmark/debug output.
-- Initial and file-notify-triggered rebuilds have comparable detailed timing output.
-- After pre-cache completes and the database is unchanged, cache mode is effectively idle.
-- Existing query, search, completion, metadata, actions, and view semantics remain unchanged.
-- All ~defcustom~ definitions remain in ~org-files-db-core.el~.
-- ~make ci~ passes.
-
-** Phase 2: Incremental cache refresh
-
-Goal:
-
-- Keep the Phase 1 lifecycle, publication, cancellation, file-notify, generation handling, and benchmark infrastructure.
-- Replace complete rebuilds after ordinary generation changes with small incremental updates when Rust reports that patching is safe.
-- Fall back to the proven Phase 1 complete rebuild whenever incremental refresh is unavailable or unsafe.
-
-Do not change warm-cache semantics.
-
-*** Changes contract
-
-After detecting a newer generation, use the Rust generation/change contract to determine whether the cached view can be patched.
-
-Use:
-
-#+begin_example
-database_id
-generation
-changes
-cache_action
-#+end_example
-
-Rust remains authoritative.
-
-If the change information requires a full rebuild, use the Phase 1 full-rebuild path unchanged.
-
-Search caches are not patch-safe unless the Rust contract explicitly provides such semantics later.
-
-*** Restricted structural queries
-
-For patch-safe structural query views:
-
-1. obtain changed paths from ~orgfdb changes~
-2. separate deleted files from files requiring upsert
-3. query only the required upsert files using the restricted-file query mechanism
-4. build replacement rows/candidates asynchronously
-5. transport only the delta through a small dump
-6. patch the existing parent cache
-
-Do not send the complete existing cache to the worker.
-
-The parent already owns the published cache.
-
-*** Incremental parent state
-
-Store enough metadata in the published cache to update it without rebuilding every existing candidate.
-
-At minimum retain the relationship between:
-
-#+begin_example
-candidate / presentation row
-original result
-source file
-sort information
-width information
-#+end_example
-
-Keep original result metadata intact so actions continue to operate on the matched result.
-
-*** Column width metadata
-
-For every displayed column retain its actual effective width.
-
-For variable-width columns also retain enough information to determine whether a patch changes that width.
-
-Conceptually:
-
-#+begin_src emacs-lisp
-(:width-mode auto
- :effective-width 43
- :max-width-count 7)
+- Child Emacs
+- ~async.el~
+- dump files
+- presentation worker Emacs instances
+
+Invoke conceptually:
+
+#+begin_src sh
+orgfdb query \
+  --format presentation-json \
+  ... \
+  '(headings)'
 #+end_src
 
-For:
+Handle:
+
+- process startup
+- stdout
+- stderr
+- exit status
+- cancellation where appropriate
+- malformed JSON
+- CLI errors
+
+Acceptance criteria:
+
+- Rust presentation work runs outside the Emacs main thread.
+- No Child Emacs process is involved.
+- Errors are presented clearly.
+- Process handling remains small and reusable.
+
+** TODO Parse presentation-json and retain original results separately
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Parse the Rust presentation response while preserving the separation between original query results and presentation rows.
+
+Store:
+
+- database metadata
+- original results
+- presentation rows
+
+Rows reference original results using ~result_index~.
+
+Do not copy the complete result object into an independent Emacs data structure for every row.
+
+Provide a small helper that resolves:
 
 #+begin_example
-fixed N
+row -> result_index -> original result
 #+end_example
 
-the effective width never changes because of row contents.
+for actions.
 
-For:
+Acceptance criteria:
 
-#+begin_example
-max N
-#+end_example
+- Original results are stored once per response.
+- Rows resolve deterministically to the correct result.
+- Several expanded rows may resolve to the same original result.
+- Actions can obtain the original result without knowing presentation internals.
 
-once the effective width has reached ~N~, longer inserted values cannot increase it.
+** TODO Add semantic presentation faces
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-For:
+Goal: Map Rust semantic roles to configurable Emacs faces.
 
-#+begin_example
-auto
-#+end_example
+Support at least:
 
-a new value wider than the current effective width increases the shared width.
+- ~heading~
+- ~title~
+- ~todo~
+- ~done~
+- ~priority~
+- ~tag~
+- ~date~
+- ~file-name~
+- ~file-path~
+- ~keyword-name~
+- ~keyword-value~
+- ~property-name~
+- ~property-value~
 
-When deleting or replacing rows, maintain the number of rows that use the current maximum width.
+Define suitable package faces where useful and inherit from existing Org or Emacs faces.
 
-If:
+Provide a configurable role mapping conceptually similar to:
 
-#+begin_example
-max-width-count > 0
-#+end_example
+#+begin_src emacs-lisp
+(defcustom org-files-db-face-role-alist
+  '((heading        . org-files-db-heading-face)
+    (title          . org-files-db-title-face)
+    (todo           . org-todo)
+    (done           . org-done)
+    (priority       . org-priority)
+    (tag            . org-tag)
+    (date           . org-date)
+    (file-name      . org-files-db-file-name-face)
+    (file-path      . org-files-db-file-path-face)
+    (keyword-name   . org-files-db-keyword-name-face)
+    (keyword-value  . org-files-db-keyword-value-face)
+    (property-name  . org-files-db-property-name-face)
+    (property-value . org-files-db-property-value-face)))
+  ...)
+#+end_src
 
-after the patch, no full width rescan is required for that column.
+Ensure completion candidates always retain the font size of ~default~.
 
-Only when the last row providing the current maximum disappears is a rescan of the remaining rows necessary to discover the new effective width.
+Do not distinguish heading levels.
 
-Where useful, retain the unformatted cell display widths on prepared rows so old rows do not require repeated ~string-width~ calls.
+Use ~heading~ for the complete:
 
-*** Candidate rebuilding
+- ~outline-path~
+- ~source-outline-path~
+- ~target-outline-path~
 
-If a delta does not change any shared column width and does not otherwise invalidate global presentation state:
+Do not add special outline-separator styling.
 
-- keep unaffected prepared candidates unchanged
-- remove candidates belonging to deleted/replaced source files
-- build candidates only for new/replacement rows
-- merge them into the prepared collection
+Acceptance criteria:
 
-Do not reformat all existing candidates merely because one file changed.
+- Semantic roles map to configurable faces.
+- Heading faces cannot create oversized completion rows.
+- File paths, titles, keywords, and properties can be styled independently.
+- Missing or unknown roles degrade safely.
 
-If a shared width changes, rebuild only as much presentation state as correctness requires.
+** TODO Build lightweight completion candidates from prepared rows
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-Prefer correctness over a complicated partial update when a rare global width change occurs.
+Goal: Keep candidate construction in Emacs as small as possible.
 
-*** Sorting
+For every Rust-prepared cell:
 
-When configurable sorting exists:
+- retain ~search_text~ for matching
+- use ~display_text~ for visible presentation
+- apply the semantic role face
 
-- cache normalized sort keys per presentation row
-- compute sort keys once for new/replacement rows
-- merge/reorder using complete logical values
-- preserve stable tie ordering
+Combine prepared cells into the final candidate representation.
 
-Do not sort using truncated or propertized display strings.
+Associate the candidate with enough lightweight metadata to recover its presentation row and original result.
 
-If maintaining an incremental sorted structure becomes more complex than useful, a complete in-memory re-sort of already prepared sort keys is acceptable initially.
+Do not perform in Emacs:
 
-Avoid rerunning value extraction for unaffected rows.
+- column value extraction
+- sort-key creation
+- sorting
+- shared width calculation
+- truncation
+- padding
+- outline-path construction
 
-*** Truncation and searchable values
+Acceptance criteria:
 
-Truncation remains visual only.
+- Full values remain searchable after visible truncation.
+- Candidates display the Rust-prepared layout.
+- Candidate construction performs only Emacs-specific string/property work.
+- Selecting a candidate resolves to the correct original result.
 
-Incremental candidates must retain the same complete searchable values as fresh and full-rebuild candidates.
+** TODO Port core result actions to the rewritten package
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-Do not recover full searchable text by rerunning extraction during warm lookup.
+Goal: Port useful result actions from the existing package without carrying old presentation implementation dependencies into the rewrite.
 
-*** Row expansion
+Review and port where appropriate:
 
-If row expansion is implemented before Phase 2, incremental updates operate on expanded presentation rows using the same generic row pipeline.
+- open result
+- insert file link
+- insert heading link
+- follow heading link
+- rename file
+- rename file result
 
-Do not add a separate incremental implementation for:
+Preserve shared navigation and validation logic where it remains useful.
 
-- tags
-- effective properties
-- keywords
+Actions receive original query results, not presentation rows.
 
-A changed source result may remove zero, one, or several expanded rows and insert zero, one, or several replacement rows.
+Keep result and presentation concerns separate.
 
-*** Superseding incremental work
+Interactive actions should return concise user-facing feedback rather than exposing complete result structures.
 
-The Phase 1 cancellation rule also applies to incremental jobs.
+Acceptance criteria:
 
-If a newer committed generation appears while a patch for an older generation is running:
+- Existing core actions operate on selected presentation results.
+- Actions do not depend on presentation formatting.
+- Actions receive the original Rust query result representation.
+- No old candidate-cache architecture is required.
 
-#+begin_example
-cancel old patch
-→ discard its delta dump
-→ calculate work for newest generation
-#+end_example
+** TODO Add the resolved link target action
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-Never apply an obsolete delta to a newer published generation.
+Goal: Add a distinct action for opening the structured resolved target of a link result.
 
-If the required generation chain can no longer be patched safely, perform a full rebuild.
+Implement:
 
-*** Phase 2 benchmark additions
+#+begin_src emacs-lisp
+org-files-db-actions-open-link-target
+#+end_src
 
-Keep all Phase 1 metrics and add:
+Use structured target data from the original query result.
 
-#+begin_example
-changes query duration
-cache action
-deleted file count
-upsert file count
-restricted query duration
-delta result count
-delta candidate count
-delta dump size
-delta dump write/read duration
-merge duration
-sort update duration
-width update duration
-number of columns rescanned
-number of existing candidates reformatted
-main Emacs blocked time
-#+end_example
+Support:
 
-Make it possible to compare:
+- resolved heading targets
+- resolved file targets
 
-#+begin_example
-full rebuild
-vs.
-one-file incremental refresh
-vs.
-multi-file incremental refresh
-#+end_example
+Reject clearly:
 
-A normal one-file update should visibly demonstrate that unrelated rows are not reformatted.
+- unresolved targets
+- ambiguous targets
+- external targets
+- unsupported targets
+- missing structured target data
 
-*** Phase 2 tests
+Prefer stable navigation information where available.
 
-Cover at least:
+Do not reparse the raw authored target when structured target information exists.
 
-- patch-safe generation uses ~changes~
-- full-rebuild cache action uses the Phase 1 path
-- only upsert files are included in the restricted query
-- deleted files are removed without requerying them
-- unchanged candidates remain reusable
-- delta dump contains only delta data
-- unchanged shared widths avoid a global candidate rebuild
-- inserted wider value updates an ~auto~ width
-- ~max~ width at its cap does not expand
-- deleting one of several maximum-width values avoids a rescan
-- deleting the last maximum-width value recalculates that column
-- fixed-width columns never require content-driven width recalculation
-- sorting uses cached logical sort values
-- truncated-away text remains searchable after a delta update
-- newer generation cancels an in-progress patch
-- obsolete delta cannot publish
-- unsafe generation chains fall back to complete rebuild
-- benchmarks report delta-specific metrics
+Do not perform another CLI query when the original result already contains sufficient target data.
 
-*** Phase 2 acceptance criteria
+Acceptance criteria:
 
-- Ordinary patch-safe structural-query changes do not require a complete view rebuild.
-- Workers receive only the information required for the delta.
-- The complete existing cache is not serialized to the worker.
-- Delta dumps contain only changed data.
-- Unchanged candidates are reused whenever presentation state permits.
-- Effective width metadata avoids unnecessary shared-width rescans.
-- Fixed and capped maximum widths avoid unnecessary formatting work.
-- Deleting the last current maximum correctly recalculates the affected width.
-- Sorting and truncation preserve the same semantics as complete rebuilds.
-- Unsafe or unsupported changes fall back to the Phase 1 full rebuild.
-- Superseding generations cancel obsolete incremental work.
-- Benchmark output clearly demonstrates the cost difference between full rebuild and incremental refresh.
-- Warm lookup remains a direct in-memory cache lookup.
-- The idle cache remains free of polling and periodic work.
-- ~make ci~ passes.
+- Opening the source and opening the target remain distinct actions.
+- Target navigation uses structured result data.
+- Invalid target states produce clear errors.
+- The action works independently of whether ~target-outline-path~ is displayed.
+
+** TODO Add predefined query views to the rewritten client
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Reintroduce predefined structural views using the new Rust presentation architecture.
+
+Keep the user-facing view syntax stable where practical.
+
+Views may configure:
+
+- query
+- config file
+- columns
+- sort
+- row source
+- available actions where appropriate
+
+Translate view configuration into:
+
+- query arguments
+- ~PresentationSpec~
+- action-dependent explicit includes
+
+Do not introduce a separate view presentation path.
+
+Acceptance criteria:
+
+- Structural views use the same generic query/presentation implementation.
+- No Emacs-side sort or formatting implementation exists for views.
+- Row-source views use the normal presentation pipeline.
+- View-specific configuration remains ergonomic.
+
+** TODO Add Embark integration to the rewritten client
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Expose result actions through optional Embark integration.
+
+Keep Embark optional.
+
+Provide separate actions where appropriate for:
+
+- opening the matched result
+- opening a resolved link target
+- inserting links
+- mutation actions
+
+Embark actions must resolve the original result through the selected presentation row.
+
+Do not require ~embark-consult~ unless a separate feature specifically needs it.
+
+Acceptance criteria:
+
+- The package loads without Embark installed.
+- Embark receives lightweight candidates but actions obtain original results.
+- Source and target navigation remain distinct.
+- Interactive feedback remains concise.
+
+** TODO Add row-source views and dynamic query blocks
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Expose the Rust row-expansion feature through the normal Emacs configuration interfaces.
+
+Support row sources:
+
+- ~tags~
+- ~effective-properties~
+- ~keywords~
+
+Views pass their configured row source through ~PresentationSpec~.
+
+Dynamic query blocks may specify a row source directly or inherit it from a view.
+
+Do not implement row expansion in Emacs.
+
+Do not create a separate completion path for expanded rows.
+
+Acceptance criteria:
+
+- Expanded rows arrive fully prepared from Rust.
+- Several rows may reference the same original result.
+- Actions continue to operate on the original result.
+- Singular row-source columns work through normal presentation configuration.
+
+** TODO Port dynamic block and export behaviour
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Reintroduce dynamic blocks and result export on top of the new result/row separation.
+
+Ensure exports operate on the currently selected or filtered presentation rows where row expansion matters.
+
+For expanded rows:
+
+- preserve each individual row
+- retain association with the original result
+- do not collapse several expanded rows back into one result accidentally
+
+Keep presentation/export logic separate from query execution.
+
+Acceptance criteria:
+
+- Normal query exports work.
+- Expanded rows remain distinguishable.
+- Original result hierarchy can still be used where required.
+- Export does not depend on old candidate-cache structures.
+
+** TODO Benchmark the complete Emacs presentation path
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Measure the complete uncached Rust-to-Emacs structural query path.
+
+Use representative result sizes around:
+
+- 100 rows
+- 1'000 rows
+- 10'000 rows
+- 50'000 rows
+
+Measure where practical:
+
+- orgfdb process elapsed time
+- payload size
+- process transfer
+- JSON parsing
+- candidate construction
+- time until completion UI becomes usable
+- observable Emacs main-thread blocking
+
+Compare with the old package where useful.
+
+Do not add an Emacs presentation cache before this benchmark.
+
+Acceptance criteria:
+
+- Main-thread blocking is measured separately from total elapsed time.
+- The remaining bottleneck is identified.
+- The result determines whether any client-side optimisation is justified.
+- No cache is added based only on assumption.
+
+** TODO Decide whether any Emacs-side presentation cache is necessary
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Keep the rewritten client cache-free unless measurements demonstrate a clear need.
+
+If the uncached architecture is fast enough:
+
+- do not add a presentation cache
+- keep the package stateless between queries where possible
+
+If a remaining bottleneck justifies caching, create a new narrowly scoped design based on that measured bottleneck.
+
+Do not recreate:
+
+- Child-Emacs cache preparation
+- presentation dump files
+- complex generation-aware cache lifecycle in Emacs
+
+Acceptance criteria:
+
+- The decision is backed by end-to-end measurements.
+- No cache lifecycle is introduced without measurable benefit.
+- The rewritten package remains as small as practical.
+
+** TODO Replace the old org-files-db.el implementation
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Replace the previous package implementation once the rewritten client covers the intended public functionality and passes its test suite.
+
+Before replacement:
+
+- compare preserved public behaviour
+- migrate useful tests
+- remove obsolete cache tests
+- remove Child-Emacs tests
+- remove obsolete presentation implementation tests
+- update README and changelog
+- verify package loading and byte compilation
+- run the complete test suite
+
+Do not retain dead compatibility layers for internal implementation details.
+
+Acceptance criteria:
+
+- The new package is the only maintained implementation.
+- ~async.el~ is no longer required for presentation work.
+- No Child-Emacs presentation code remains.
+- No obsolete presentation cache remains.
+- Structural queries use Rust-prepared presentation rows.
+- Public functionality selected for preservation is covered by tests.
   
-* TODO Add row expansion for tags, effective properties, and keywords
+* Not sure if still relevant
+
+** TODO Add row expansion for tags, effective properties, and keywords
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -2566,7 +1855,7 @@ Goal: Allow one heading or file result to produce one displayed row per tag, eff
 
 Currently, multi-valued fields are formatted as one combined column value. Provide a shared row-expansion mechanism instead of implementing separate presentation paths for tags, properties, and keywords.
 
-** Row-source option
+*** Row-source option
 
 Add an optional ~:row-source~ keyword to query execution:
 
@@ -2593,7 +1882,7 @@ A result containing three tags therefore produces three completion candidates.
 
 Ordinary result columns such as ~outline-path~, ~file-name~, and ~title~ are repeated for every expanded row.
 
-** Tags
+*** Tags
 
 With:
 
@@ -2629,7 +1918,7 @@ Preserve the tag order returned by ~orgfdb~.
 
 Do not add or remove Org tag delimiters unless explicitly configured as part of column formatting.
 
-** Effective properties
+*** Effective properties
 
 With:
 
@@ -2674,7 +1963,7 @@ Effective properties represent the resolved values used by query matching. They 
 
 If the CLI representation does not provide a stable order, sort effective properties by property name for deterministic output.
 
-** Keywords
+*** Keywords
 
 With:
 
@@ -2717,7 +2006,7 @@ Preserve duplicate keyword entries when they are returned separately by ~orgfdb~
 
 Preserve source order when the CLI provides it. Otherwise, use a deterministic order without merging entries.
 
-** Views
+*** Views
 
 Allow predefined query views to configure ~:row-source~:
 
@@ -2755,7 +2044,7 @@ Query views pass ~:row-source~ to ~org-files-db-query~.
 
 They must not implement a separate expansion or completion path.
 
-** Dynamic blocks
+*** Dynamic blocks
 
 Allow direct query blocks to define ~:row-source~:
 
@@ -2774,7 +2063,7 @@ Supported dynamic-block values are:
 
 An absent value keeps the normal one-row-per-result behaviour.
 
-** Candidate representation
+*** Candidate representation
 
 Keep the matched query result separate from the expanded row data.
 
@@ -2793,7 +2082,7 @@ Existing actions such as opening a result, inserting a link, or renaming a file 
 
 The row metadata is used for formatting and exporting but must not replace or mutate the original query result.
 
-** Empty collections
+*** Empty collections
 
 When a result has no entries for the selected row source, it produces no displayed rows.
 
@@ -2807,7 +2096,7 @@ Do not create an artificial empty row.
 
 A future option may add empty rows if a concrete use case requires them.
 
-** Column validation
+*** Column validation
 
 Validate singular row columns against the selected row source:
 
@@ -2821,7 +2110,7 @@ Do not allow multiple row sources in one invocation.
 
 In particular, do not create Cartesian products between tags, properties, and keywords.
 
-** Include inference
+*** Include inference
 
 Infer required CLI includes from ~:row-source~:
 
@@ -2835,7 +2124,7 @@ Combine inferred includes with includes required by configured columns and actio
 
 Use one ~orgfdb~ invocation for the complete result set.
 
-** Width and truncation
+*** Width and truncation
 
 Expanded row columns support the same width and truncation options as all other columns:
 
@@ -2851,7 +2140,7 @@ Expanded row columns support the same width and truncation options as all other 
 
 Shared column widths are calculated across all expanded rows, not separately for each original result.
 
-** Embark export
+*** Embark export
 
 ~embark-export~ must preserve the currently filtered expanded rows.
 
@@ -2871,7 +2160,7 @@ For outline export:
 
 The exact presentation may reuse the configured columns, but every expanded row must remain distinguishable.
 
-** Supported result kinds
+*** Supported result kinds
 
 Initial support applies to:
 
@@ -2883,7 +2172,7 @@ Reject row expansion for link results unless a later feature explicitly defines 
 
 Search-result support may be added only when the search CLI output provides the required structured data and includes.
 
-** README documentation
+*** README documentation
 
 Document:
 
@@ -2899,7 +2188,7 @@ Document:
 
 Avoid describing the feature as JSON expansion or exposing internal candidate structures.
 
-** Acceptance criteria
+*** Acceptance criteria
 
 - Query results can expand to one row per tag.
 - Query results can expand to one row per effective property.
@@ -2918,7 +2207,7 @@ Avoid describing the feature as JSON expansion or exposing internal candidate st
 - Width and truncation are calculated across all expanded rows.
 - Tests cover multiple tags, no tags, effective-property ordering, keyword duplicates, empty collections, include inference, column validation, views, dynamic blocks, filtering, actions, flat export, outline export, and non-ASCII values.
 
-* TODO New Feature > Linked Heading auflösen
+** TODO New Feature > Linked Heading auflösen
 
 Links in Headings auflösen und das Folgefile anzeigen, also die Headings.
 
@@ -2944,16 +2233,16 @@ Coding with AI > Brainstorming > Brainstorming Subheading 2 > Subheading
 
 Ahh, werden überhaupt alle Parents und Childs angezeigt?
 
-* TODO New Feature > org-files-db-actions-rename-directory
+** TODO New Feature > org-files-db-actions-rename-directory
 
-* TODO Improve user-facing README documentation
+** TODO Improve user-facing README documentation
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
 Goal: Rewrite the README as user-facing package documentation and document all supported columns, configuration options, commands, and result types.
 
-** Documentation style
+*** Documentation style
 
 Write for users of the Emacs package rather than contributors or implementers.
 
@@ -2980,7 +2269,7 @@ Instead, describe observable behaviour:
 
 Keep implementation and architecture details in project or contributor documentation rather than the README.
 
-** Recommended structure
+*** Recommended structure
 
 Organize the README approximately as follows:
 
@@ -3001,7 +2290,7 @@ Organize the README approximately as follows:
 
 Start with a minimal working example before presenting advanced customization.
 
-** Basic configuration
+*** Basic configuration
 
 Document:
 
@@ -3019,7 +2308,7 @@ Explain that:
 
 Do not describe the shared process implementation.
 
-** Query documentation
+*** Query documentation
 
 Introduce query forms through examples without referring to a query-model version:
 
@@ -3042,7 +2331,7 @@ Provide examples for:
 
 Refer users to the ~orgfdb~ query documentation for the complete query syntax instead of duplicating the complete query language in this README.
 
-** Column reference
+*** Column reference
 
 Document supported columns by result type.
 
@@ -3050,7 +2339,7 @@ A column should only be listed as supported when it has a stable, meaningful val
 
 Do not present arbitrary JSON property lookup as a supported public column API.
 
-*** Heading columns
+**** Heading columns
 
 Document at least:
 
@@ -3069,7 +2358,7 @@ Document at least:
 
 Explain that some columns are empty when the corresponding Org metadata is absent.
 
-*** File columns
+**** File columns
 
 Document at least:
 
@@ -3081,7 +2370,7 @@ Document at least:
 
 Synthetic root results returned by heading searches may use the file columns where appropriate.
 
-*** Link columns
+**** Link columns
 
 Document at least:
 
@@ -3107,7 +2396,7 @@ Do not document the ambiguous ~outline-path~ name as a link-result column.
 
 If it remains supported as a compatibility alias, document it only in a migration or compatibility note.
 
-*** Search-result columns
+**** Search-result columns
 
 Document at least:
 
@@ -3120,7 +2409,7 @@ Document at least:
 
 Explain that search results may represent either headings or file roots.
 
-*** Advanced columns
+**** Advanced columns
 
 Internal values such as byte positions, file IDs, and parent IDs should not appear in the main column reference.
 
@@ -3128,7 +2417,7 @@ If they remain intentionally supported as a public interface, place them in a cl
 
 Otherwise, treat them as internal implementation details.
 
-** Outline-path configuration
+*** Outline-path configuration
 
 Document the global defaults:
 
@@ -3175,7 +2464,7 @@ Explain:
 
 Explain that configured source and target columns automatically request the required CLI includes. Users do not need to specify ~--include source~ or ~--include target~ themselves.
 
-** Column widths
+*** Column widths
 
 Document:
 
@@ -3187,7 +2476,7 @@ Use user-facing explanations and examples.
 
 Do not discuss internal width-calculation functions.
 
-** Column truncation
+*** Column truncation
 
 Document truncation as a general option available to every displayed column:
 
@@ -3225,7 +2514,7 @@ Examples:
 :truncate (:marker "")
 #+end_src
 
-** Per-command configuration
+*** Per-command configuration
 
 Document command-specific configuration without requiring users to understand dynamic binding:
 
@@ -3254,7 +2543,7 @@ Explain:
 
 A short advanced example using ~let~ may be included, but it must not be presented as the primary interface.
 
-** View configuration
+*** View configuration
 
 Document query and search views with optional per-view configuration:
 
@@ -3291,7 +2580,7 @@ Document query and search views with optional per-view configuration:
 
 Explain that a missing ~:config-file~ inherits the global default and an explicit ~nil~ disables it for that view.
 
-** Actions and exports
+*** Actions and exports
 
 Describe result actions by their user-visible purpose:
 
@@ -3308,7 +2597,7 @@ Document the two linked-heading export representations:
 - ~preserve~ keeps the authored heading and link
 - ~resolve~ displays the effective linked target
 
-** Acceptance criteria
+*** Acceptance criteria
 
 - The README starts with a minimal working setup and query.
 - Internal query-model version terminology is removed.
@@ -3329,16 +2618,16 @@ Document the two linked-heading export representations:
 - Examples use the current public function signatures and option names.
 - Tests or documentation checks detect examples that reference removed or renamed options.
   
-* TODO Column Width in %
+** TODO Column Width in %
 
-* TODO Add an action for opening resolved link targets
+** TODO Add an action for opening resolved link targets
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
 Goal: Add a reusable action that opens the resolved target of a link result while keeping the existing default action for opening the link source unchanged.
 
-** Existing behaviour
+*** Existing behaviour
 
 The existing default result action:
 
@@ -3366,7 +2655,7 @@ operates on heading results and follows a link associated with that heading.
 
 It must not be reused as the implementation for opening the structured target of a link result.
 
-** New public action
+*** New public action
 
 Add a new public action:
 
@@ -3383,7 +2672,7 @@ Keep the function interactive so that it can be used as an Embark action.
 
 Do not add an autoload cookie merely because the function is interactive.
 
-** Supported targets
+*** Supported targets
 
 The action uses the structured target data returned for the link result.
 
@@ -3416,7 +2705,7 @@ Prefer stable identifiers over positional information where the existing action 
 
 Do not parse the authored raw link target when structured target data is available.
 
-** Unsupported targets
+*** Unsupported targets
 
 Signal a clear user-facing error when the target is:
 
@@ -3445,7 +2734,7 @@ Target file is not readable: ...
 
 Errors should identify the selected result or target where practical.
 
-** Result validation
+*** Result validation
 
 Add or reuse validation that confirms:
 
@@ -3465,7 +2754,7 @@ Do not add new generic core helpers unless the same functionality is shared by s
 
 Do not call another specialised module's private helper.
 
-** Target navigation
+*** Target navigation
 
 Reuse the shared core navigation infrastructure where possible.
 
@@ -3492,7 +2781,7 @@ Do not perform an additional CLI query merely to locate a target that is already
 
 If an outline-path fallback is necessary, handle duplicate headings carefully and report ambiguity rather than jumping silently to the wrong heading.
 
-** Configuration context
+*** Configuration context
 
 The original link result retains the effective configuration file that produced it.
 
@@ -3504,7 +2793,7 @@ Do not silently switch to another database.
 
 Avoid a follow-up CLI operation when the structured target already contains enough navigation data.
 
-** Include inference
+*** Include inference
 
 The action requires structured target data.
 
@@ -3532,7 +2821,7 @@ Do not add a second query execution path.
 
 Do not execute one target query per selected result.
 
-** Embark integration
+*** Embark integration
 
 Add an Embark action map for org-files-db results if the package does not already provide one.
 
@@ -3575,7 +2864,7 @@ or the existing optional-integration pattern in the package.
 
 Do not require ~embark-consult~ for this action.
 
-** Programmatic use
+*** Programmatic use
 
 The function remains usable directly from Lisp:
 
@@ -3593,7 +2882,7 @@ A propertized candidate invocation must also work:
 
 where ~candidate~ contains the original result under the ~org-files-db-result~ text property.
 
-** Documentation
+*** Documentation
 
 Update the README to document:
 
@@ -3610,7 +2899,7 @@ Include a concise example of programmatic invocation.
 
 Update the changelog.
 
-** Tests
+*** Tests
 
 Add tests covering:
 
@@ -3640,7 +2929,7 @@ Add tests covering:
 
 Where practical, verify that the action map contains separate bindings for source and target navigation.
 
-** Implementation order
+*** Implementation order
 
 1. Inspect the current link result and structured target representation.
 2. Define supported heading-target and file-target shapes.
@@ -3655,7 +2944,7 @@ Where practical, verify that the action map contains separate bindings for sourc
 11. Update README and changelog.
 12. Run byte compilation, linting, and the complete test suite.
 
-** Acceptance criteria
+*** Acceptance criteria
 
 - ~org-files-db-actions-open-result~ continues to open the matched source location.
 - ~org-files-db-actions-open-link-target~ opens the resolved target of a link result.
@@ -3673,14 +2962,14 @@ Where practical, verify that the action map contains separate bindings for sourc
 - ~embark-consult~ is not required.
 - Tests cover source-versus-target behaviour, heading targets, file targets, invalid targets, include inference, programmatic use, interactive use, and optional Embark integration.
   
-* TODO Add concise user feedback for result actions
+** TODO Add concise user feedback for result actions
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
 Goal: Prevent interactive result actions from exposing complete result objects in the echo area and provide short, useful English confirmation messages instead.
 
-** Problem
+*** Problem
 
 Some actions currently return the selected result object or another large internal value.
 
@@ -3705,7 +2994,7 @@ File renamed
 Link inserted
 #+end_example
 
-** General behaviour
+*** General behaviour
 
 Interactive actions must:
 
@@ -3719,7 +3008,7 @@ Do not use the selected result object itself as the implicit return value of an 
 
 Do not print or message complete result structures for debugging purposes.
 
-** Opening results
+*** Opening results
 
 For the default action:
 
@@ -3754,7 +3043,7 @@ Link target opened
 
 Do not include the full target object in the message.
 
-** Other actions
+*** Other actions
 
 Audit all public functions in ~org-files-db-actions.el~.
 
@@ -3786,7 +3075,7 @@ Avoid redundant messages when the called Emacs operation already provides clear 
 
 Do not emit multiple success messages for one action.
 
-** Error behaviour
+*** Error behaviour
 
 Existing validation and error messages remain unchanged unless they expose internal result objects unnecessarily.
 
@@ -3805,7 +3094,7 @@ Link target is unresolved
 Target file is not readable: ...
 #+end_example
 
-** Programmatic use
+*** Programmatic use
 
 Public actions remain callable directly from Lisp.
 
@@ -3817,7 +3106,7 @@ If an action has an intentional and documented return value, preserve it for non
 
 Where this distinction is needed, use ~called-interactively-p~ rather than maintaining separate action implementations.
 
-** Implementation guidance
+*** Implementation guidance
 
 Structure actions so that navigation or mutation does not become the final unintentional return expression.
 
@@ -3845,7 +3134,7 @@ A helper for selecting a feedback label is appropriate if several actions need i
 
 Do not add a generic Core helper unless it is shared outside the actions module.
 
-** Message style
+*** Message style
 
 Messages must be:
 
@@ -3869,7 +3158,7 @@ Successfully opened the selected org-files-db link result.
 
 Avoid including file paths unless they provide important confirmation for an operation such as renaming.
 
-** Embark integration
+*** Embark integration
 
 Actions invoked through Embark must produce the same concise feedback as direct interactive invocation.
 
@@ -3879,7 +3168,7 @@ Do not require ~embark-consult~.
 
 Ensure that invoking an action through an Embark action map does not expose the selected candidate's complete metadata.
 
-** Tests
+*** Tests
 
 Add tests covering:
 
@@ -3903,7 +3192,7 @@ Stub or spy on ~message~ where appropriate.
 
 Do not make tests depend on the exact printed representation of complete result objects.
 
-** Documentation
+*** Documentation
 
 Document briefly that interactive actions report concise completion messages.
 
@@ -3911,7 +3200,7 @@ Do not document internal result values as action return values unless they are i
 
 Update the changelog.
 
-** Acceptance criteria
+*** Acceptance criteria
 
 - Interactive actions no longer expose complete result objects.
 - Internal configuration metadata is not printed after actions.
@@ -3923,4 +3212,4 @@ Update the changelog.
 - Direct and Embark invocation behave consistently.
 - Tests cover messages, return values, error paths, and suppression of internal result output.
   
-* TODO Ausprobieren: org-files-db-actions-follow-heading-link
+** TODO Ausprobieren: org-files-db-actions-follow-heading-link
