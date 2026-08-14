@@ -25,7 +25,6 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'org-element)
 (require 'org-files-db-core)
 
 (declare-function org-files-db-query
@@ -33,6 +32,12 @@
                   (query &optional columns action &rest options))
 
 (autoload 'org-files-db-query "org-files-db-query" nil t)
+
+(defvar org-files-db-actions--track-opened-buffers nil
+  "Non-nil while result actions should track buffers they open internally.")
+
+(defvar org-files-db-actions--opened-buffers nil
+  "Buffers opened internally while tracking result-action file visits.")
 
 (defun org-files-db-actions-open-result (result)
   "Open RESULT and jump to its stored source location.
@@ -57,13 +62,28 @@ RESULT may be an original result object or a propertized completion candidate."
   (let ((file (org-files-db--result-file result)))
     (unless (and file (file-readable-p file))
       (user-error "Result file is missing or unreadable: %s" (or file "<none>")))
-    (with-current-buffer (find-file-noselect file)
-      (save-restriction
-        (widen)
-        (org-files-db--goto-result-location result)
-        (when (eq (org-files-db--kind result) 'heading)
-          (org-back-to-heading t))
-        (funcall function)))))
+    (let* ((buffers-before
+            (and org-files-db-actions--track-opened-buffers (buffer-list)))
+           (buffer (find-file-noselect file)))
+      (when (and buffers-before
+                 (not (memq buffer buffers-before)))
+        (push buffer org-files-db-actions--opened-buffers))
+      (with-current-buffer buffer
+        (save-restriction
+          (widen)
+          (org-files-db--goto-result-location result)
+          (when (eq (org-files-db--kind result) 'heading)
+            (org-back-to-heading t))
+          (funcall function))))))
+
+(defun org-files-db-actions--kill-opened-buffers (buffers)
+  "Kill unmodified BUFFERS opened internally by an action.
+Modified buffers are deliberately left alive so an interrupted action cannot
+silently discard unsaved changes."
+  (dolist (buffer (seq-uniq buffers))
+    (when (and (buffer-live-p buffer)
+               (not (buffer-modified-p buffer)))
+      (kill-buffer buffer))))
 
 (defun org-files-db-actions--custom-id-base (title)
   "Return a readable CUSTOM_ID base derived from TITLE."
@@ -258,40 +278,55 @@ CONFIG-FILE overrides `org-files-db-config-file'; an explicit nil disables it."
     (org-files-db--goto-linked-target info)))
 
 (defun org-files-db-actions--link-result-info (result)
-  "Return parsed source-link information for link RESULT."
-  (org-files-db-actions--at-result
-   result
-   (lambda ()
-     (let ((element (org-element-context)))
-       (unless (eq (org-element-type element) 'link)
-         (user-error "Stored link location is stale; rebuild the index and retry"))
-       (let ((type (org-element-property :type element)))
-         (unless (equal type "file")
-           (user-error "Only path-based file links can be rewritten"))
-         (let* ((path (org-element-property :path element))
-                (search (org-element-property :search-option element))
-                (description
-                 (when-let* ((contents (org-element-contents element)))
-                   (org-element-interpret-data contents)))
-                (format (or (org-files-db--get result 'format) "bracket")))
-           (list :buffer (current-buffer)
-                 :file buffer-file-name
-                 :begin (org-element-property :begin element)
-                 :end (- (org-element-property :end element)
-                         (or (org-element-property :post-blank element) 0))
-                 :path path
-                 :search search
-                 :description description
-                 :format format)))))))
+  "Return stored source-link information for link RESULT.
+Use the exact link source and parsed fields returned by orgfdb rather than
+parsing the source link a second time in Emacs."
+  (unless (eq (org-files-db--kind result) 'link)
+    (user-error "Expected an org-files-db link result"))
+  (let ((type (org-files-db--get result 'link_type))
+        (raw (org-files-db--get result 'raw))
+        (raw-target (org-files-db--get result 'raw_target))
+        (path (org-files-db--get result 'link_path))
+        (search (org-files-db--get result 'search_option))
+        (description (org-files-db--get result 'raw_description))
+        (format (or (org-files-db--get result 'format) "bracket"))
+        (path-absolute (org-files-db--get result 'path_absolute)))
+    (unless (equal type "file")
+      (user-error "Only path-based file links can be rewritten"))
+    (unless (and (stringp raw)
+                 (stringp raw-target)
+                 (stringp path))
+      (user-error "Stored link data is incomplete; rebuild the index and retry"))
+    (org-files-db-actions--at-result
+     result
+     (lambda ()
+       (let* ((begin (point))
+              (end (+ begin (length raw))))
+         (unless (and (<= end (point-max))
+                      (equal raw
+                             (buffer-substring-no-properties begin end)))
+           (user-error "Stored link location is stale; rebuild the index and retry"))
+         (list :buffer (current-buffer)
+               :file buffer-file-name
+               :begin begin
+               :end end
+               :path path
+               :path-absolute path-absolute
+               :search search
+               :description description
+               :format format
+               :raw-link raw-target
+               :source-text raw))))))
 
 (defun org-files-db-actions--link-target-file (info)
   "Return the absolute linked file represented by INFO."
-  (pcase-let* ((`(,path . ,_search)
-                (org-files-db--split-file-link-path
-                 (plist-get info :path)
-                 (plist-get info :search)))
-               (path (org-link-unescape path)))
-    (expand-file-name path (file-name-directory (plist-get info :file)))))
+  (if-let* ((path-absolute (plist-get info :path-absolute)))
+      (expand-file-name path-absolute)
+    (pcase-let* ((`(,path . ,_search)
+                  (org-files-db--split-file-link-path
+                   (plist-get info :path)
+                   (plist-get info :search))))
+      (expand-file-name path (file-name-directory (plist-get info :file))))))
 
 (defun org-files-db-actions--rewritten-link-path (info new-path &optional old-path)
   "Return NEW-PATH in the original path style of link INFO.
@@ -301,7 +336,6 @@ renamed source location."
                 (org-files-db--split-file-link-path
                  (plist-get info :path)
                  (plist-get info :search)))
-               (stored-path (org-link-unescape stored-path))
                (source-file (plist-get info :file))
                (source-after-rename
                 (if (and old-path
@@ -313,19 +347,51 @@ renamed source location."
       (file-relative-name (expand-file-name new-path)
                           (file-name-directory source-after-rename)))))
 
+(defun org-files-db-actions--rewritten-raw-link-target (info path)
+  "Return INFO's raw link target with its file path replaced by PATH.
+Preserve the authored file-type prefix, including its case, and the raw
+search-option suffix when they are available from orgfdb."
+  (let* ((raw-target (plist-get info :raw-link))
+         (search (plist-get info :search))
+         (explicit-file-prefix-p
+          (and (stringp raw-target)
+               (string-prefix-p "file:" (downcase raw-target))))
+         (path-start (if explicit-file-prefix-p 5 0))
+         (search-start
+          (and (stringp raw-target)
+               search
+               (string-search "::" raw-target path-start))))
+    (if (stringp raw-target)
+        (concat (substring raw-target 0 path-start)
+                path
+                (if search-start
+                    (substring raw-target search-start)
+                  (when search (concat "::" search))))
+      (concat "file:" path (when search (concat "::" search))))))
+
 (defun org-files-db-actions--format-rewritten-link (info new-path &optional old-path)
-  "Return source link INFO rewritten from OLD-PATH to NEW-PATH."
+  "Return source link INFO rewritten from OLD-PATH to NEW-PATH.
+Preserve the original link syntax and description whenever source text is
+available, replacing only the raw link target."
   (let* ((path (org-link-escape
                 (org-files-db-actions--rewritten-link-path info new-path old-path)))
-         (search (or (plist-get info :search)
-                     (cdr (org-files-db--split-file-link-path
-                           (plist-get info :path) nil))))
-         (target (concat "file:" path (when search (concat "::" search))))
-         (description (plist-get info :description)))
-    (pcase (plist-get info :format)
-      ("plain" target)
-      ("angle" (format "<%s>" target))
-      (_ (org-link-make-string target description)))))
+         (target (org-files-db-actions--rewritten-raw-link-target info path))
+         (description (plist-get info :description))
+         (source-text (plist-get info :source-text))
+         (raw-link (plist-get info :raw-link))
+         (raw-link-position
+          (and (stringp source-text)
+               (stringp raw-link)
+               (string-search raw-link source-text))))
+    (if raw-link-position
+        (concat (substring source-text 0 raw-link-position)
+                target
+                (substring source-text (+ raw-link-position
+                                          (length raw-link))))
+      (pcase (plist-get info :format)
+        ((or 'plain "plain") target)
+        ((or 'angle "angle") (format "<%s>" target))
+        (_ (org-link-make-string target description))))))
 
 (cl-defun org-files-db-actions--incoming-file-link-results
     (old-path &optional (config-file nil config-file-supplied-p))
@@ -437,55 +503,65 @@ When CONFIRM is non-nil, ask before modifying files.  CONFIG-FILE overrides
           (new (read-file-name "Rename to: "
                                (file-name-directory file))))
      (list file new)))
-  (let* ((effective-config-file
-          (org-files-db--resolve-config-file
-           config-file config-file-supplied-p "Rename action"))
-         (old-path (expand-file-name file))
-         (new-path (expand-file-name new-path))
-         (link-results
-          (org-files-db-actions--incoming-file-link-results
-           old-path effective-config-file))
-         (edits (org-files-db-actions--validate-rename
-                 old-path new-path link-results))
-         (modified (org-files-db-actions--modified-rename-buffers edits old-path)))
-    (when (and modified
-               (not (yes-or-no-p
-                     (format (concat "%d affected buffer(s) have unsaved changes; "
-                                     "save and continue? ")
-                             (length modified)))))
-      (user-error "Rename cancelled"))
-    (when (and (or confirm (called-interactively-p 'interactive))
-               (not (yes-or-no-p
-                     (format "Rename %s and update %d link(s) in %d file(s)? "
-                             (file-name-nondirectory old-path)
-                             (length edits)
-                             (length (seq-uniq
-                                      (mapcar (lambda (edit)
-                                                (plist-get edit :file))
-                                              edits)))))))
-      (user-error "Rename cancelled"))
-    (condition-case err
-        (progn
-          (dolist (buffer modified)
-            (with-current-buffer buffer
-              (save-buffer)))
-          (make-directory (file-name-directory new-path) t)
-          (org-files-db-actions--apply-link-edits edits)
-          (org-files-db-actions--rename-visited-file old-path new-path)
-          (org-files-db-actions--notify-source-mutated
-           effective-config-file
-           (append (list old-path new-path)
-                   (mapcar (lambda (edit) (plist-get edit :file)) edits)))
-          (message "Renamed %s and updated %d link(s)"
-                   old-path (length edits))
-          new-path)
-      (error
-       (signal 'org-files-db-error
-               (list
-                (format
-                 (concat "File rename stopped after a partial failure: %s. "
-                         "Review %s and affected source files with version control")
-                 (error-message-string err) old-path)))))))
+  (let ((org-files-db-actions--track-opened-buffers t)
+        (org-files-db-actions--opened-buffers nil))
+    (unwind-protect
+        (let* ((effective-config-file
+                (org-files-db--resolve-config-file
+                 config-file config-file-supplied-p "Rename action"))
+               (old-path (expand-file-name file))
+               (new-path (expand-file-name new-path))
+               (link-results
+                (org-files-db-actions--incoming-file-link-results
+                 old-path effective-config-file))
+               (edits (org-files-db-actions--validate-rename
+                       old-path new-path link-results))
+               (modified
+                (org-files-db-actions--modified-rename-buffers edits old-path)))
+          (when (and modified
+                     (not (yes-or-no-p
+                           (format
+                            (concat "%d affected buffer(s) have unsaved changes; "
+                                    "save and continue? ")
+                            (length modified)))))
+            (user-error "Rename cancelled"))
+          (when (and (or confirm (called-interactively-p 'interactive))
+                     (not (yes-or-no-p
+                           (format
+                            "Rename %s and update %d link(s) in %d file(s)? "
+                            (file-name-nondirectory old-path)
+                            (length edits)
+                            (length
+                             (seq-uniq
+                              (mapcar (lambda (edit)
+                                        (plist-get edit :file))
+                                      edits)))))))
+            (user-error "Rename cancelled"))
+          (condition-case err
+              (progn
+                (dolist (buffer modified)
+                  (with-current-buffer buffer
+                    (save-buffer)))
+                (make-directory (file-name-directory new-path) t)
+                (org-files-db-actions--apply-link-edits edits)
+                (org-files-db-actions--rename-visited-file old-path new-path)
+                (org-files-db-actions--notify-source-mutated
+                 effective-config-file
+                 (append (list old-path new-path)
+                         (mapcar (lambda (edit) (plist-get edit :file)) edits)))
+                (message "Renamed %s and updated %d link(s)"
+                         old-path (length edits))
+                new-path)
+            (error
+             (signal 'org-files-db-error
+                     (list
+                      (format
+                       (concat
+                        "File rename stopped after a partial failure: %s. "
+                        "Review %s and affected source files with version control")
+                       (error-message-string err) old-path))))))
+      (org-files-db-actions--kill-opened-buffers
+       org-files-db-actions--opened-buffers))))
 
 (defun org-files-db-actions-rename-file-result (result)
   "Prompt to rename file RESULT and update path-based links."

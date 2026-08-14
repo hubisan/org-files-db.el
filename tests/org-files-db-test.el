@@ -46,6 +46,23 @@
                  (line . ,(or line 1))
                  (byte_start . ,(or byte 0))))))
 
+(defun org-files-db-test--file-link-result
+    (file raw raw-target path &optional search description)
+  "Return an orgfdb-style file-link result for FILE and RAW source."
+  `((kind . "link")
+    (format . "bracket")
+    (link_type . "file")
+    (raw . ,raw)
+    (raw_target . ,raw-target)
+    (raw_description . ,description)
+    (link_path . ,path)
+    (search_option . ,search)
+    (path_absolute . ,(expand-file-name path (file-name-directory file)))
+    (location . ((file_path . ,file)
+                 (line . 1)
+                 (byte_start . 0)
+                 (byte_end . ,(string-bytes raw))))))
+
 (defun org-files-db-test--candidate-visible (candidate)
   "Return the visible formatted portion of CANDIDATE."
   (let ((limit
@@ -2098,6 +2115,101 @@
                        :format "bracket")))
       (expect (org-files-db-actions--format-rewritten-link info new)
               :to-match "new.org::#target")))
+
+  (it "preserves bracket-link descriptions exactly while rewriting the target"
+    (let* ((source
+            (org-files-db-test--write-file
+             "a/source.org"
+             "[[FILE:../old.org::#target][Target [BJJML] *with markup*]]\n"))
+           (new (expand-file-name "b/new.org" org-files-db-test--directory))
+           (result
+            (org-files-db-test--file-link-result
+             source
+             "[[FILE:../old.org::#target][Target [BJJML] *with markup*]]"
+             "FILE:../old.org::#target"
+             "../old.org"
+             "#target"
+             "Target [BJJML] *with markup*"))
+           (info (org-files-db-actions--link-result-info result)))
+      (expect (plist-get info :source-text)
+              :to-equal
+              "[[FILE:../old.org::#target][Target [BJJML] *with markup*]]")
+      (expect (org-files-db-actions--format-rewritten-link info new)
+              :to-equal
+              "[[FILE:../b/new.org::#target][Target [BJJML] *with markup*]]")))
+
+  (it "preserves an implicit file target while rewriting its path"
+    (let* ((source
+            (org-files-db-test--write-file
+             "a/implicit-source.org"
+             "[[../old.org][Target]]\n"))
+           (new (expand-file-name "b/new.org" org-files-db-test--directory))
+           (result
+            (org-files-db-test--file-link-result
+             source
+             "[[../old.org][Target]]"
+             "../old.org"
+             "../old.org"
+             nil
+             "Target"))
+           (info (org-files-db-actions--link-result-info result)))
+      (expect (org-files-db-actions--format-rewritten-link info new)
+              :to-equal
+              "[[../b/new.org][Target]]")))
+
+  (it "kills link source buffers opened only for a rename"
+    (let* ((old (org-files-db-test--write-file "old.org" "#+TITLE: Old\n"))
+           (new (expand-file-name "new.org" org-files-db-test--directory))
+           (source
+            (org-files-db-test--write-file
+             "source.org"
+             "[[file:old.org][Target *with markup*]]\n"))
+           (result
+            (org-files-db-test--file-link-result
+             source
+             "[[file:old.org][Target *with markup*]]"
+             "file:old.org"
+             "old.org"
+             nil
+             "Target *with markup*")))
+      (cl-letf (((symbol-function
+                  'org-files-db-actions--incoming-file-link-results)
+                 (lambda (&rest _) (list result)))
+                ((symbol-function 'org-files-db-actions--notify-source-mutated)
+                 (lambda (&rest _) nil)))
+        (org-files-db-actions-rename-file old new))
+      (expect (get-file-buffer source) :to-be nil)
+      (expect (file-exists-p new) :to-equal t)
+      (with-temp-buffer
+        (insert-file-contents source)
+        (expect (buffer-string)
+                :to-equal
+                "[[file:new.org][Target *with markup*]]\n"))))
+
+  (it "keeps link source buffers that were already open before a rename"
+    (let* ((old (org-files-db-test--write-file "old-open.org" "#+TITLE: Old\n"))
+           (new (expand-file-name "new-open.org" org-files-db-test--directory))
+           (source
+            (org-files-db-test--write-file
+             "source-open.org"
+             "[[file:old-open.org][Target]]\n"))
+           (result
+            (org-files-db-test--file-link-result
+             source
+             "[[file:old-open.org][Target]]"
+             "file:old-open.org"
+             "old-open.org"
+             nil
+             "Target"))
+           (buffer (find-file-noselect source)))
+      (cl-letf (((symbol-function
+                  'org-files-db-actions--incoming-file-link-results)
+                 (lambda (&rest _) (list result)))
+                ((symbol-function 'org-files-db-actions--notify-source-mutated)
+                 (lambda (&rest _) nil)))
+        (org-files-db-actions-rename-file old new))
+      (expect (buffer-live-p buffer) :to-equal t)
+      (expect (get-file-buffer source) :to-equal buffer)))
 
   (it "rebases relative self-links from the renamed source directory"
     (let* ((old (expand-file-name "a/old.org" org-files-db-test--directory))

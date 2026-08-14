@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =FIXED= Made file rename link maintenance preserve the exact authored link description and syntax from ~orgfdb~ result data, and close clean source buffers opened only for the rename action.
 - =ADDED= Added configurable stable sorting for query, search, predefined-view, and dynamic-block results.
   - Sort by one or more public columns with ascending or descending direction, configurable missing-value placement, and case-sensitive or case-insensitive text comparison.
   - Text, numeric values, Org priorities, planning timestamps, outline paths, and complete tag collections use type-aware cached sort keys; equal rows retain their original ~orgfdb~ order.

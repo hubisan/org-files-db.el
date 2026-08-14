@@ -537,7 +537,7 @@ After renaming:
 
 When several links occur in one source file, process them from the highest source position to the lowest so earlier replacements do not invalidate later positions.
 
-Use Org parsing and stored link locations. Do not perform unrestricted text replacement.
+Use the exact link data and stored source locations returned by ~orgfdb~. Validate the stored raw link against the current source before editing; do not reparse it with a second link grammar or perform unrestricted text replacement.
 
 ** Rename operation
 
@@ -581,6 +581,7 @@ Stale index locations must produce an actionable error asking the user to reinde
 - ~id:~ links and unrelated textual matches remain unchanged.
 - Multiple links in one file are updated safely.
 - Modified visiting buffers are handled explicitly.
+- Source buffers opened internally only for rename validation or rewriting are killed afterwards; buffers that were already visiting a source file remain open.
 - The target and all affected source files are saved.
 - Invalid result kinds, stale locations, conflicts, and partial failures are reported clearly.
 - Tests cover relative and absolute links, heading and custom-ID search options, multiple source directories, multiple links per file, unchanged ID links, stale index data, destination conflicts, and unsaved buffers.
@@ -2942,6 +2943,8 @@ Coding with AI > Brainstorming > Brainstorming Subheading 2
 Coding with AI > Brainstorming > Brainstorming Subheading 2 > Subheading
 
 Ahh, werden überhaupt alle Parents und Childs angezeigt?
+
+* TODO New Feature > org-files-db-actions-rename-directory
 
 * TODO Improve user-facing README documentation
 :PROPERTIES:
