@@ -2620,6 +2620,8 @@ Document the two linked-heading export representations:
   
 ** TODO Column Width in %
 
+Dies muss auf der Emacs-Seite erfolgen.
+
 ** TODO Add an action for opening resolved link targets
 :PROPERTIES:
 :VISIBILITY: folded
