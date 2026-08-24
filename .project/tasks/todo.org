@@ -44,10 +44,12 @@ The current package is reference material only. The rebuild does not preserve th
 
 * Rebuild plan
 
-** TODO Step 1 - Create the clean package foundation
+** DONE Step 1 - Create the clean package foundation
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
+
+[[./2026-08-24--create-clean-package-foundation.org][Task file]]
 
 Goal: Create a small package structure for the new client and define the new public configuration.
 
@@ -689,8 +691,8 @@ Remove obsolete code, tests, and dependencies.
 
 Delete or replace as appropriate:
 
-- ~lisp/org-files-db-cache.el~
-- ~lisp/org-files-db-search.el~
+- legacy reference files under ~.project/reference/~
+- obsolete benchmark files under ~benchmarks/~
 - Child-Emacs code
 - ~async.el~ integration
 - old Emacs presentation formatting

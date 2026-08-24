@@ -1,4 +1,4 @@
-;;; org-files-db.el --- Emacs interface for orgfdb -*- lexical-binding: t; -*-
+;;; org-files-db.el --- Emacs interface for org-files-db -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Daniel Hubmann
 
@@ -21,22 +21,27 @@
 ;; Maintainer: Daniel Hubmann <hubisan@gmail.com>
 ;; URL: https://github.com/hubisan/org-files-db.el
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.4"))
+;; Package-Requires: ((emacs "29.4") (async "1.9.9"))
 ;; Keywords: outlines, tools, convenience
 
 ;;; Commentary:
 
-;; org-files-db.el is an Emacs client for the orgfdb command-line tool.
-;; orgfdb owns database access and result presentation.  Emacs owns user
-;; configuration, completion, navigation, and user actions.
+;; org-files-db.el is a thin Emacs interface to the orgfdb command-line tool.
+;; It provides query completion, FTS5 search, named views, result
+;; actions, generation-aware view caches, Org dynamic blocks, and optional
+;; Embark and Consult integration.
+;; Indexing and SQLite access remain in orgfdb.
 
 ;;; Code:
 
-(require 'org-files-db-process)
-(require 'org-files-db-presentation)
-(require 'org-files-db-actions)
+(require 'org-files-db-core)
 (require 'org-files-db-query)
+(require 'org-files-db-search)
+(require 'org-files-db-export)
+(require 'org-files-db-actions)
+(require 'org-files-db-cache)
 (require 'org-files-db-views)
+(require 'org-files-db-dblock)
 
 (provide 'org-files-db)
 

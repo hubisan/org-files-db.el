@@ -6,7 +6,7 @@
 
 (package "org-files-db"
          "0.1.0"
-         "Emacs interface for org-files-db")
+         "Emacs interface for orgfdb")
 
 (website-url "https://github.com/hubisan/org-files-db.el")
 (keywords "outlines" "tools" "convenience")
@@ -21,11 +21,9 @@
 (source "melpa")
 
 (depends-on "emacs" "29.4")
-(depends-on "async" "1.9.9")
 
 (development
  (depends-on "buttercup")
- (depends-on "consult")
  (depends-on "embark")
  (depends-on "package-lint")
  (depends-on "relint"))
