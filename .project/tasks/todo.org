@@ -2,1484 +2,231 @@
 #+TODO: TODO(t) NEXT(n) PLAN(p) BUILD(b) WAIT(w) REVIEW(r) CONTINUE(C) | DONE(d) CANCEL(c)
 #+STARTUP: showall
 
-This file is the active task index.
+This file is the active task index for the ~org-files-db.el~ rebuild.
 
 - For workflow rules, see [[../agents/AGENTS.md]].
 - For repository-specific rules, see [[../agents/repository.org]].
 - Project context and architecture decisions: [[./project-context.org][project-context.org]]
 - For later phases and backlog, see [[./roadmap.org]].
-  
-* DONE Fix local CI failures
 
-[[./archive/2026-08-02--fix-local-ci-failures.org][Task details]]
+* Rebuild decisions
 
-Goal: Correct project-owned failures reported by ~make ci~ and record environment-only blockers.
+The current package is reference material only. The rebuild does not preserve the old internal architecture or compatibility aliases.
 
-* DONE Define package configuration and CLI foundation
+- Use the public ~orgfdb~ CLI as the only Rust seam.
+- Use ~presentation-json~ version 2 as the internal Emacs presentation model.
+- Keep ~orgfdb query --format json~ unchanged on the Rust side, but do not use it as the normal Emacs presentation model.
+- Let Rust own columns, sorting, row expansion, width calculation, truncation, padding, and presentation caching.
+- Keep Emacs responsible for configuration, process control, JSON decoding, faces, completion, navigation, and user actions.
+- Use synchronous query and view commands. A user starts a query because they want the result immediately.
+- Do not add asynchronous query completion that can appear after the user starts other work.
+- The watcher is the only long-running child process that Emacs can start.
+- Do not use Child Emacs, ~async.el~, presentation dumps, or an Emacs presentation cache.
+- Keep Search outside this rebuild. Do not port ~org-files-db-search.el~.
+- Use standard Emacs completion through ~completing-read~.
+- Keep Embark optional.
+- Do not require ~embark-consult~.
+- A view is a named query with presentation configuration and optional behaviour.
+- A view does not imply caching.
+- ~:cache t~ enables the Rust materialized-view path only while ~org-files-db-cache-mode~ is active.
+- Without active caching, every view can run as a one-shot ~presentation-json~ query.
+- View names are unique in Emacs.
+- Rust view names use a private per-Emacs-session namespace.
+- Use named orgfdb configurations and one explicit default configuration.
+- A view can select one configuration with ~:config~.
+- A view without ~:config~ uses the default configuration.
+- Default actions are configured separately for ~headings~, ~files~, and ~links~.
+- A view can override its default action with ~:action~.
+- Actions receive the original Rust result, not a presentation row.
+- Keep ~row_context~ as internal candidate metadata for later integrations.
+- Query and view commands return the selected original result to Lisp callers.
+- Interactive actions give short user feedback and do not expose raw result structures.
+
+* Rebuild plan
+
+** TODO Step 1 - Create the clean package foundation
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Provide the shared configuration and process layer used by query, search, views, actions, and dynamic blocks.
+Goal: Create a small package structure for the new client and define the new public configuration.
 
-** User options
-
-Define a customization group:
+Define the main user options:
 
 #+begin_src emacs-lisp
-(defgroup org-files-db nil
-  "Emacs interface for org-files-db."
-  :group 'org)
+(setq org-files-db-executable "orgfdb")
+
+(setq org-files-db-configs
+      '(("main" . "~/memento/orgfdb-config.toml")
+        ("work" . "~/work/orgfdb-config.toml")))
+
+(setq org-files-db-default-config "main")
 #+end_src
 
-Provide the executable:
+Define default columns and sorting for:
 
-#+begin_src emacs-lisp
-(defcustom org-files-db-executable "orgfdb"
-  "Path or command name of the orgfdb executable."
-  :type 'string)
-#+end_src
+- ~headings~
+- ~files~
+- ~links~
 
-A command name is resolved through ~executable-find~. An absolute or relative path must identify an executable file.
+Define default actions for:
 
-Provide an optional configuration file:
+- ~headings~
+- ~files~
+- ~links~
 
-#+begin_src emacs-lisp
-(defcustom org-files-db-config-file nil
-  "Configuration file passed to orgfdb.
+Keep the module structure small. A useful initial split is:
 
-When nil, do not pass the --config option."
-  :type '(choice
-          (const :tag "No explicit configuration" nil)
-          file))
-#+end_src
+#+begin_example
+lisp/org-files-db.el
+lisp/org-files-db-process.el
+lisp/org-files-db-presentation.el
+lisp/org-files-db-query.el
+lisp/org-files-db-views.el
+lisp/org-files-db-actions.el
+#+end_example
 
-Provide default columns for each result type:
+Add optional modules only when a later step needs them.
 
-#+begin_src emacs-lisp
-(defcustom org-files-db-heading-columns ...)
-(defcustom org-files-db-file-columns ...)
-(defcustom org-files-db-link-columns ...)
-(defcustom org-files-db-search-columns ...)
-#+end_src
+Validate configuration names before use.
 
-Explicit columns supplied to query, search, or view functions override these defaults.
+- Configuration names must be unique.
+- The default configuration must exist.
+- A view configuration name must exist.
+- Resolved configuration files must be readable.
+- Do not fall back silently to another configuration.
 
-** Shared CLI execution
+Do not add aliases for the old ~org-files-db-config-file~ or ~:config-file~ interfaces.
 
-Implement one internal process layer used by all commands.
+Acceptance criteria:
 
-It must:
+- The rebuilt package loads with the new configuration model.
+- Named configurations and one default configuration work.
+- Default columns, sorting, and actions exist for all three query targets.
+- Search configuration is absent.
+- No old compatibility layer is present.
+- No ~async.el~ dependency is required by the new foundation.
 
-- invoke ~orgfdb~ directly without a shell
-- add ~--config~ when ~org-files-db-config-file~ is non-nil
+** TODO Step 2 - Implement the shared orgfdb process and configuration layer
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Provide one small process module for all short-lived CLI calls and configuration resolution.
+
+The process module must:
+
+- resolve ~org-files-db-executable~
+- resolve a configuration name to one file path
+- invoke ~orgfdb~ without a shell
+- pass process arguments separately
 - capture stdout and stderr separately
-- decode UTF-8 output
-- parse successful JSON responses
-- distinguish exit codes ~1~ and ~2~
-- include useful stderr output in errors
-- support synchronous calls for query and asynchronous calls for live search
-- allow obsolete asynchronous processes to be cancelled safely
+- decode UTF-8
+- report useful CLI errors
+- parse JSON when the caller requests JSON
 
-Conceptual interface:
+Use synchronous execution for:
 
-#+begin_src emacs-lisp
-(org-files-db--call COMMAND ARGUMENTS)
-(org-files-db--start-process COMMAND ARGUMENTS CALLBACK)
-#+end_src
+- one-shot presentation queries
+- view registration
+- view reads
+- view removal
+- other short view lifecycle commands
 
-Public features must not invoke ~process-file~ or ~make-process~ independently.
+Keep watcher process management separate because the watcher is long-lived.
 
-** Validation
+Provide or rebuild ~org-files-db-check-setup~ for the new configuration model.
 
-Before execution:
+Interactive configuration selection must use these rules:
 
-- verify that the executable exists and is executable
-- verify that an explicit configuration file exists and is readable
-- reject malformed local option values clearly
-
-Provide an interactive diagnostic command:
-
-#+begin_src emacs-lisp
-(org-files-db-check-setup)
-#+end_src
-
-It reports:
-
-- resolved executable path
-- configured configuration file
-- executable version
-- whether a basic read-only CLI call succeeds
-
-The diagnostic command must not rebuild or modify the database.
-
-** Acceptance criteria
-
-- The executable and optional configuration file are customizable.
-- Command names and explicit executable paths are supported.
-- Default columns are configurable per result type.
-- All features share one CLI process layer.
-- No command invokes a shell.
-- JSON, stderr, and exit codes are handled consistently.
-- Synchronous and asynchronous execution are supported.
-- ~org-files-db-check-setup~ detects common configuration problems.
-- Tests cover executable resolution, configuration arguments, JSON parsing, stderr, exit codes, missing files, and process cancellation.
-  
-* DONE Define query command
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Execute a Query Model v0 expression, present matched objects through standard Emacs completion, and export the currently filtered results to an Org buffer through Embark.
-
-** Public interface
-
-Provide one generic command:
-
-#+begin_src emacs-lisp
-(org-files-db-query QUERY COLUMNS &optional ACTION)
-#+end_src
-
-Example:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings (not (done)))
- '((todo-keyword :width (fixed 8))
-   (priority :width auto)
-   (outline-path :width (max 80))
-   (file-name :width (max 30))))
-#+end_src
-
-~QUERY~ is a Query Model v0 expression represented as Emacs Lisp data:
-
-#+begin_src emacs-lisp
-'(headings (not (done)))
-'(links (status "broken"))
-'(files (tags "project"))
-#+end_src
-
-The query is serialized to the textual syntax expected by ~orgfdb query~ without invoking a shell.
-
-Interactive use reads and parses one Query Model v0 expression from the minibuffer.
-
-** Columns
-
-~COLUMNS~ defines the displayed columns and their widths.
-
-Supported width forms:
-
-- ~:width auto~ calculates the width from all values in the result set.
-  Auto is the default, if not set auto will be used.
-- ~:width (max N)~ calculates the width automatically but limits it to ~N~ characters.
-- ~:width (fixed N)~ always uses exactly ~N~ characters.
-
-Example:
-
-#+begin_src emacs-lisp
-'((todo-keyword :width (fixed 8))
-  (priority :width (fixed 3))
-  (outline-path :width (max 80))
-  (file-name :width auto))
-#+end_src
-
-For each result set:
-
-- Use one shared width per column for all candidates.
-- Truncate values exceeding the final width.
-- Display one matched heading, link, or file per line.
-- Keep the original result object separate from its displayed text.
-
-The outline-path column uses the form:
-
-#+begin_example
-Heading 1 » Heading 2 » Heading 3 » Matched heading
-#+end_example
-
-Suitable Org faces may be reused, but face attributes affecting typography or dimensions must be ignored, including height, weight, and slant.
-
-** Completion
-
-- Use standard Emacs completion.
-- Work with Vertico, Icomplete, Fido, and the default completion interface.
-- Do not require Consult.
-- Make all displayed column values searchable.
-- Assign a dedicated completion category to query results.
-- Selecting one candidate calls the configured result action.
-
-** Result action
-
-After a candidate is selected, call an action function with the original result object:
-
-#+begin_src emacs-lisp
-(funcall ACTION RESULT)
-#+end_src
-
-Provide a configurable default:
-
-#+begin_src emacs-lisp
-(defcustom org-files-db-query-action
-  #'org-files-db-open-result
-  "Function called with the selected query result."
-  :type 'function)
-#+end_src
-
-The optional ~ACTION~ argument overrides ~org-files-db-query-action~ for one invocation:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings (todo "NEXT"))
- '((outline-path :width (max 80)))
- #'my-org-files-db-action)
-#+end_src
-
-The default action opens the result file and jumps to its stored location.
-
-** Embark export
-
-Provide an Embark exporter for the query-result completion category.
-
-~embark-export~ exports all candidates matching the current minibuffer filter to an Org buffer. Unmatched query results are not included.
-
-The exporter supports headings, files, and links.
-
-Each exported matched object is rendered as an Org link that opens its original file and location.
-
-Supported layouts:
-
-- ~flat~ displays one matched object per top-level entry.
-- ~outline~ reproduces the outline hierarchy around matched objects.
-- ~breadcrumbs~ may be added later as an optional compact layout.
-
-Flat example:
-
-#+begin_src org
-,* [[org-files-db:heading:123][Matched Heading]]
-,* [[org-files-db:heading:456][Another Heading]]
-#+end_src
-
-Outline example:
-
-#+begin_src org
-,* Heading 1
-,** Heading 2
-,*** [[org-files-db:heading:123][Matched Heading]]
-#+end_src
-
-A future breadcrumbs layout may use:
-
-#+begin_src org
-,* Heading 1 » Heading 2
-,** [[org-files-db:heading:123][Matched Heading]]
-#+end_src
-
-The query result objects must retain the path and location information required for exporting and opening results.
-
-Embark is used only for exporting the currently filtered candidate set. Consult is not required.
-
-** Acceptance criteria
-
-- Queries are passed as Query Model v0 Lisp forms.
-- Headings, links, and files are supported.
-- Columns are supplied to ~org-files-db-query~.
-- Column widths support ~auto~, ~(max N)~, and ~(fixed N)~.
-- Results use standard Emacs completion without requiring Consult.
-- One matched object is displayed per candidate.
-- Displayed column values are searchable.
-- The selected candidate retains its original result data.
-- A configurable default action is called after selecting one result.
-- A per-call action can override the default action.
-- Query results use a dedicated completion category.
-- ~embark-export~ exports all currently filtered candidates to an Org buffer.
-- Exported objects link to their original locations.
-- Flat and outline Org-buffer layouts are supported.
-  
-* DONE Define query actions for inserting links
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Select files or headings through ~org-files-db-query~ and insert Org links at the original buffer position.
-
-** Commands
-
-Provide separate convenience commands for files and headings:
-
-#+begin_src emacs-lisp
-(org-files-db-query-insert-file-link QUERY COLUMNS &optional STYLE)
-(org-files-db-query-insert-heading-link QUERY COLUMNS &optional STYLE)
-#+end_src
-
-These commands are thin wrappers around ~org-files-db-query~. They only:
-
-- choose the appropriate link-insertion action
-- bind the requested link style
-- preserve the original insertion position
-- delegate query execution, completion, and result selection to ~org-files-db-query~
-
-Conceptually:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- QUERY
- COLUMNS
- (lambda (result)
-   (org-files-db-insert-file-link result style)))
-#+end_src
-
-and:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- QUERY
- COLUMNS
- (lambda (result)
-   (org-files-db-insert-heading-link result style)))
-#+end_src
-
-Provide the reusable result actions:
-
-#+begin_src emacs-lisp
-(org-files-db-insert-file-link RESULT &optional STYLE)
-(org-files-db-insert-heading-link RESULT &optional STYLE)
-#+end_src
-
-The action functions operate on one already selected result. They do not execute queries or invoke completion themselves.
-
-The insertion position must be preserved while completion and possible target-file modifications take place.
-
-** File links
-
-Supported styles:
-
-- ~file~ inserts a normal link to the file.
-- ~id~ inserts a global link to the file-level ~ID~.
-- ~custom-id~ inserts a file link to the file-level ~CUSTOM_ID~.
-
-Examples:
-
-#+begin_src org
-,[[file:/path/to/notes.org][Notes]]
-,[[id:550e8400-e29b-41d4-a716-446655440000][Notes]]
-,[[file:/path/to/notes.org::#notes][Notes]]
-#+end_src
-
-Provide a default:
-
-#+begin_src emacs-lisp
-(defcustom org-files-db-file-link-style 'file
-  "Default link style for file query results."
-  :type '(choice
-          (const file)
-          (const id)
-          (const custom-id)))
-#+end_src
-
-** Heading links
-
-Supported styles:
-
-- ~id~ inserts a global link to the heading's ~ID~.
-- ~custom-id~ inserts a file link to the heading's ~CUSTOM_ID~.
-- ~heading~ inserts a file link using the heading title.
-
-Examples:
-
-#+begin_src org
-,[[id:550e8400-e29b-41d4-a716-446655440000][Matched heading]]
-,[[file:/path/to/notes.org::#matched-heading][Matched heading]]
-,[[file:/path/to/notes.org::*Matched heading][Matched heading]]
-#+end_src
-
-The ~heading~ style does not modify the target file, but is brittle when headings are renamed or duplicated.
-
-Provide a default:
-
-#+begin_src emacs-lisp
-(defcustom org-files-db-heading-link-style 'id
-  "Default link style for heading query results."
-  :type '(choice
-          (const id)
-          (const custom-id)
-          (const heading)))
-#+end_src
-
-** Creating stable identifiers
-
-When the selected style requires an identifier that does not exist:
-
-- Open the exact target using its stored file path and location.
-- Create an ~ID~ or ~CUSTOM_ID~ at the selected file or heading.
-- Preserve existing identifiers.
-- Ensure a generated ~CUSTOM_ID~ is unique within its file.
-- Save the modified target buffer before inserting the link.
-- Report clearly when the target cannot be modified or saved.
-
-Creating identifiers must use Org APIs rather than editing property drawers as plain text.
-
-The index may temporarily contain the previous state until the watcher or a later rebuild processes the modified file.
-
-** Link descriptions
-
-Use the file title or heading title as the default link description.
-
-Keep description generation separate from link-target generation so it can be made configurable later.
-
-** Result validation
-
-- The file-link command accepts only file results.
-- The heading-link command accepts only real heading results.
-- Synthetic root results may be treated as files.
-- Link results are rejected with a clear error.
-- Missing or stale target locations produce an actionable error.
-
-** Acceptance criteria
-
-- Files and headings can be selected through the normal query completion interface.
-- File links support ~file~, ~id~, and ~custom-id~ styles.
-- Heading links support ~id~, ~custom-id~, and ~heading~ styles.
-- Missing identifiers are created and saved when required.
-- Existing identifiers are never replaced.
-- The selected style can override the configured default per call.
-- Links are inserted at the original buffer position.
-- Duplicate heading titles do not affect ~id~ or ~custom-id~ links.
-- Tests cover every link style, identifier creation, existing identifiers, insertion position, invalid result kinds, save failures, and non-ASCII targets.
-  
-* DONE Define file rename with link updates
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Rename an indexed Org file and update all indexed file links that depend on its path.
-
-** Public interface
-
-Provide a standalone command:
-
-#+begin_src emacs-lisp
-(org-files-db-rename-file FILE NEW-PATH)
-#+end_src
-
-Interactive use:
-
-- Uses the current indexed Org file by default.
-- Prompts for the new file name or path.
-- Shows how many links and source files will be changed.
-- Requires confirmation before modifying files.
-
-The command always updates affected links. For a normal rename without link maintenance, users can use standard Emacs file commands.
-
-** Query action
-
-Provide an action for file query results:
-
-#+begin_src emacs-lisp
-#'org-files-db-rename-file-result
-#+end_src
-
-Example:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(files (tags "project"))
- '((file-title :width (max 50))
-   (file-path :width (max 80)))
- #'org-files-db-rename-file-result)
-#+end_src
-
-The action accepts file results and synthetic root results. Heading and link results are rejected clearly.
-
-The query action delegates to ~org-files-db-rename-file~ and must not implement a separate rename path.
-
-** Link discovery
-
-Before changing files, retrieve all indexed links whose resolved ~target_file_id~ matches the file being renamed.
-
-Update only links whose target depends on the file path.
-
-Do not modify:
-
-- ~id:~ links
-- links resolved through a heading ~ID~
-- external links
-- unresolved or ambiguous links without a confirmed target
-- links whose text merely contains the old file name
-
-The implementation must use resolved link identity rather than textual search and replacement.
-
-** Link rewriting
-
-Recalculate every file-link path relative to its source file.
-
-Preserve:
-
-- absolute versus relative link style where possible
-- link descriptions
-- heading search options such as ~::*Heading~
-- custom-ID search options such as ~::#custom-id~
-- bracket, angle, and plain link syntax where safely supported
-
-Examples:
-
-#+begin_src org
-,[[file:../old-name.org][Description]]
-,[[file:../old-name.org::*Heading][Description]]
-,[[file:../old-name.org::#custom-id][Description]]
-#+end_src
-
-After renaming:
-
-#+begin_src org
-,[[file:../new-name.org][Description]]
-,[[file:../new-name.org::*Heading][Description]]
-,[[file:../new-name.org::#custom-id][Description]]
-#+end_src
-
-When several links occur in one source file, process them from the highest source position to the lowest so earlier replacements do not invalidate later positions.
-
-Use the exact link data and stored source locations returned by ~orgfdb~. Validate the stored raw link against the current source before editing; do not reparse it with a second link grammar or perform unrestricted text replacement.
-
-** Rename operation
-
-Before modifying anything:
-
-- Verify that the source file exists.
-- Verify that the destination does not already exist.
-- Verify that all affected source files are writable.
-- Detect modified visiting buffers and ask before overwriting or saving them.
-- Verify that every stored link location still identifies the expected link.
-
-After validation:
-
-- Update affected links.
-- Rename the target file.
-- Update visiting buffers to the new file name.
-- Save all modified buffers.
-- Trigger or wait for normal watcher reindexing.
-
-The destination should remain within the configured indexing scope. Updating the Rust configuration for explicitly configured files is outside the initial scope.
-
-** Failure handling
-
-Validation failures must abort before any file is modified.
-
-If an unexpected failure occurs after modifications begin:
-
-- Stop further changes.
-- Report the renamed file and every modified source file.
-- Do not claim that the operation was globally atomic.
-- Preserve enough information for the user to review or revert the changes with version control.
-
-Stale index locations must produce an actionable error asking the user to reindex and retry.
-
-** Acceptance criteria
-
-- An indexed file can be renamed directly or through a file-query action.
-- All resolved path-based links to the file are updated.
-- Relative paths are recalculated from each source file.
-- Link descriptions and search options are preserved.
-- ~id:~ links and unrelated textual matches remain unchanged.
-- Multiple links in one file are updated safely.
-- Modified visiting buffers are handled explicitly.
-- Source buffers opened internally only for rename validation or rewriting are killed afterwards; buffers that were already visiting a source file remain open.
-- The target and all affected source files are saved.
-- Invalid result kinds, stale locations, conflicts, and partial failures are reported clearly.
-- Tests cover relative and absolute links, heading and custom-ID search options, multiple source directories, multiple links per file, unchanged ID links, stale index data, destination conflicts, and unsaved buffers.
-  
-* DONE Define predefined views
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Allow users to define reusable named query and search views that can be selected interactively or called directly from Emacs Lisp.
-
-** Configuration
-
-Provide one user option:
-
-#+begin_src emacs-lisp
-(defcustom org-files-db-views nil
-  "Named predefined query and search views."
-  :type ...)
-#+end_src
-
-Each view has:
-
-- a unique name
-- a ~:command~ value of ~query~ or ~search~
-- a query expression or search expression
-- a column definition
-- an optional result action
-- optional command-specific settings
-
-Example:
-
-#+begin_src emacs-lisp
-(setq org-files-db-views
-      '(("open-tasks"
-         :command query
-         :query (headings (not (done)))
-         :columns
-         ((todo-keyword :width (fixed 8))
-          (priority :width auto)
-          (outline-path :width (max 80))
-          (file-name :width (max 30))))
-
-        ("broken-links"
-         :command query
-         :query (links (status "broken"))
-         :columns
-         ((link-type :width (max 12))
-          (link-target :width (max 60))
-          (file-name :width (max 30))))
-
-        ("project-search"
-         :command search
-         :expression "org-files-db"
-         :scope title
-         :columns
-         ((outline-path :width (max 80))
-          (file-name :width (max 30))))))
-#+end_src
-
-Query views use Query Model v0 expressions without introducing separate Emacs-only query syntax.
-
-Search views use the expression and options supported by ~orgfdb search~.
-
-The result type is inferred from the command:
-
-- Query views return headings, links, or files according to their Query Model target.
-- Search views return heading or root results.
-
-** Query view wrapper
-
-Provide a command for query views:
-
-#+begin_src emacs-lisp
-(org-files-db-query-view)
-(org-files-db-query-view "open-tasks")
-#+end_src
-
-Interactive use offers only views with ~:command query~ through standard completion.
-
-The wrapper resolves the selected view and delegates to:
-
-#+begin_src emacs-lisp
-(org-files-db-query QUERY COLUMNS ACTION)
-#+end_src
-
-It must not implement a separate query execution or presentation path.
-
-** Search view wrapper
-
-Provide a separate command for search views:
-
-#+begin_src emacs-lisp
-(org-files-db-search-view)
-(org-files-db-search-view "project-search")
-#+end_src
-
-Interactive use offers only views with ~:command search~ through standard completion.
-
-The wrapper resolves the selected view and delegates to the generic search command:
-
-#+begin_src emacs-lisp
-(org-files-db-search EXPRESSION COLUMNS ACTION OPTIONS)
-#+end_src
-
-Command-specific settings such as ~:scope title~ or ~:scope body~ are passed through as search options.
-
-The wrapper must not implement a separate search execution or presentation path.
-
-** View lookup
-
-Provide a lower-level lookup function:
-
-#+begin_src emacs-lisp
-(org-files-db-get-view "open-tasks")
-#+end_src
-
-The function returns the configured view without modifying it.
-
-The query and search wrappers must reject views of the wrong command type with a clear error.
-
-** Behaviour
-
-- View names must be unique strings.
-- Configuration order determines completion order.
-- Standard Emacs completion is used; Consult is not required.
-- View-specific columns and actions override global defaults.
-- Missing optional values inherit the corresponding package defaults.
-- Invalid definitions produce an actionable error naming the view.
-- Embark export remains available because views delegate to the normal query or search completion interface.
-
-** Acceptance criteria
-
-- Views are defined through ~org-files-db-views~.
-- Query views store Query Model v0 expressions.
-- Search views store FTS5 search expressions and optional scope settings.
-- ~org-files-db-query-view~ offers and executes only query views.
-- ~org-files-db-search-view~ offers and executes only search views.
-- Both commands support interactive selection and direct calls by name.
-- Query views delegate to ~org-files-db-query~.
-- Search views delegate to ~org-files-db-search~.
-- Columns and result actions can be configured per view.
-- Global defaults are used when a view omits optional settings.
-- Unknown, malformed, duplicate, or incorrectly typed views produce clear errors.
-- Tests cover lookup, completion filtering, delegation, overrides, defaults, and invalid views.
-  
-* DONE Define Org dynamic blocks
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Persist query, search, view, and backlink results inside Org files and refresh them through Org's standard dynamic-block commands.
-
-Dynamic blocks are reproducible snapshots. They are refreshed explicitly with ~org-update-dblock~ or ~org-update-all-dblocks~.
-
-** Architecture
-
-Use Org's standard dynamic-block mechanism:
-
-- Interactive insertion commands create blocks with ~org-create-dblock~.
-- Newly created blocks are updated immediately with ~org-update-dblock~.
-- Writer functions follow the ~org-dblock-write:NAME~ convention.
-- Block types are registered with ~org-dynamic-block-define~.
-- Writers reuse the package's existing query, search, view, and Org-rendering functions.
-- Do not introduce a separate query syntax or execution path for dynamic blocks.
-
-** Query blocks
-
-Support a direct Query Model v0 expression:
-
-#+begin_src org
-,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :layout flat
-,#+END:
-#+end_src
-
-Alternatively, use a predefined query view:
-
-#+begin_src org
-,#+BEGIN: org-files-db-query :view "open-tasks" :layout outline
-,#+END:
-#+end_src
-
-Exactly one of ~:query~ or ~:view~ is required.
-
-Provide an insertion command:
-
-#+begin_src emacs-lisp
-(org-files-db-dblock-insert-query)
-#+end_src
-
-** Search blocks
-
-Support a direct FTS5 search expression:
-
-#+begin_src org
-,#+BEGIN: org-files-db-search :expression "sqlite AND index*" :scope body :layout flat
-,#+END:
-#+end_src
-
-Alternatively, use a predefined search view:
-
-#+begin_src org
-,#+BEGIN: org-files-db-search :view "project-search" :layout flat
-,#+END:
-#+end_src
-
-Exactly one of ~:expression~ or ~:view~ is required.
-
-Supported scopes are:
-
-- ~all~
-- ~title~
-- ~body~
-
-Provide an insertion command:
-
-#+begin_src emacs-lisp
-(org-files-db-dblock-insert-search)
-#+end_src
-
-** Backlink blocks
-
-Provide a convenience block for backlinks to the surrounding file or heading:
-
-#+begin_src org
-,#+BEGIN: org-files-db-backlinks :scope heading :layout outline
-,#+END:
-#+end_src
-
-Supported scopes are:
-
-- ~heading~ for backlinks to the surrounding Org heading
-- ~file~ for backlinks to the current file
-
-Provide an insertion command:
-
-#+begin_src emacs-lisp
-(org-files-db-dblock-insert-backlinks)
-#+end_src
-
-Each backlink entry links to its original source location.
-
-Heading targets must be identified through indexed location or stable identity. Do not rely on the heading title alone.
-
-Updating the block reads persisted results from ~orgfdb~. Emacs must not scan all Org files itself.
-
-** Layouts
-
-Support:
-
-- ~flat~ displays every matched object at the same relative heading level.
-- ~outline~ reproduces file and outline hierarchy around matched objects.
-
-Breadcrumb layout may be added later.
-
-Flat example:
-
-#+begin_src org
-,* [[org-files-db:result-1][Matched heading]]
-,* [[org-files-db:result-2][Another heading]]
-#+end_src
-
-Outline example:
-
-#+begin_src org
-,* [[org-files-db:result-1][Heading 1]]
-,** [[org-files-db:result-2][Heading 2]]
-,*** [[org-files-db:result-3][Matched heading]]
-#+end_src
-
-The first generated heading level is one level below the heading containing the dynamic block. At file level, generated output starts at level 1.
-
-** Rendering
-
-- Headings, files, and links are rendered as clickable Org links.
-- Clicking an entry opens its original file and stored location.
-- Link results open their source location.
-- Generated ancestor context may also link to its original location.
-- Empty results must not leave stale content from an earlier update.
-- Updating a block replaces only its generated body and preserves its parameters.
-
-Generated entries are presentation only:
-
-- Do not create active TODO states in the containing document.
-- Do not copy properties, planning timestamps, or tags in a way that changes the containing document's semantics.
-- TODO keywords and other metadata may appear inside the link description.
-
-** Error handling
-
-Report actionable errors for:
-
-- malformed queries or search expressions
-- unknown or incorrectly typed views
-- conflicting block parameters
-- unsupported layouts or scopes
-- missing files or headings
-- targets not present in the index
-- unavailable or invalid ~orgfdb~ output
-
-The error should identify the affected dynamic block.
-
-** Acceptance criteria
-
-- Query blocks support direct Query Model v0 expressions and query views.
-- Search blocks support direct FTS5 expressions and search views.
-- Backlink blocks support the surrounding file and heading.
-- Blocks refresh through standard Org dynamic-block commands.
-- Flat and outline layouts are supported.
-- Generated entries link to their original locations.
-- Output levels are relative to the block's surrounding heading.
-- Updating a block removes stale results.
-- Dynamic blocks reuse the existing query, search, view, and rendering code.
-- Tests cover insertion, updating, empty results, layouts, relative levels, links, invalid parameters, and stubbed CLI failures.
-  
-* DONE Define backlinks command
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Show indexed links pointing to the current file or Org heading.
-
-Provide a convenience command:
-
-#+begin_src emacs-lisp
-(org-files-db-backlinks)
-#+end_src
-
-The command determines the target at point:
-
-- On an Org heading, show links targeting that heading.
-- Outside a heading, show links targeting the current file.
-- An optional prefix argument may allow choosing between file and heading scope.
-
-The command builds a normal Query Model v0 query and delegates execution and presentation to the existing query interface. It must not implement a separate query, completion, or rendering path.
-
-For a heading target:
-
-- Prefer an existing ~ID~.
-- Otherwise use an existing ~CUSTOM_ID~ together with the file identity.
-- Optionally offer to create an ~ID~ when no stable identifier exists.
-- Do not silently identify a heading by title alone.
-
-The generated query should return the actual link results so their source locations and link metadata remain available.
-
-Example conceptually:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(links
-   (target
-    (headings
-     (property "ID" "TARGET-ID" :inherit nil))))
- COLUMNS)
-#+end_src
-
-The default columns may include:
-
-- source outline path
-- link description
-- source file
-- line number
-
-Selecting a result opens the source link.
-
-Because the command uses the normal query completion category, the currently filtered backlinks can also be exported through ~embark-export~.
-
-** Acceptance criteria
-
-- Backlinks can be shown for the current file or heading.
-- The command delegates to ~org-files-db-query~.
-- Heading targets use a stable identifier.
-- Selecting a backlink opens its source location.
-- Standard completion and Embark export remain available.
-- Missing identifiers, unindexed targets, and non-Org buffers produce clear errors.
-  
-* DONE Define linked-heading actions and export representations
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Follow links embedded in individual heading titles and support two representations of linked headings in Embark Org exports.
-
-** Follow linked heading action
-
-Provide a reusable result action:
-
-#+begin_src emacs-lisp
-(org-files-db-follow-heading-link RESULT)
-#+end_src
-
-It can be passed directly to ~org-files-db-query~:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings (tags "application"))
- COLUMNS
- #'org-files-db-follow-heading-link)
-#+end_src
-
-The action:
-
-- accepts one real heading result
-- opens the source heading at its indexed location
-- parses the heading title with Org APIs
-- follows the first supported link in the title
-- resolves relative file links from the source file
-- supports links to files, headings, custom IDs, and IDs
-- allows trailing text after the link
-
-Example:
-
-#+begin_src org
-,* [[file:../applications/scrcpy.org][Scrcpy]] (Control the Device on Linux)
-#+end_src
-
-The action follows the link to ~scrcpy.org~.
-
-If the heading contains no supported link, report a clear error. It must not execute another query or invoke completion.
-
-** Embark Org export
-
-The Embark exporter supports two representations for headings containing links:
-
-#+begin_src emacs-lisp
-(defcustom org-files-db-export-linked-heading-style 'preserve
-  "How linked heading titles are represented in Org exports."
-  :type '(choice
-          (const preserve)
-          (const resolve)))
-#+end_src
-
-*** Preserve source heading
-
-~preserve~ keeps the hierarchy and link text defined by the source heading.
-
-Source:
-
-#+begin_src org
-,*** [[file:emacs.org::#editor][Emacs]]
-#+end_src
-
-Export:
-
-#+begin_src org
-,* [[file:/absolute/path/emacs.org::#editor][Emacs]]
-#+end_src
-
-This representation preserves deliberately constructed hierarchy files such as application or topic trees.
-
-*** Resolve target
-
-~resolve~ follows the embedded link and displays the canonical title and location of the target file or heading.
-
-Source:
-
-#+begin_src org
-,*** [[file:emacs.org::#editor][Emacs]]
-#+end_src
-
-Resolved target:
-
-#+begin_src org
-,* GNU Emacs Editor
-#+end_src
-
-Export:
-
-#+begin_src org
-,* [[file:/absolute/path/emacs.org::#editor][GNU Emacs Editor]]
-#+end_src
-
-The surrounding hierarchy still comes from the query results, while the linked entry itself represents the effective target.
-
-** Export behaviour
-
-- Parse heading links with Org APIs, not regular expressions.
-- Do not create nested Org links.
-- Rebase relative file links so they remain valid in the export buffer.
-- Use absolute paths when the export buffer does not visit a file.
-- Support file, heading, custom-ID, and ID links.
-- Preserve trailing text with ~preserve~.
-- Use canonical indexed target titles with ~resolve~.
-- Fall back to ~preserve~ when a target cannot be resolved safely.
-- Headings without embedded links use the normal link to the indexed heading.
-- Apply the same policy to matched headings and generated outline context headings.
-
-** Acceptance criteria
-
-- A linked heading can be followed through a normal query result action.
-- Relative links resolve from the source heading's file.
-- File, heading, custom-ID, and ID targets are supported.
-- Trailing heading text does not prevent following the link.
-- Embark export supports ~preserve~ and ~resolve~.
-- ~preserve~ retains the authored hierarchy label and link.
-- ~resolve~ displays the canonical target title and location.
-- Headings without links retain the normal result-link behaviour.
-- Unresolvable targets fall back safely without producing nested or broken links.
-- Tests cover both representations, relative links, IDs, custom IDs, heading search options, trailing text, missing links, and unresolved targets.
-  
-* DONE Define live search command
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Search the FTS5 index interactively and update completion candidates while the user types.
-
-The search expression uses the raw FTS5 syntax accepted by ~orgfdb search~. It is not a Query Model v0 expression.
-
-** Public interface
-
-Provide a generic one-shot search function:
-
-#+begin_src emacs-lisp
-(org-files-db-search EXPRESSION COLUMNS &optional ACTION SCOPE)
-#+end_src
-
-Example:
-
-#+begin_src emacs-lisp
-(org-files-db-search
- "title:sqlite AND body:index*"
- '((title :width (max 60))
-   (outline-path :width (max 80))
-   (file-name :width (max 30)))
- nil
- 'all)
-#+end_src
-
-Supported scopes:
-
-- ~all~ searches title and body.
-- ~title~ passes ~--title~.
-- ~body~ passes ~--body~.
-
-The function executes one ~orgfdb search~ call and presents the returned results through the normal result completion interface.
-
-Provide a live interactive frontend:
-
-#+begin_src emacs-lisp
-(org-files-db-search-live COLUMNS &optional ACTION SCOPE)
-#+end_src
-
-The live command delegates search execution, candidate formatting, result actions, and Embark metadata to the same underlying functions as ~org-files-db-search~.
-
-** Live search behaviour
-
-The live frontend uses Consult asynchronous completion.
-
-- Do not start a search before the configured minimum input length is reached.
-- Wait briefly after the last input before starting a process.
-- Cancel an obsolete running process when the expression changes.
-- Replace previous candidates with results from the newest completed search.
-- Ignore output from processes belonging to older input.
-- Do not accumulate results from different expressions.
-- Keep minibuffer interaction responsive while ~orgfdb~ is running.
-
-Provide a minimum-input option:
-
-#+begin_src emacs-lisp
-(defcustom org-files-db-search-min-input 3
-  "Minimum number of characters required before live search starts."
-  :type 'natnum)
-#+end_src
-
-Use Consult's asynchronous debounce, throttle, and refresh behaviour rather than implementing a separate timer system.
-
-** Process execution
-
-For every eligible expression, run:
-
-#+begin_src sh
-orgfdb search --format json EXPRESSION
-#+end_src
-
-Add ~--title~ or ~--body~ according to the selected scope.
-
-- Invoke ~orgfdb~ directly without a shell.
-- Parse JSON only after the process exits successfully.
-- Preserve each original search result separately from its displayed candidate.
-- Search results contain heading or synthetic-root objects together with their rank and source location.
-
-** Columns and actions
-
-~COLUMNS~ uses the same column definition and width rules as ~org-files-db-query~:
-
-- ~:width auto~
-- ~:width (max N)~
-- ~:width (fixed N)~
-
-One heading or root result is displayed per candidate.
-
-The optional ~ACTION~ is called with the selected original result object. When omitted, use the configured default result action.
-
-Selecting a candidate opens its file and jumps to its stored location.
-
-** Completion and Embark
-
-- Use the existing result completion category.
-- Work with Vertico and other completion frontends supported by Consult.
-- Make displayed columns searchable locally.
-- Support ~embark-export~ for the currently matching search results.
-- Reuse the existing Org exporter for heading and root results.
-- Consult is required only for the live frontend; one-shot programmatic search must remain independent of Consult.
-
-** Error handling
-
-Errors expected while entering an incomplete FTS5 expression must not interrupt minibuffer input.
-
-- Show malformed intermediate expressions as a temporary search status.
-- Do not open an error debugger or repeatedly display intrusive messages.
-- Clear or retain candidates consistently until the expression becomes valid.
-- Report disabled FTS5, stale search metadata, missing databases, and failed processes clearly.
-- Preserve the final stderr output for an actionable error message.
-
-** Acceptance criteria
-
-- ~(org-files-db-search EXPRESSION ...)~ performs one search.
-- ~org-files-db-search-live~ updates results while the user types.
-- Search starts only after ~org-files-db-search-min-input~ characters.
-- Obsolete processes are cancelled and cannot replace newer results.
-- Results are replaced rather than accumulated.
-- ~all~, ~title~, and ~body~ scopes are supported.
-- Search uses the same columns, result objects, actions, and Embark export as query results.
-- Incomplete FTS5 expressions do not interrupt live input.
-- FTS5 and database failures produce actionable errors.
-- Tests cover minimum input, debounce, process cancellation, stale output, scopes, JSON parsing, selection, Embark metadata, and CLI failures.
-  
-* DONE Support per-command and per-view configuration files
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Per command geht, pro View noch prüfen.
-
-[[./archive/2026-08-05--support-per-command-view-configuration.org][Task details]]
-* DONE Add source and target outline-path columns for links
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-[[./archive/2026-08-06--add-link-outline-path-columns.org][Task details]]
-* DONE Optimize large query result handling
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-[[./archive/2026-08-06--optimize-large-query-result-handling.org][Task details]]
-* DONE Improve performance
-
-[[./archive/2026-08-06--improve-performance.org][Task details]]
-* DONE Keep truncated completion columns fully searchable
-
-[[./archive/2026-08-08--searchable-visual-truncation.org][Task details]]
-* DONE Add configurable result sorting
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-[[./archive/2026-08-09--configurable-result-sorting.org][Task details]]
-
-* New Implementation after Changing orgfdb
-
-** TODO Define the public API to preserve in the org-files-db.el rewrite
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Decide which user-facing behaviour from the existing package remains part of the rewritten Emacs client before copying implementation code.
-
-Review the current package and classify public functionality into:
-
-- preserve
-- adapt
-- postpone
-- remove
-
-Preserve where practical:
-
-- executable configuration
-- config-file semantics
-- structural query invocation
-- column configuration
-- predefined query views
-- result actions
-- Embark integration
-- dynamic query blocks
-
-Keep search outside the new Rust presentation architecture for now.
-
-Do not preserve internal implementation concepts merely for compatibility.
-
-In particular, do not preserve as architecture:
-
-- Child Emacs presentation workers
-- ~async.el~ presentation preparation
-- presentation dumps
-- obsolete presentation caches
-- Emacs-side sorting
-- Emacs-side width calculation
-- Emacs-side truncation
-- generic Emacs-side column extraction
-- duplicated include inference for presentation columns
+- Normal commands use ~org-files-db-default-config~.
+- A prefix argument lets the user select a configuration.
+- Non-interactive callers can pass a configuration name.
 
 Acceptance criteria:
 
-- Public behaviour to preserve is listed explicitly.
-- Internal architecture is not treated as public compatibility.
-- The rewrite has a deliberately smaller scope than the existing implementation.
+- All short-lived CLI features use one process implementation.
+- Normal query and view calls are synchronous.
+- No shell command string is built.
+- CLI errors include useful stderr text.
+- Prefix selection and explicit configuration names work.
+- Setup checks work with multiple named configurations.
 
-** TODO Create a minimal org-files-db.el package structure
+** TODO Step 3 - Implement PresentationSpec and presentation-json version 2
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Start the rewritten package from a small client-oriented structure rather than modifying the old presentation architecture in place.
+Goal: Translate Emacs configuration to Rust ~PresentationSpec~ and decode the Rust response without duplicating presentation work.
 
-Use only as many modules as are useful.
+Support the flat Emacs presentation options:
 
-A possible structure is:
+- ~:columns~
+- ~:sort~
+- ~:row-source~
 
-#+begin_example
-org-files-db.el
-org-files-db-process.el
-org-files-db-presentation.el
-org-files-db-actions.el
-org-files-db-embark.el
-org-files-db-dblock.el
-#+end_example
+Keep normal column configuration in Emacs Lisp forms.
 
-The exact split may be smaller initially.
+Rust remains authoritative for:
 
-Responsibilities should remain clear:
-
-- public configuration and commands
-- orgfdb process invocation
-- presentation request/response handling
-- actions
-- optional integrations
-
-Do not copy obsolete cache or Child-Emacs infrastructure into the new package.
-
-Acceptance criteria:
-
-- The package loads without the old presentation architecture.
-- Dependencies are minimal.
-- Module responsibilities are clear.
-- No ~async.el~ dependency is introduced.
-
-** TODO Add Emacs PresentationSpec serialization
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Translate user-facing Emacs view and query configuration into the Rust ~PresentationSpec~ format.
-
-Keep normal Emacs configuration ergonomic.
-
-Users should continue to configure columns using Lisp forms rather than writing JSON manually.
-
-Translate:
-
-- columns
-- column options
+- supported presentation columns
+- column semantics
+- include inference for presentation data
 - sorting
-- row source
+- row expansion
+- widths
+- truncation
+- padding
+- outline-path construction
 
-into the documented Rust presentation specification.
+Decode ~presentation-json~ version 2.
 
-Do not reproduce presentation semantics in Emacs.
+Keep these response parts separate:
 
-Emacs may validate simple Lisp shape errors, but Rust remains authoritative for presentation-column semantics.
-
-Acceptance criteria:
-
-- Emacs configuration can generate one complete ~PresentationSpec~.
-- Users do not need to write JSON manually.
-- The serializer does not calculate values, sort keys, widths, or truncation.
-- Rust validation errors can be surfaced clearly.
-
-** TODO Add action-dependent query data requirements
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Ensure actions can request structured result data independently of displayed presentation columns.
-
-Keep action requirements outside ~PresentationSpec~.
-
-Conceptually combine:
-
-#+begin_example
-PresentationSpec-derived requirements
-+
-Emacs action requirements
-=
-one orgfdb query invocation
-#+end_example
-
-Examples:
-
-- opening a normal result requires no extra target data
-- opening a resolved link target requires ~target~
-
-Pass required explicit includes to the original ~orgfdb query~ invocation.
-
-Do not put Emacs action function names into the Rust specification.
-
-Do not perform one additional query after candidate selection when the data could have been requested initially.
-
-Acceptance criteria:
-
-- Action-required includes are known before query execution.
-- Explicit includes combine with Rust presentation inference.
-- One query invocation provides both presentation and action data.
-- Actions do not depend accidentally on whether a particular column is displayed.
-
-** TODO Implement asynchronous orgfdb presentation invocation
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Run structural presentation queries in the external Rust process without blocking Emacs while Rust performs expensive work.
-
-Use the normal Emacs process API.
-
-Do not use:
-
-- Child Emacs
-- ~async.el~
-- dump files
-- presentation worker Emacs instances
-
-Invoke conceptually:
-
-#+begin_src sh
-orgfdb query \
-  --format presentation-json \
-  ... \
-  '(headings)'
-#+end_src
-
-Handle:
-
-- process startup
-- stdout
-- stderr
-- exit status
-- cancellation where appropriate
-- malformed JSON
-- CLI errors
-
-Acceptance criteria:
-
-- Rust presentation work runs outside the Emacs main thread.
-- No Child Emacs process is involved.
-- Errors are presented clearly.
-- Process handling remains small and reusable.
-
-** TODO Parse presentation-json and retain original results separately
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Parse the Rust presentation response while preserving the separation between original query results and presentation rows.
-
-Store:
-
-- database metadata
 - original results
 - presentation rows
+- cells
+- schemas
 
-Rows reference original results using ~result_index~.
+Resolve each row through ~result_index~.
 
-Do not copy the complete result object into an independent Emacs data structure for every row.
+Use ~schemas.role_values~ to decode semantic roles.
 
-Provide a small helper that resolves:
+Treat a missing ~display_text~ as equal to ~search_text~ according to the Rust wire format.
 
-#+begin_example
-row -> result_index -> original result
-#+end_example
+Keep ~row_context~ on the decoded row or candidate metadata.
 
-for actions.
+Do not copy the complete result into every expanded row.
+
+Provide a pure data path for callers that need query data without completion or actions. Use a separate interface such as ~org-files-db-query-results~.
 
 Acceptance criteria:
 
-- Original results are stored once per response.
-- Rows resolve deterministically to the correct result.
-- Several expanded rows may resolve to the same original result.
-- Actions can obtain the original result without knowing presentation internals.
+- Emacs can serialize one complete ~PresentationSpec~.
+- Emacs can decode version 2 results, rows, cells, schemas, and row context.
+- Several rows can reference one original result.
+- Emacs does not sort, truncate, pad, or expand rows.
+- The data-only path does not open completion.
+- Unsupported presentation versions fail with a clear error.
 
-** TODO Add semantic presentation faces
+** TODO Step 4 - Build lightweight completion and semantic faces
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Map Rust semantic roles to configurable Emacs faces.
+Goal: Build completion candidates from prepared Rust rows with minimal Emacs-side work.
 
-Support at least:
+For each prepared cell:
+
+- keep ~search_text~ searchable
+- show ~display_text~ to the user
+- apply the semantic role face
+
+Use standard ~completing-read~.
+
+Do not add a Consult dependency for normal queries.
+
+Map Rust roles to configurable Emacs faces. Support at least:
 
 - ~heading~
 - ~title~
@@ -1495,273 +242,413 @@ Support at least:
 - ~property-name~
 - ~property-value~
 
-Define suitable package faces where useful and inherit from existing Org or Emacs faces.
+Rust uses the generic ~heading~ role. Use the original heading result level for Emacs heading-level styling.
 
-Provide a configurable role mapping conceptually similar to:
+Define package heading faces that inherit from Org heading faces. Keep their height equal to the normal completion text height.
+
+Do not style outline separators separately.
+
+Keep lightweight metadata on each candidate so Emacs can resolve:
+
+- the presentation row
+- the original result
+- the row context
+- the effective configuration name
+
+Acceptance criteria:
+
+- Full values remain searchable after Rust truncates the visible value.
+- Candidates use Rust-prepared display text.
+- Heading levels can use distinct Emacs faces without oversized text.
+- Unknown roles degrade safely.
+- Candidate creation does not recalculate presentation data.
+- Selecting one candidate resolves to the correct original result.
+
+** TODO Step 5 - Implement the new query command and default action flow
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Provide one general structural query command on top of the shared presentation pipeline.
+
+Use a public interface with one query and optional keyword arguments. Keep the exact signature small.
+
+Conceptually support:
 
 #+begin_src emacs-lisp
-(defcustom org-files-db-face-role-alist
-  '((heading        . org-files-db-heading-face)
-    (title          . org-files-db-title-face)
-    (todo           . org-todo)
-    (done           . org-done)
-    (priority       . org-priority)
-    (tag            . org-tag)
-    (date           . org-date)
-    (file-name      . org-files-db-file-name-face)
-    (file-path      . org-files-db-file-path-face)
-    (keyword-name   . org-files-db-keyword-name-face)
-    (keyword-value  . org-files-db-keyword-value-face)
-    (property-name  . org-files-db-property-name-face)
-    (property-value . org-files-db-property-value-face)))
-  ...)
+(org-files-db-query
+ '(headings (not (done)))
+ :config "work"
+ :columns '((todo-keyword)
+            (outline-path :width (max 80)))
+ :sort '((priority :direction asc))
+ :row-source nil
+ :action #'my-action)
 #+end_src
 
-Ensure completion candidates always retain the font size of ~default~.
+Interactive use must:
 
-Do not distinguish heading levels.
+1. read the structural query
+2. use the default configuration unless a prefix argument requests selection
+3. execute the one-shot ~presentation-json~ query
+4. open completion
+5. execute the selected action
+6. return the selected original result
 
-Use ~heading~ for the complete:
+Use the query target to select the default action when ~:action~ is absent.
 
-- ~outline-path~
-- ~source-outline-path~
-- ~target-outline-path~
+Keep separate defaults for:
 
-Do not add special outline-separator styling.
+- ~headings~
+- ~files~
+- ~links~
+
+Actions receive one original result.
+
+Provide a dynamic action context or small getter for the effective configuration. Do not add the configuration argument to every action function.
 
 Acceptance criteria:
 
-- Semantic roles map to configurable faces.
-- Heading faces cannot create oversized completion rows.
-- File paths, titles, keywords, and properties can be styled independently.
-- Missing or unknown roles degrade safely.
+- ~headings~, ~files~, and ~links~ use the same presentation pipeline.
+- Default columns and sorting apply when the call omits them.
+- Per-call columns, sorting, row source, configuration, and action can override defaults.
+- The selected action receives the original result.
+- Lisp callers receive the selected original result.
+- Interactive use does not print the complete result object.
 
-** TODO Build lightweight completion candidates from prepared rows
+** TODO Step 6 - Implement watcher lifecycle management
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Keep candidate construction in Emacs as small as possible.
+Goal: Let Emacs use or start ~orgfdb watch~ for all configured databases without becoming a hidden process supervisor.
 
-For every Rust-prepared cell:
-
-- retain ~search_text~ for matching
-- use ~display_text~ for visible presentation
-- apply the semantic role face
-
-Combine prepared cells into the final candidate representation.
-
-Associate the candidate with enough lightweight metadata to recover its presentation row and original result.
-
-Do not perform in Emacs:
-
-- column value extraction
-- sort-key creation
-- sorting
-- shared width calculation
-- truncation
-- padding
-- outline-path construction
-
-Acceptance criteria:
-
-- Full values remain searchable after visible truncation.
-- Candidates display the Rust-prepared layout.
-- Candidate construction performs only Emacs-specific string/property work.
-- Selecting a candidate resolves to the correct original result.
-
-** TODO Port core result actions to the rewritten package
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Port useful result actions from the existing package without carrying old presentation implementation dependencies into the rewrite.
-
-Review and port where appropriate:
-
-- open result
-- insert file link
-- insert heading link
-- follow heading link
-- rename file
-- rename file result
-
-Preserve shared navigation and validation logic where it remains useful.
-
-Actions receive original query results, not presentation rows.
-
-Keep result and presentation concerns separate.
-
-Interactive actions should return concise user-facing feedback rather than exposing complete result structures.
-
-Acceptance criteria:
-
-- Existing core actions operate on selected presentation results.
-- Actions do not depend on presentation formatting.
-- Actions receive the original Rust query result representation.
-- No old candidate-cache architecture is required.
-
-** TODO Add the resolved link target action
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Add a distinct action for opening the structured resolved target of a link result.
-
-Implement:
+Provide:
 
 #+begin_src emacs-lisp
-org-files-db-actions-open-link-target
+(org-files-db-watch-mode 1)
+(org-files-db-watch-start)
+(org-files-db-watch-stop)
 #+end_src
 
-Use structured target data from the original query result.
+~org-files-db-watch-start~ enables ~org-files-db-watch-mode~.
 
-Support:
+~org-files-db-watch-stop~ disables ~org-files-db-watch-mode~.
 
-- resolved heading targets
-- resolved file targets
+When the mode starts:
 
-Reject clearly:
+- inspect all entries in ~org-files-db-configs~
+- accept an already running external watcher
+- start a watcher when none is active
+- wait until the watcher reports ~watcher ready~
+- track only watcher processes started by this Emacs instance
 
-- unresolved targets
-- ambiguous targets
-- external targets
-- unsupported targets
-- missing structured target data
+When the mode stops:
 
-Prefer stable navigation information where available.
+- stop only watcher processes owned by this Emacs instance
+- leave external watchers running
 
-Do not reparse the raw authored target when structured target information exists.
+Use an activation snapshot for owned watcher processes.
 
-Do not perform another CLI query when the original result already contains sufficient target data.
+If configuration changes while the mode runs, apply the new configuration after the next disable and enable cycle.
+
+Activation must be atomic.
+
+If one required watcher cannot start:
+
+- stop watchers started by that activation attempt
+- leave pre-existing external watchers unchanged
+- keep the mode disabled
+- report the error
+
+Do not restart a watcher automatically after an unexpected exit. Report the failure and keep the state visible.
+
+Add cleanup to ~kill-emacs-hook~.
+
+At normal Emacs exit:
+
+- remove active Emacs-owned view registrations first
+- stop watcher processes owned by this Emacs instance second
+- leave external watchers running
 
 Acceptance criteria:
 
-- Opening the source and opening the target remain distinct actions.
-- Target navigation uses structured result data.
-- Invalid target states produce clear errors.
-- The action works independently of whether ~target-outline-path~ is displayed.
+- Watch mode works without cache mode.
+- All configured databases can have active watchers.
+- Existing external watchers count as valid.
+- Emacs stops only processes that it owns.
+- Partial activation rolls back cleanly.
+- Unexpected watcher exits do not start a hidden restart loop.
+- Normal Emacs exit cleans up owned processes.
 
-** TODO Add predefined query views to the rewritten client
+** TODO Step 7 - Implement predefined views and Rust cache integration
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Reintroduce predefined structural views using the new Rust presentation architecture.
+Goal: Make a view a named query with presentation configuration and optional Rust caching.
 
-Keep the user-facing view syntax stable where practical.
+Use a flat view definition. For example:
 
-Views may configure:
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("open-tasks"
+         :config "main"
+         :query (headings (not (done)))
+         :columns ((todo-keyword :width (fixed 8))
+                   (outline-path :width (max 80)))
+         :sort ((priority :direction asc))
+         :cache t
+         :action org-files-db-actions-open-result)))
+#+end_src
 
-- query
-- config file
-- columns
-- sort
-- row source
-- available actions where appropriate
+Supported view keys include:
 
-Translate view configuration into:
+- ~:config~
+- ~:query~
+- ~:columns~
+- ~:sort~
+- ~:row-source~
+- ~:cache~
+- ~:action~
 
-- query arguments
-- ~PresentationSpec~
-- action-dependent explicit includes
+Use ~nil~ as the default for ~:cache~.
 
-Do not introduce a separate view presentation path.
+Provide one public view function:
+
+#+begin_src emacs-lisp
+(org-files-db-view)
+(org-files-db-view "open-tasks")
+#+end_src
+
+Interactive use without a name asks for a view.
+
+Users create key bindings with normal Lisp functions or lambdas. Do not generate one command per view.
+
+When cache mode is disabled:
+
+- run every view through one-shot ~presentation-json~
+- ignore ~:cache t~ as a materialization request
+- keep the view fully usable
+
+Provide:
+
+#+begin_src emacs-lisp
+(org-files-db-cache-mode 1)
+(org-files-db-cache-start)
+(org-files-db-cache-stop)
+(org-files-db-cache-stop t)
+#+end_src
+
+~org-files-db-cache-start~ enables ~org-files-db-cache-mode~.
+
+~org-files-db-cache-stop~ disables ~org-files-db-cache-mode~.
+
+With a non-nil argument, ~org-files-db-cache-stop~ also disables watch mode.
+
+Cache mode activation must:
+
+1. make sure that watch mode is active
+2. make sure that every cached view has a watcher for its effective configuration
+3. resolve every cached view to its complete effective definition
+4. create a private per-Emacs-session Rust view name
+5. register every ~:cache t~ view
+6. store an activation snapshot
+
+The effective snapshot includes inherited values such as:
+
+- default configuration
+- default columns
+- default sorting
+- action data requirements
+
+If any registration fails, roll back all registrations from that activation attempt.
+
+If cache mode started watch mode during the same attempt, restore the previous watch-mode state on failure.
+
+Cache mode deactivation must remove the registrations from its activation snapshot.
+
+Do not recalculate the list from the current ~org-files-db-views~ value during cleanup.
+
+If a cached view definition changes while cache mode is active, report a clear error when that view is used.
+
+Tell the user to restart ~org-files-db-cache-mode~ to apply the new definition.
+
+When cache mode is active and ~:cache t~ is set:
+
+- read the Rust view with ~orgfdb view read~
+- do not fall back silently to a one-shot query on rebuild or watcher errors
+
+If ~view read~ reports ~view_not_found~ after a watcher restart:
+
+- register the stored activation snapshot again
+- retry the read once
+
+Do not use the current changed Lisp definition for this recovery.
+
+Do not allow ~org-files-db-watch-mode~ to stop while cache mode is active. Signal a user error instead.
 
 Acceptance criteria:
 
-- Structural views use the same generic query/presentation implementation.
-- No Emacs-side sort or formatting implementation exists for views.
-- Row-source views use the normal presentation pipeline.
-- View-specific configuration remains ergonomic.
+- Views work with and without cache mode.
+- ~:cache t~ is an opt-in performance choice, not a functional requirement.
+- Cached views use ~view register~ and ~view read~.
+- Non-cached views use the same one-shot query pipeline as ~org-files-db-query~.
+- View names are unique in Emacs.
+- Rust view names are private to one Emacs session.
+- View configuration changes require a cache-mode restart.
+- Cleanup removes exactly the registrations created by the active snapshot.
+- Cache failures are visible and do not trigger a silent query fallback.
+- Watcher restart recovery uses the stored snapshot.
+- Normal Emacs exit removes active Emacs-owned registrations.
 
-** TODO Add Embark integration to the rewritten client
+** TODO Step 8 - Port core result actions and action data requirements
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Expose result actions through optional Embark integration.
+Goal: Port useful actions to the new result model without importing old presentation or cache code.
 
-Keep Embark optional.
+Port and review these actions where they remain useful:
 
-Provide separate actions where appropriate for:
+- open a heading, file, or link result
+- insert a file link
+- insert a heading link
+- follow a heading link
+- rename a file and update supported indexed links
+- open the resolved target of a link result
 
-- opening the matched result
-- opening a resolved link target
-- inserting links
-- mutation actions
+Each action receives the original Rust result.
 
-Embark actions must resolve the original result through the selected presentation row.
+Keep action functions independent from presentation rows.
 
-Do not require ~embark-consult~ unless a separate feature specifically needs it.
+Use action-dependent query data requirements before the CLI call.
+
+For example, the resolved link target action requires structured target data even when ~target-outline-path~ is not displayed.
+
+Combine action requirements with the query includes for the original CLI invocation.
+
+Do not execute a second query after selection when the original result can contain the required data.
+
+For resolved link targets:
+
+- support resolved heading targets
+- support resolved file targets
+- use structured target data
+- reject unresolved targets
+- reject ambiguous targets
+- reject external targets
+- reject unsupported targets
+- reject missing structured target data
+
+Keep source opening and target opening as separate actions.
+
+Interactive actions must give short messages such as:
+
+#+begin_example
+Heading opened
+File opened
+Link opened
+Link target opened
+File link inserted
+Heading link inserted
+File renamed
+#+end_example
+
+Actions without a documented programmatic return value return ~nil~ after success.
+
+The query or view command still returns the selected original result to Lisp callers.
+
+Acceptance criteria:
+
+- Core actions work with the version 2 result model.
+- Actions do not depend on visible presentation columns.
+- Action-required includes are known before query execution or view registration.
+- Source and resolved-target navigation remain separate.
+- Complete structured target data never triggers a second query.
+- Interactive success messages are concise.
+- Actions do not expose internal result or configuration structures.
+- ~org-files-db-actions-follow-heading-link~ is tested and either kept or removed with a clear reason.
+
+** TODO Step 9 - Add optional Embark integration
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Add optional actions and export support on top of the common candidate and result model.
+
+Do not require Embark from the main package entry file.
+
+Register integration after Embark loads.
+
+Do not require ~embark-consult~.
+
+Provide actions for useful result operations, including separate source and resolved-target navigation for link results.
+
+Embark actions receive the same original result as normal query actions.
+
+Exports must use the currently filtered presentation rows.
+
+For row-expanded results:
+
+- keep every visible expanded row distinct
+- keep the link to the original result
+- do not collapse rows that share one ~result_index~
 
 Acceptance criteria:
 
 - The package loads without Embark installed.
-- Embark receives lightweight candidates but actions obtain original results.
-- Source and target navigation remain distinct.
-- Interactive feedback remains concise.
+- Embark actions use the common result-action implementation.
+- Link source and target actions are distinct.
+- Filtered export preserves visible expanded rows.
+- No old candidate-cache implementation is required.
 
-** TODO Add row-source views and dynamic query blocks
+** TODO Step 10 - Port dynamic blocks and row-source workflows
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Expose the Rust row-expansion feature through the normal Emacs configuration interfaces.
+Goal: Rebuild dynamic query blocks on the shared presentation and data-only interfaces.
 
-Support row sources:
+Support direct structural queries and named views.
+
+Support Rust row sources:
 
 - ~tags~
 - ~effective-properties~
 - ~keywords~
 
-Views pass their configured row source through ~PresentationSpec~.
-
-Dynamic query blocks may specify a row source directly or inherit it from a view.
+A dynamic block can set ~:row-source~ directly or inherit it from a view.
 
 Do not implement row expansion in Emacs.
 
-Do not create a separate completion path for expanded rows.
+Use Rust-prepared rows and the same result-index mapping as completion.
+
+When a result has no values for the selected row source, Rust produces no row. Emacs must not create an artificial row.
+
+Preserve separate expanded rows in flat and hierarchy-oriented output where the layout needs them.
 
 Acceptance criteria:
 
-- Expanded rows arrive fully prepared from Rust.
-- Several rows may reference the same original result.
-- Actions continue to operate on the original result.
-- Singular row-source columns work through normal presentation configuration.
+- Dynamic blocks do not require completion UI.
+- Direct queries and named views use the same decoded presentation model.
+- Row-source output comes from Rust.
+- Tags, effective properties, and keywords remain separate expanded rows.
+- Original results remain available for links and navigation.
 
-** TODO Port dynamic block and export behaviour
+** TODO Step 11 - Benchmark and harden the complete Emacs path
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Reintroduce dynamic blocks and result export on top of the new result/row separation.
+Goal: Measure the real user path after the new architecture works.
 
-Ensure exports operate on the currently selected or filtered presentation rows where row expansion matters.
+Measure both paths:
 
-For expanded rows:
+- one-shot ~orgfdb query --format presentation-json~
+- cached ~orgfdb view read~
 
-- preserve each individual row
-- retain association with the original result
-- do not collapse several expanded rows back into one result accidentally
-
-Keep presentation/export logic separate from query execution.
-
-Acceptance criteria:
-
-- Normal query exports work.
-- Expanded rows remain distinguishable.
-- Original result hierarchy can still be used where required.
-- Export does not depend on old candidate-cache structures.
-
-** TODO Benchmark the complete Emacs presentation path
-:PROPERTIES:
-:VISIBILITY: folded
-:END:
-
-Goal: Measure the complete uncached Rust-to-Emacs structural query path.
-
-Use representative result sizes around:
+Use representative result sizes such as:
 
 - 100 rows
 - 1'000 rows
@@ -1770,1448 +657,328 @@ Use representative result sizes around:
 
 Measure where practical:
 
-- orgfdb process elapsed time
+- orgfdb elapsed time
 - payload size
-- process transfer
-- JSON parsing
-- candidate construction
-- time until completion UI becomes usable
-- observable Emacs main-thread blocking
+- process transfer time
+- JSON parsing time
+- candidate construction time
+- time until completion can be used
+- visible Emacs blocking time
 
-Compare with the old package where useful.
+Keep query and view interaction synchronous during this benchmark.
 
-Do not add an Emacs presentation cache before this benchmark.
+Do not add an Emacs presentation cache before measurements show a concrete need.
+
+If the remaining cost is high, optimize transfer, parsing, or candidate construction first.
 
 Acceptance criteria:
 
-- Main-thread blocking is measured separately from total elapsed time.
-- The remaining bottleneck is identified.
-- The result determines whether any client-side optimisation is justified.
-- No cache is added based only on assumption.
+- Cached and one-shot paths have end-to-end measurements.
+- Emacs-side costs are separated from Rust execution where practical.
+- The measurements identify the remaining bottleneck.
+- No client cache is added from assumption alone.
 
-** TODO Decide whether any Emacs-side presentation cache is necessary
+** TODO Step 12 - Remove the legacy package and finish documentation
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Keep the rewritten client cache-free unless measurements demonstrate a clear need.
+Goal: Leave one clean implementation after the rebuilt vertical paths work.
 
-If the uncached architecture is fast enough:
+Remove obsolete code, tests, and dependencies.
 
-- do not add a presentation cache
-- keep the package stateless between queries where possible
+Delete or replace as appropriate:
 
-If a remaining bottleneck justifies caching, create a new narrowly scoped design based on that measured bottleneck.
+- ~lisp/org-files-db-cache.el~
+- ~lisp/org-files-db-search.el~
+- Child-Emacs code
+- ~async.el~ integration
+- old Emacs presentation formatting
+- old Emacs sorting
+- old Emacs width and truncation calculation
+- old cache generation logic
+- obsolete cache tests
+- obsolete search tests
+- obsolete presentation benchmarks
 
-Do not recreate:
+Do not add migration aliases or breaking-change notes for the private old package.
 
-- Child-Emacs cache preparation
-- presentation dump files
-- complex generation-aware cache lifecycle in Emacs
+Update:
+
+- ~README.org~
+- ~CHANGELOG.org~ when useful for the new package state
+- ~.project/tasks/project-context.org~
+- tests and fixtures
+- development dependencies
+
+The README must start with a small working configuration and query example.
+
+Document:
+
+- named configurations and the default configuration
+- structural queries
+- columns and sorting
+- row sources
+- predefined views
+- ~:cache t~
+- watch mode
+- cache mode
+- default and per-view actions
+- optional Embark integration
+- dynamic blocks
+
+Keep internal wire-format and process details out of normal user documentation.
+
+Run ~make ci~ after the rebuild is ready for final review.
 
 Acceptance criteria:
 
-- The decision is backed by end-to-end measurements.
-- No cache lifecycle is introduced without measurable benefit.
-- The rewritten package remains as small as practical.
+- Only the new client architecture remains.
+- Search is not part of the rebuilt package.
+- No ~async.el~ or Child-Emacs presentation code remains.
+- No Emacs presentation cache remains.
+- Rust owns presentation preparation and materialized view caches.
+- Documentation matches the rebuilt public interface.
+- The complete test suite covers the selected public behaviour.
+- ~make ci~ is green.
 
-** TODO Replace the old org-files-db.el implementation
+* Theme Store
+
+These topics are not part of the current rebuild unless a task explicitly promotes them.
+
+Keep them here as design notes for later work.
+
+** TODO Explore linked-heading expansion
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Replace the previous package implementation once the rewritten client covers the intended public functionality and passes its test suite.
+Goal: Explore a presentation or query feature that expands the target hierarchy of a link found in a heading.
 
-Before replacement:
+Example source path:
 
-- compare preserved public behaviour
-- migrate useful tests
-- remove obsolete cache tests
-- remove Child-Emacs tests
-- remove obsolete presentation implementation tests
-- update README and changelog
-- verify package loading and byte compilation
-- run the complete test suite
+#+begin_example
+Coding with AI > Prompting > [link to file]
+#+end_example
 
-Do not retain dead compatibility layers for internal implementation details.
+Possible expanded rows:
 
-Acceptance criteria:
+#+begin_example
+Coding with AI > Prompting > Ablauf
+Coding with AI > Prompting > Ablauf > Ziel des Projektes definieren
+Coding with AI > Prompting > Ablauf > Brainstorming
+#+end_example
 
-- The new package is the only maintained implementation.
-- ~async.el~ is no longer required for presentation work.
-- No Child-Emacs presentation code remains.
-- No obsolete presentation cache remains.
-- Structural queries use Rust-prepared presentation rows.
-- Public functionality selected for preservation is covered by tests.
-  
-* Not sure if still relevant
+A link to one heading can use the linked heading as the expansion root.
 
-** TODO Add row expansion for tags, effective properties, and keywords
+Keep link traversal to one link level. Do not recursively follow links from expanded target headings.
+
+Before implementation, decide:
+
+- whether to include the linked target itself
+- whether to include direct children or all descendants
+- how to handle several links in one source heading
+- how to handle duplicate target headings
+- how to handle file targets and heading targets consistently
+- how to handle unresolved, ambiguous, external, and unsupported links
+- how source parents and target children appear in one path
+- whether synthetic file roots are included
+
+First verify what parent and child structure ~orgfdb~ already returns for the required targets.
+
+Prefer a Rust query or presentation feature if the expansion needs database structure. Do not rebuild database traversal in Emacs.
+
+** TODO Explore directory rename with indexed link updates
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Allow one heading or file result to produce one displayed row per tag, effective property, or keyword.
+Goal: Add a safe directory-level counterpart to the file rename action.
 
-Currently, multi-valued fields are formatted as one combined column value. Provide a shared row-expansion mechanism instead of implementing separate presentation paths for tags, properties, and keywords.
+A future ~org-files-db-actions-rename-directory~ can:
 
-*** Row-source option
+- rename or move one directory
+- identify indexed path-based links affected by the move
+- update affected Org files
+- update visiting Emacs buffers safely
+- preserve unsaved buffer changes
+- detect destination conflicts before mutation
+- report unsupported or ambiguous links clearly
 
-Add an optional ~:row-source~ keyword to query execution:
+Keep ownership similar to file rename work.
 
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings (tags "project"))
- '((tag :width (max 30))
-   (outline-path :width (max 60))
-   (file-name :width (max 30)))
- nil
- :row-source 'tags)
-#+end_src
+~orgfdb~ can provide resolved-link knowledge. Emacs can own file and buffer mutation.
 
-Supported values are:
+Do not let the watcher perform rename mutations. The watcher only reconciles the resulting filesystem changes.
 
-- ~nil~: one displayed row per query result
-- ~tags~: one displayed row per tag
-- ~effective-properties~: one displayed row per effective property
-- ~keywords~: one displayed row per keyword
+Design rollback and partial-failure behaviour before implementation.
 
-The default is ~nil~, preserving the current behaviour.
+** TODO Explore percentage-based column widths
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-A result containing three tags therefore produces three completion candidates.
+Goal: Explore a user-facing width form based on the current Emacs display width.
 
-Ordinary result columns such as ~outline-path~, ~file-name~, and ~title~ are repeated for every expanded row.
-
-*** Tags
-
-With:
+Possible syntax:
 
 #+begin_src emacs-lisp
-:row-source 'tags
+(outline-path :width (percent 60))
+(file-name :width (percent 40))
 #+end_src
 
-provide the singular column:
+Percentage width is an Emacs UI concept because it depends on the active window or minibuffer width.
 
-#+begin_src emacs-lisp
-(tag)
-#+end_src
+This creates tension with Rust-owned presentation widths and persistent cached views.
 
-Example source heading:
+A cached Rust view uses one stable ~PresentationSpec~. Emacs window width can change without a database or view change.
 
-#+begin_src org
-,* Example :project:emacs:active:
-#+end_src
+Before implementation, decide:
 
-Example rows:
+- which Emacs width is the reference width
+- whether percentage widths apply only to one-shot queries
+- whether Emacs converts percentages to numeric Rust widths before execution
+- how cached views behave after frame or window size changes
+- whether percentage widths justify separate cache variants
+- whether the extra complexity gives enough user value
 
-#+begin_example
-project  Example  notes.org
-emacs    Example  notes.org
-active   Example  notes.org
-#+end_example
+Do not add Emacs-side truncation only to support this option.
 
-The existing plural ~tags~ column may continue to display all tags together when no row expansion is requested.
+** TODO Extend row-source workflows after the rebuild
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-The singular ~tag~ column is valid only with ~:row-source tags~.
+Goal: Keep advanced row-source use cases available for later refinement after basic Rust row-source support is connected.
 
-Preserve the tag order returned by ~orgfdb~.
-
-Do not add or remove Org tag delimiters unless explicitly configured as part of column formatting.
-
-*** Effective properties
-
-With:
-
-#+begin_src emacs-lisp
-:row-source 'effective-properties
-#+end_src
-
-provide the columns:
-
-#+begin_src emacs-lisp
-(property-name)
-(property-value)
-#+end_src
-
-Example effective properties:
-
-#+begin_example
-CATEGORY=work
-OWNER=Daniel
-STATUS=active
-#+end_example
-
-Example rows:
-
-#+begin_example
-CATEGORY  work
-OWNER     Daniel
-STATUS    active
-#+end_example
-
-Each effective property name and its resolved value form one row.
-
-The query command must automatically request:
-
-#+begin_src sh
---include effective_properties
-#+end_src
-
-Users must not need to specify this include manually.
-
-Effective properties represent the resolved values used by query matching. They must not be confused with raw property rows.
-
-If the CLI representation does not provide a stable order, sort effective properties by property name for deterministic output.
-
-*** Keywords
-
-With:
-
-#+begin_src emacs-lisp
-:row-source 'keywords
-#+end_src
-
-provide the columns:
-
-#+begin_src emacs-lisp
-(keyword-name)
-(keyword-value)
-#+end_src
-
-Example keywords:
-
-#+begin_src org
-,#+TITLE: Example
-,#+FILETAGS: :project:
-,#+CATEGORY: work
-#+end_src
-
-Example rows:
-
-#+begin_example
-TITLE     Example
-FILETAGS  :project:
-CATEGORY  work
-#+end_example
-
-The query command must automatically request:
-
-#+begin_src sh
---include keywords
-#+end_src
-
-Users must not need to specify this include manually.
-
-Preserve duplicate keyword entries when they are returned separately by ~orgfdb~.
-
-Preserve source order when the CLI provides it. Otherwise, use a deterministic order without merging entries.
-
-*** Views
-
-Allow predefined query views to configure ~:row-source~:
-
-#+begin_src emacs-lisp
-(setq org-files-db-views
-      '(("heading-tags"
-         :command query
-         :query (headings)
-         :row-source tags
-         :columns
-         ((tag :width (max 30))
-          (outline-path :width (max 60))
-          (file-name :width (max 30))))
-
-        ("effective-properties"
-         :command query
-         :query (headings)
-         :row-source effective-properties
-         :columns
-         ((property-name :width (max 30))
-          (property-value :width (max 60))
-          (outline-path :width (max 60))))
-
-        ("file-keywords"
-         :command query
-         :query (files)
-         :row-source keywords
-         :columns
-         ((keyword-name :width (max 30))
-          (keyword-value :width (max 60))
-          (file-name :width (max 30))))))
-#+end_src
-
-Query views pass ~:row-source~ to ~org-files-db-query~.
-
-They must not implement a separate expansion or completion path.
-
-*** Dynamic blocks
-
-Allow direct query blocks to define ~:row-source~:
-
-#+begin_src org
-,#+BEGIN: org-files-db-query :query "(headings)" :row-source tags :layout flat
-,#+END:
-#+end_src
-
-Views referenced by dynamic blocks inherit their configured ~:row-source~.
-
-Supported dynamic-block values are:
+Basic rebuild support already passes these Rust row sources through ~PresentationSpec~:
 
 - ~tags~
 - ~effective-properties~
 - ~keywords~
 
-An absent value keeps the normal one-row-per-result behaviour.
+Later work can improve user workflows around:
 
-*** Candidate representation
+- singular ~tag~ columns
+- ~property-name~ and ~property-value~ columns
+- ~keyword-name~ and ~keyword-value~ columns
+- dynamic block layouts
+- Embark exports for expanded rows
+- documentation examples for empty collections
+- documentation examples for duplicate keywords
 
-Keep the matched query result separate from the expanded row data.
+Keep one original result separate from its expanded rows.
 
-Conceptually, each displayed candidate contains:
+Do not implement expansion, ordering, include inference, width calculation, or truncation again in Emacs.
 
-#+begin_example
-original result
-row-source
-row value
-formatted columns
-#+end_example
-
-Selecting an expanded row continues to execute the configured action on the original heading or file result.
-
-Existing actions such as opening a result, inserting a link, or renaming a file must continue to work without modification.
-
-The row metadata is used for formatting and exporting but must not replace or mutate the original query result.
-
-*** Empty collections
-
-When a result has no entries for the selected row source, it produces no displayed rows.
-
-Examples:
-
-- a heading without tags produces no rows for ~:row-source tags~
-- a result without effective properties produces no property rows
-- a result without keywords produces no keyword rows
-
-Do not create an artificial empty row.
-
-A future option may add empty rows if a concrete use case requires them.
-
-*** Column validation
-
-Validate singular row columns against the selected row source:
-
-- ~tag~ requires ~:row-source tags~
-- ~property-name~ and ~property-value~ require ~:row-source effective-properties~
-- ~keyword-name~ and ~keyword-value~ require ~:row-source keywords~
-
-Report a clear error for incompatible combinations.
-
-Do not allow multiple row sources in one invocation.
-
-In particular, do not create Cartesian products between tags, properties, and keywords.
-
-*** Include inference
-
-Infer required CLI includes from ~:row-source~:
-
-#+begin_example
-tags                  → no additional include when tags are already part of the result
-effective-properties  → effective_properties
-keywords              → keywords
-#+end_example
-
-Combine inferred includes with includes required by configured columns and actions.
-
-Use one ~orgfdb~ invocation for the complete result set.
-
-*** Width and truncation
-
-Expanded row columns support the same width and truncation options as all other columns:
-
-#+begin_src emacs-lisp
-(tag
- :width (max 20)
- :truncate (:position right :marker "…"))
-
-(property-value
- :width (fixed 40)
- :truncate (:position middle :marker "…"))
-#+end_src
-
-Shared column widths are calculated across all expanded rows, not separately for each original result.
-
-*** Embark export
-
-~embark-export~ must preserve the currently filtered expanded rows.
-
-It must not collapse several tag, property, or keyword rows back into one result.
-
-For flat export:
-
-- produce one exported entry per expanded row
-- retain a link to the original heading or file
-- include the singular row value in the exported description
-
-For outline export:
-
-- preserve the original file and heading hierarchy
-- group expanded rows below their matched result where necessary
-- avoid repeating identical ancestor hierarchy for every row
-
-The exact presentation may reuse the configured columns, but every expanded row must remain distinguishable.
-
-*** Supported result kinds
-
-Initial support applies to:
-
-- heading results
-- file results
-- synthetic file-root results where the corresponding data is available
-
-Reject row expansion for link results unless a later feature explicitly defines whether source or target metadata should be expanded.
-
-Search-result support may be added only when the search CLI output provides the required structured data and includes.
-
-*** README documentation
-
-Document:
-
-- the purpose of ~:row-source~
-- one row per tag
-- one row per effective property
-- one row per keyword
-- the singular columns available for each mode
-- views and dynamic-block examples
-- empty collections producing no rows
-- automatic include inference
-- the difference between aggregate ~tags~ and singular ~tag~
-
-Avoid describing the feature as JSON expansion or exposing internal candidate structures.
-
-*** Acceptance criteria
-
-- Query results can expand to one row per tag.
-- Query results can expand to one row per effective property.
-- Query results can expand to one row per keyword.
-- Normal columns are repeated for every expanded row.
-- ~tag~, ~property-name~, ~property-value~, ~keyword-name~, and ~keyword-value~ are supported.
-- Effective properties automatically request ~effective_properties~.
-- Keywords automatically request ~keywords~.
-- Only one row source can be active per invocation.
-- No Cartesian products are created.
-- Empty collections produce no rows.
-- Existing result actions continue to receive the original matched result.
-- Views pass their row source to the generic query function.
-- Dynamic blocks support direct and view-provided row sources.
-- Embark export preserves individual expanded rows.
-- Width and truncation are calculated across all expanded rows.
-- Tests cover multiple tags, no tags, effective-property ordering, keyword duplicates, empty collections, include inference, column validation, views, dynamic blocks, filtering, actions, flat export, outline export, and non-ASCII values.
-
-** TODO New Feature > Linked Heading auflösen
-
-Links in Headings auflösen und das Folgefile anzeigen, also die Headings.
-
-Am besten aber nur 1 Level, sonst kann es plötzlich übel werden :-) rekursiv.
-
-z. B.
-
-Coding with AI > Prompting > (links to File)
-
-Weiteren Einträge mit den Headings aus dem File:
-
-Coding with AI > Prompting > Ablauf
-Coding with AI > Prompting > Ablauf > Ziel des Projektes definieren
-Coding with AI > Prompting > Ablauf > Brainstorming
-...
-
-Oder mit einem Link zu einer Heading:
-
-Coding with AI > Brainstorming > (links to Heading)
-Coding with AI > Brainstorming > Brainstorming Subheading 1
-Coding with AI > Brainstorming > Brainstorming Subheading 2
-Coding with AI > Brainstorming > Brainstorming Subheading 2 > Subheading
-
-Ahh, werden überhaupt alle Parents und Childs angezeigt?
-
-** TODO New Feature > org-files-db-actions-rename-directory
-
-** TODO Improve user-facing README documentation
+** TODO Expand the user-facing README after the rebuild
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Rewrite the README as user-facing package documentation and document all supported columns, configuration options, commands, and result types.
-
-*** Documentation style
-
-Write for users of the Emacs package rather than contributors or implementers.
-
-Remove or avoid internal terminology such as:
-
-- ~Query Model v0~
-- JSON result objects
-- UTF-8 byte locations
-- completion implementation details
-- names of internal completion categories
-- internal process handling
-- database identifiers unless they are directly useful to users
-
-Do not describe compatibility by listing completion frontends such as Vertico, Icomplete, or Fido.
-
-Instead, describe observable behaviour:
-
-- Queries are written as Emacs Lisp forms.
-- Results are displayed in the minibuffer.
-- Selecting a result opens its original file and location.
-- Result columns can be configured globally, per view, or per command.
-- Embark can export the currently displayed results to an Org buffer.
-- Consult provides the optional live-search interface.
-
-Keep implementation and architecture details in project or contributor documentation rather than the README.
-
-*** Recommended structure
-
-Organize the README approximately as follows:
-
-- Overview
-- Requirements
-- Installation
-- Basic configuration
-- Querying
-- Searching
-- Result columns
-- Column widths and truncation
-- Predefined views
-- Result actions
-- Embark export
-- Dynamic blocks
-- Configuration reference
-- Development
-
-Start with a minimal working example before presenting advanced customization.
-
-*** Basic configuration
-
-Document:
-
-#+begin_src emacs-lisp
-(setq org-files-db-executable "orgfdb")
-(setq org-files-db-config-file "~/org/org-files-db.toml")
-#+end_src
-
-Explain that:
-
-- ~org-files-db-executable~ may be a command name or executable path.
-- ~org-files-db-config-file~ defines the default ~orgfdb~ configuration.
-- Individual commands and views may override or disable the default configuration.
-- ~org-files-db-check-setup~ checks whether the executable and configuration work.
-
-Do not describe the shared process implementation.
-
-*** Query documentation
-
-Introduce query forms through examples without referring to a query-model version:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings (not (done)))
- '((todo-keyword)
-   (priority :width (fixed 3))
-   (outline-path :width (max 80))
-   (file-name :width (max 30))))
-#+end_src
-
-Provide examples for:
-
-#+begin_src emacs-lisp
-'(headings (not (done)))
-'(links (status "broken"))
-'(files (tags "project"))
-#+end_src
-
-Refer users to the ~orgfdb~ query documentation for the complete query syntax instead of duplicating the complete query language in this README.
-
-*** Column reference
-
-Document supported columns by result type.
-
-A column should only be listed as supported when it has a stable, meaningful value for that result type.
-
-Do not present arbitrary JSON property lookup as a supported public column API.
-
-**** Heading columns
-
-Document at least:
-
-- ~title~: heading title
-- ~todo-keyword~: TODO keyword
-- ~todo-type~: open or closed TODO classification
-- ~priority~: heading priority
-- ~outline-path~: heading hierarchy
-- ~tags~: heading tags
-- ~scheduled-raw~: scheduled timestamp
-- ~deadline-raw~: deadline timestamp
-- ~closed-raw~: closed timestamp
-- ~file-name~: source file name
-- ~file-path~: complete source file path
-- ~line-number~: source line
-
-Explain that some columns are empty when the corresponding Org metadata is absent.
-
-**** File columns
-
-Document at least:
-
-- ~file-title~: Org file title or file-derived title
-- ~file-name~: file name
-- ~file-path~: complete file path
-- ~tags~: file-level tags when available
-- ~line-number~: source line when available
-
-Synthetic root results returned by heading searches may use the file columns where appropriate.
-
-**** Link columns
-
-Document at least:
-
-- ~link-type~: Org link type
-- ~link-target~: authored link target
-- ~link-description~: authored link description
-- ~resolution-status~: indexed resolution state
-- ~source-outline-path~: hierarchy containing the link
-- ~target-outline-path~: hierarchy of the resolved link target
-- ~file-name~: source file containing the link
-- ~file-path~: complete source file path
-- ~line-number~: source line of the link
-
-Explain that:
-
-- ~source-outline-path~ describes where the link occurs.
-- ~target-outline-path~ describes the hierarchy of the resolved target.
-- ~target-outline-path~ is empty for unresolved, ambiguous, external, or unsupported targets.
-- A target pointing directly to a file has no heading hierarchy unless the file root is included.
-- The package automatically requests the additional source or target information required by configured columns.
-
-Do not document the ambiguous ~outline-path~ name as a link-result column.
-
-If it remains supported as a compatibility alias, document it only in a migration or compatibility note.
-
-**** Search-result columns
-
-Document at least:
-
-- ~title~: matched heading or file title
-- ~outline-path~: hierarchy of the matched result
-- ~file-name~: source file name
-- ~file-path~: complete source file path
-- ~line-number~: source line
-- ~rank~: search-result ranking value
-
-Explain that search results may represent either headings or file roots.
-
-**** Advanced columns
-
-Internal values such as byte positions, file IDs, and parent IDs should not appear in the main column reference.
-
-If they remain intentionally supported as a public interface, place them in a clearly marked advanced subsection and explain their limited user-facing value.
-
-Otherwise, treat them as internal implementation details.
-
-*** Outline-path configuration
-
-Document the global defaults:
-
-#+begin_src emacs-lisp
-(setq org-files-db-outline-path-separator " » ")
-(setq org-files-db-outline-path-include-root nil)
-(setq org-files-db-outline-path-include-match t)
-#+end_src
-
-Document per-column overrides for normal heading paths:
-
-#+begin_src emacs-lisp
-(outline-path
- :separator " / "
- :include-root t
- :include-match nil
- :width (max 50))
-#+end_src
-
-Document the same options for link source and target paths:
-
-#+begin_src emacs-lisp
-(source-outline-path
- :separator " » "
- :include-root nil
- :include-match t
- :width (max 50))
-
-(target-outline-path
- :separator " » "
- :include-root t
- :include-match t
- :width (max 50))
-#+end_src
-
-Explain:
-
-- ~:separator~ controls the text between path components.
-- ~:include-root~ includes or omits the corresponding file/root component.
-- ~:include-match~ includes or omits the final heading component.
-- The same global defaults apply to ~outline-path~, ~source-outline-path~, and ~target-outline-path~.
-- For ~source-outline-path~, the match is the heading containing the link.
-- For ~target-outline-path~, the match is the resolved target heading.
-
-Explain that configured source and target columns automatically request the required CLI includes. Users do not need to specify ~--include source~ or ~--include target~ themselves.
-
-*** Column widths
-
-Document:
-
-- ~:width auto~
-- ~:width (max N)~
-- ~:width (fixed N)~
-
-Use user-facing explanations and examples.
-
-Do not discuss internal width-calculation functions.
-
-*** Column truncation
-
-Document truncation as a general option available to every displayed column:
-
-#+begin_src emacs-lisp
-(file-name
- :width (max 30)
- :truncate (:position middle :marker "…"))
-#+end_src
-
-Supported positions:
-
-- ~left~
-- ~middle~
-- ~right~
-
-Document the defaults:
-
-#+begin_src emacs-lisp
-(setq org-files-db-truncate-position 'right)
-(setq org-files-db-truncate-marker "…")
-#+end_src
-
-Explain that:
-
-- truncation applies when a value exceeds a maximum or fixed width
-- the marker is included in the final width
-- an empty marker performs hard truncation
-- partial definitions inherit global defaults
-
-Examples:
-
-#+begin_src emacs-lisp
-:truncate (:position left)
-:truncate (:position middle :marker " (…) ")
-:truncate (:marker "")
-#+end_src
-
-*** Per-command configuration
-
-Document command-specific configuration without requiring users to understand dynamic binding:
-
-#+begin_src emacs-lisp
-(org-files-db-query
- '(headings (not (done)))
- nil
- nil
- :config-file "~/org/private/org-files-db.toml")
-#+end_src
-
-#+begin_src emacs-lisp
-(org-files-db-search
- "quarterly report"
- nil
- nil
- :scope 'title
- :config-file "~/work/org-files-db.toml")
-#+end_src
-
-Explain:
-
-- omitted ~:config-file~ inherits the global value
-- a path overrides the global value
-- explicit ~nil~ disables the configuration for that call
-
-A short advanced example using ~let~ may be included, but it must not be presented as the primary interface.
-
-*** View configuration
-
-Document query and search views with optional per-view configuration:
-
-#+begin_src emacs-lisp
-(setq org-files-db-views
-      '(("private-tasks"
-         :command query
-         :config-file "~/org/private/org-files-db.toml"
-         :query (headings (not (done)))
-         :columns
-         ((todo-keyword)
-          (outline-path
-           :include-root nil
-           :include-match t
-           :width (max 60))))
-
-        ("resolved-links"
-         :command query
-         :query (links (status "resolved"))
-         :columns
-         ((source-outline-path
-           :width (max 50))
-          (link-description
-           :width (max 30))
-          (target-outline-path
-           :width (max 50))))
-
-        ("work-search"
-         :command search
-         :config-file "~/work/org-files-db.toml"
-         :expression "quarterly report"
-         :scope title)))
-#+end_src
-
-Explain that a missing ~:config-file~ inherits the global default and an explicit ~nil~ disables it for that view.
-
-*** Actions and exports
-
-Describe result actions by their user-visible purpose:
-
-- open a result
-- follow a link contained in a heading
-- insert a file link
-- insert a heading link
-- rename a file and update indexed path-based links
-
-Avoid describing action arguments as raw JSON objects.
-
-Document the two linked-heading export representations:
-
-- ~preserve~ keeps the authored heading and link
-- ~resolve~ displays the effective linked target
-
-*** Acceptance criteria
-
-- The README starts with a minimal working setup and query.
-- Internal query-model version terminology is removed.
-- Completion-backend lists are removed.
-- UTF-8 byte-position terminology is removed.
-- All stable user-facing columns are documented by result type.
-- Link documentation clearly distinguishes ~source-outline-path~ and ~target-outline-path~.
-- ~source-outline-path~ is documented as the hierarchy containing the link.
-- ~target-outline-path~ is documented as the hierarchy of the resolved target.
-- Empty target paths for unresolved, ambiguous, and external links are documented.
-- Automatic source and target include inference is documented without exposing unnecessary implementation detail.
-- Outline-path defaults and per-column options are documented.
-- The same outline options are documented for source and target paths.
-- General truncation options and defaults are documented.
-- Global, per-command, and per-view configuration files are documented.
-- Query, search, views, actions, exports, and dynamic blocks have practical examples.
-- Internal database and process details are absent from the main user documentation.
-- Examples use the current public function signatures and option names.
-- Tests or documentation checks detect examples that reference removed or renamed options.
-  
-** TODO Column Width in %
-
-Dies muss auf der Emacs-Seite erfolgen.
-
-** TODO Add an action for opening resolved link targets
+Goal: Turn the final README into a complete user guide after the public rebuild interface is stable.
+
+The final cleanup step provides the minimum accurate documentation. This topic stores the larger documentation pass.
+
+A complete guide can include:
+
+- overview
+- requirements
+- installation
+- minimal configuration
+- multiple named configurations
+- structural query examples
+- result columns by query target
+- sorting
+- widths and truncation
+- row sources
+- predefined views
+- watch mode
+- cache mode
+- result actions
+- resolved link target actions
+- optional Embark integration
+- dynamic blocks
+- configuration reference
+- development notes
+
+Use user-facing language.
+
+Do not describe:
+
+- internal process implementation
+- private cache files
+- private control sockets
+- raw internal candidate structures
+- obsolete Search commands
+- Query Model version labels that users do not need
+
+Refer to the ~orgfdb~ documentation for the complete structural query language instead of duplicating it.
+
+** TODO Extend resolved link target actions after the rebuild
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Add a reusable action that opens the resolved target of a link result while keeping the existing default action for opening the link source unchanged.
+Goal: Keep further resolved-target navigation ideas after the core open-target action exists.
 
-*** Existing behaviour
+The rebuild already includes the first ~org-files-db-actions-open-link-target~ implementation.
 
-The existing default result action:
+Later work can explore:
 
-#+begin_src emacs-lisp
-org-files-db-actions-open-result
-#+end_src
+- more target-specific Embark actions
+- additional navigation fallbacks
+- target copy commands
+- target insertion commands
+- better messages for unsupported target kinds
+- multi-result target workflows
 
-opens the source file and jumps to the matched result location.
+Keep structured Rust target data as the source of truth.
 
-For link results, this means:
+Do not reparse authored raw targets when structured target data exists.
 
-- open the file containing the link
-- jump to the link occurrence
-- reveal the surrounding Org context
-
-This behaviour remains unchanged.
-
-The existing function:
-
-#+begin_src emacs-lisp
-org-files-db-actions-follow-heading-link
-#+end_src
-
-operates on heading results and follows a link associated with that heading.
-
-It must not be reused as the implementation for opening the structured target of a link result.
-
-*** New public action
-
-Add a new public action:
-
-#+begin_src emacs-lisp
-org-files-db-actions-open-link-target
-#+end_src
-
-The function accepts either:
-
-- the original link result object
-- a propertized completion candidate containing ~org-files-db-result~ metadata
-
-Keep the function interactive so that it can be used as an Embark action.
-
-Do not add an autoload cookie merely because the function is interactive.
-
-*** Supported targets
-
-The action uses the structured target data returned for the link result.
-
-For a resolved heading target:
-
-- validate the target file
-- open the target file
-- jump to the target heading
-- reveal the surrounding Org context
-
-For a resolved file target:
-
-- validate the target file
-- open the target file
-- move to an appropriate initial position
-- reveal the file context where useful
-
-The action must use stable structured target information where available, such as:
-
-#+begin_example
-target.file.path
-target.heading.id
-target.heading.custom_id
-target.heading.begin
-target.heading.line
-target.heading.outline_path
-#+end_example
-
-Prefer stable identifiers over positional information where the existing action infrastructure already supports them.
-
-Do not parse the authored raw link target when structured target data is available.
-
-*** Unsupported targets
-
-Signal a clear user-facing error when the target is:
-
-- unresolved
-- ambiguous
-- external
-- unsupported
-- missing
-- missing structured target data
-- missing a readable target file
-
-Do not silently fall back to opening the source link.
-
-Do not open the authored raw target as a file path unless the structured result explicitly identifies it as the resolved target.
-
-Example error messages may include:
-
-#+begin_example
-Link target is unresolved
-Link target is ambiguous
-Link target is external
-Link result has no structured target
-Target file does not exist: ...
-Target file is not readable: ...
-#+end_example
-
-Errors should identify the selected result or target where practical.
-
-*** Result validation
-
-Add or reuse validation that confirms:
-
-- the selected result is a link result
-- structured target data is present
-- the resolution status permits opening the target
-- the target file path is valid
-- heading target metadata is internally consistent
-
-Private helpers owned only by the actions module use the prefix:
-
-#+begin_example
-org-files-db-actions--*
-#+end_example
-
-Do not add new generic core helpers unless the same functionality is shared by several modules.
-
-Do not call another specialised module's private helper.
-
-*** Target navigation
-
-Reuse the shared core navigation infrastructure where possible.
-
-Examples may include:
-
-#+begin_example
-org-files-db--goto-result-location
-org-files-db--result-file
-#+end_example
-
-Extend shared navigation only when the target representation requires functionality that is genuinely useful outside this one action.
-
-For heading targets, choose the strongest available navigation method in a deterministic order.
-
-A possible order is:
-
-1. Org ID
-2. CUSTOM_ID
-3. exact stored position
-4. stored line
-5. outline path fallback
-
-Do not perform an additional CLI query merely to locate a target that is already represented in the result.
-
-If an outline-path fallback is necessary, handle duplicate headings carefully and report ambiguity rather than jumping silently to the wrong heading.
-
-*** Configuration context
-
-The original link result retains the effective configuration file that produced it.
-
-The open-target action normally performs no additional ~orgfdb~ operation and therefore does not need to resolve a configuration file merely to open the target.
-
-If the implementation requires a follow-up CLI operation, it must use the result's stored configuration context rather than the current global value.
-
-Do not silently switch to another database.
-
-Avoid a follow-up CLI operation when the structured target already contains enough navigation data.
-
-*** Include inference
-
-The action requires structured target data.
-
-Queries that expose this action as an available action must request:
-
-#+begin_example
---include target
-#+end_example
-
-Do not make the action depend accidentally on the presence of the ~target-outline-path~ column.
-
-Selecting the target-outline-path column already requests target data, but the action must also work when that column is not displayed.
-
-Determine how action-dependent include inference fits into the existing query API.
-
-Possible approaches include:
-
-- associating required includes with registered actions
-- allowing a query invocation to declare additional required includes
-- ensuring the Embark action is only offered when target data is already present
-
-Choose one consistent model.
-
-Do not add a second query execution path.
-
-Do not execute one target query per selected result.
-
-*** Embark integration
-
-Add an Embark action map for org-files-db results if the package does not already provide one.
-
-Conceptually:
-
-#+begin_src emacs-lisp
-(defvar-keymap org-files-db-embark-result-map
-  :doc "Actions for org-files-db completion results."
-  "o" #'org-files-db-actions-open-result
-  "t" #'org-files-db-actions-open-link-target)
-#+end_src
-
-The exact key bindings may differ if existing package conventions suggest better choices.
-
-The action map should distinguish clearly between:
-
-- opening the matched source result
-- opening the resolved link target
-
-Register the action map only when Embark is available.
-
-Embark remains an optional runtime dependency.
-
-Do not add:
-
-#+begin_src emacs-lisp
-(require 'embark)
-#+end_src
-
-to the main package entry file.
-
-Use delayed registration such as:
-
-#+begin_src emacs-lisp
-(with-eval-after-load 'embark
-  ...)
-#+end_src
-
-or the existing optional-integration pattern in the package.
-
-Do not require ~embark-consult~ for this action.
-
-*** Programmatic use
-
-The function remains usable directly from Lisp:
-
-#+begin_src emacs-lisp
-(org-files-db-actions-open-link-target result)
-#+end_src
-
-It must not depend on being invoked through Embark.
-
-A propertized candidate invocation must also work:
-
-#+begin_src emacs-lisp
-(org-files-db-actions-open-link-target candidate)
-#+end_src
-
-where ~candidate~ contains the original result under the ~org-files-db-result~ text property.
-
-*** Documentation
-
-Update the README to document:
-
-- the default action opens the matched source location
-- link results also support opening the resolved target
-- heading and file targets are supported
-- unresolved, ambiguous, external, and unsupported targets cannot be opened
-- the target action uses structured target data
-- Embark users receive separate source and target actions
-- Embark remains optional
-- ~embark-consult~ is not required for this package integration
-
-Include a concise example of programmatic invocation.
-
-Update the changelog.
-
-*** Tests
-
-Add tests covering:
-
-- opening a resolved heading target
-- opening a resolved file target
-- accepting the original result object
-- accepting a propertized completion candidate
-- jumping by stable heading ID where available
-- falling back to stored target position where appropriate
-- source and target actions opening different locations
-- unresolved targets producing an error
-- ambiguous targets producing an error
-- external targets producing an error
-- unsupported targets producing an error
-- missing structured target data producing an error
-- missing target files producing an error
-- unreadable target files producing an error
-- no additional CLI query for complete structured targets
-- preserved result configuration context for any required follow-up operation
-- target include inference when the action requires target data
-- action operation without the ~target-outline-path~ display column
-- programmatic invocation
-- interactive invocation
-- Embark action registration after Embark loads
-- package loading without Embark installed
-- no dependency on ~embark-consult~
-
-Where practical, verify that the action map contains separate bindings for source and target navigation.
-
-*** Implementation order
-
-1. Inspect the current link result and structured target representation.
-2. Define supported heading-target and file-target shapes.
-3. Add target validation helpers in the actions module.
-4. Implement target file extraction.
-5. Implement heading-target navigation.
-6. Add ~org-files-db-actions-open-link-target~.
-7. Add or extend include inference for action-required target data.
-8. Add optional Embark action-map registration.
-9. Add programmatic and interactive tests.
-10. Add unresolved and invalid-target tests.
-11. Update README and changelog.
-12. Run byte compilation, linting, and the complete test suite.
-
-*** Acceptance criteria
-
-- ~org-files-db-actions-open-result~ continues to open the matched source location.
-- ~org-files-db-actions-open-link-target~ opens the resolved target of a link result.
-- Heading targets open at the target heading.
-- File targets open the target file.
-- The action accepts result objects and propertized candidates.
-- The action is interactive and usable through Embark.
-- Source and target navigation are exposed as distinct actions.
-- Unresolved, ambiguous, external, unsupported, and incomplete targets produce clear errors.
-- Structured target data is used instead of reparsing the raw authored target.
-- Complete target results do not trigger additional CLI queries.
-- Any required follow-up CLI operation preserves the result configuration context.
-- Target data is available even when ~target-outline-path~ is not displayed.
-- Embark remains optional.
-- ~embark-consult~ is not required.
-- Tests cover source-versus-target behaviour, heading targets, file targets, invalid targets, include inference, programmatic use, interactive use, and optional Embark integration.
-  
-** TODO Add concise user feedback for result actions
+** TODO Review action feedback after real use
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
 
-Goal: Prevent interactive result actions from exposing complete result objects in the echo area and provide short, useful English confirmation messages instead.
+Goal: Review whether action messages are useful after the rebuilt actions are used in normal workflows.
 
-*** Problem
-
-Some actions currently return the selected result object or another large internal value.
-
-When invoked interactively, this may expose the complete result structure in the echo area, for example:
-
-#+begin_example
-((org-files-db--config-file . "...")
- (kind . "heading")
- (matched . t)
- ...)
-#+end_example
-
-This output is implementation data and is not useful as interactive feedback.
-
-Actions should finish with a concise confirmation such as:
-
-#+begin_example
-Link opened
-Link target opened
-Result opened
-File renamed
-Link inserted
-#+end_example
-
-*** General behaviour
-
-Interactive actions must:
-
-- perform the requested operation
-- display a concise English success message
-- avoid displaying the complete result object
-- avoid displaying internal configuration metadata
-- return ~nil~ unless a meaningful documented programmatic return value is required
-
-Do not use the selected result object itself as the implicit return value of an interactive action.
-
-Do not print or message complete result structures for debugging purposes.
-
-*** Opening results
-
-For the default action:
-
-#+begin_src emacs-lisp
-org-files-db-actions-open-result
-#+end_src
-
-use feedback appropriate to the result kind.
-
-Suggested messages:
+The rebuild requires concise feedback such as:
 
 #+begin_example
 Heading opened
 Link opened
-File opened
-Result opened
-#+end_example
-
-Use the most specific message that can be determined reliably.
-
-For the planned target action:
-
-#+begin_src emacs-lisp
-org-files-db-actions-open-link-target
-#+end_src
-
-use:
-
-#+begin_example
 Link target opened
-#+end_example
-
-Do not include the full target object in the message.
-
-*** Other actions
-
-Audit all public functions in ~org-files-db-actions.el~.
-
-Examples include:
-
-#+begin_example
-org-files-db-actions-open-result
-org-files-db-actions-insert-file-link
-org-files-db-actions-insert-heading-link
-org-files-db-actions-follow-heading-link
-org-files-db-actions-rename-file
-org-files-db-actions-rename-file-result
-org-files-db-actions-query-insert-file-link
-org-files-db-actions-query-insert-heading-link
-#+end_example
-
-Add concise success feedback where an interactive user benefits from confirmation.
-
-Possible messages include:
-
-#+begin_example
-File link inserted
-Heading link inserted
-Heading link followed
 File renamed
 #+end_example
 
-Avoid redundant messages when the called Emacs operation already provides clear and sufficient feedback.
+After real use, check:
 
-Do not emit multiple success messages for one action.
+- whether some successful actions need no message
+- whether repeated messages become noisy
+- whether mutation actions need more specific confirmation
+- whether direct calls and Embark calls feel consistent
 
-*** Error behaviour
+Keep errors specific. Do not replace useful errors with generic failure messages.
 
-Existing validation and error messages remain unchanged unless they expose internal result objects unnecessarily.
+Do not print raw results or internal configuration data.
 
-On failure:
+** TODO Review org-files-db-actions-follow-heading-link after the rebuild
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
 
-- signal the existing user-facing error
-- do not emit a success message
-- do not suppress useful error details
-- do not replace a specific error with a generic failure message
+Goal: Test ~org-files-db-actions-follow-heading-link~ in the rebuilt package and decide whether it still has a clear user purpose.
 
-Examples:
+Compare it with:
 
-#+begin_example
-Source file does not exist: ...
-Link target is unresolved
-Target file is not readable: ...
-#+end_example
+- opening the selected heading result
+- opening the resolved target of a link result
+- normal Org link navigation from the opened heading
 
-*** Programmatic use
+Keep the action only if it provides a distinct and useful workflow.
 
-Public actions remain callable directly from Lisp.
+If it remains useful, document its exact input and behaviour.
 
-Where no documented return value exists, successful programmatic invocation should return ~nil~ after performing the action.
-
-Do not make callers depend on the original result object being returned accidentally.
-
-If an action has an intentional and documented return value, preserve it for non-interactive callers and suppress only accidental interactive echo output.
-
-Where this distinction is needed, use ~called-interactively-p~ rather than maintaining separate action implementations.
-
-*** Implementation guidance
-
-Structure actions so that navigation or mutation does not become the final unintentional return expression.
-
-Conceptually:
-
-#+begin_src emacs-lisp
-(defun org-files-db-actions-open-result (result)
-  "Open RESULT at its stored location."
-  (interactive ...)
-  (let ((result (org-files-db-actions--result-value result)))
-    (org-files-db-actions--validate-result result)
-    (org-files-db--goto-result-location result)
-    (message "%s opened"
-             (org-files-db-actions--result-kind-label result))
-    nil))
-#+end_src
-
-Use private helpers with the prefix:
-
-#+begin_example
-org-files-db-actions--*
-#+end_example
-
-A helper for selecting a feedback label is appropriate if several actions need it.
-
-Do not add a generic Core helper unless it is shared outside the actions module.
-
-*** Message style
-
-Messages must be:
-
-- English
-- short
-- written as completed actions
-- free of trailing full stops
-- free of internal identifiers and raw Lisp structures
-
-Prefer:
-
-#+begin_example
-Link opened
-#+end_example
-
-Avoid:
-
-#+begin_example
-Successfully opened the selected org-files-db link result.
-#+end_example
-
-Avoid including file paths unless they provide important confirmation for an operation such as renaming.
-
-*** Embark integration
-
-Actions invoked through Embark must produce the same concise feedback as direct interactive invocation.
-
-Do not make feedback depend on Embark being installed.
-
-Do not require ~embark-consult~.
-
-Ensure that invoking an action through an Embark action map does not expose the selected candidate's complete metadata.
-
-*** Tests
-
-Add tests covering:
-
-- opening a heading displays ~Heading opened~
-- opening a link displays ~Link opened~
-- opening a file displays ~File opened~
-- unknown supported result kinds use ~Result opened~
-- opening a link target displays ~Link target opened~
-- inserted file links display concise feedback
-- inserted heading links display concise feedback
-- file rename actions display concise feedback
-- successful actions do not message complete result objects
-- internal ~org-files-db--config-file~ metadata is not displayed
-- successful actions return ~nil~ where no return value is documented
-- errors do not emit success messages
-- direct interactive invocation uses concise feedback
-- Embark invocation uses the same concise feedback
-- programmatic calls continue to perform the requested operation
-
-Stub or spy on ~message~ where appropriate.
-
-Do not make tests depend on the exact printed representation of complete result objects.
-
-*** Documentation
-
-Document briefly that interactive actions report concise completion messages.
-
-Do not document internal result values as action return values unless they are intentionally supported.
-
-Update the changelog.
-
-*** Acceptance criteria
-
-- Interactive actions no longer expose complete result objects.
-- Internal configuration metadata is not printed after actions.
-- Opening a link reports ~Link opened~.
-- Opening a resolved target reports ~Link target opened~.
-- Other actions provide similarly concise feedback where appropriate.
-- Successful actions return ~nil~ unless they have an intentional documented return value.
-- Errors remain specific and do not emit success messages.
-- Direct and Embark invocation behave consistently.
-- Tests cover messages, return values, error paths, and suppression of internal result output.
-  
-** TODO Ausprobieren: org-files-db-actions-follow-heading-link
+If the new link-result target action makes it redundant, remove it instead of keeping overlapping commands.
