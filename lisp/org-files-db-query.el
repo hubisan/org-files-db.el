@@ -80,8 +80,11 @@ presentation forms.  This function does not open completion or run an action."
                  "--presentation-spec-json" spec-json)
            (org-files-db--config-arguments config-name)
            (list (org-files-db--query-string query)))))
-    (org-files-db--decode-presentation
-     (org-files-db--call-json arguments))))
+    (let ((presentation
+           (org-files-db--decode-presentation
+            (org-files-db--call-json arguments))))
+      (setf (org-files-db-presentation-config presentation) config-name)
+      presentation)))
 
 (provide 'org-files-db-query)
 

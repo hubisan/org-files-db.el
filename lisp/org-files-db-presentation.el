@@ -26,6 +26,7 @@
 
 (require 'cl-lib)
 (require 'json)
+(require 'org-faces)
 (require 'subr-x)
 (require 'org-files-db-process)
 
@@ -72,12 +73,122 @@
   :type '(repeat sexp)
   :group 'org-files-db)
 
+(defface org-files-db-heading-1
+  '((t (:inherit org-level-1 :height 1.0)))
+  "Face for level 1 headings in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-heading-2
+  '((t (:inherit org-level-2 :height 1.0)))
+  "Face for level 2 headings in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-heading-3
+  '((t (:inherit org-level-3 :height 1.0)))
+  "Face for level 3 headings in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-heading-4
+  '((t (:inherit org-level-4 :height 1.0)))
+  "Face for level 4 headings in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-heading-5
+  '((t (:inherit org-level-5 :height 1.0)))
+  "Face for level 5 headings in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-heading-6
+  '((t (:inherit org-level-6 :height 1.0)))
+  "Face for level 6 headings in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-heading-7
+  '((t (:inherit org-level-7 :height 1.0)))
+  "Face for level 7 headings in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-heading-8
+  '((t (:inherit org-level-8 :height 1.0)))
+  "Face for level 8 headings in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-title
+  '((t (:inherit org-document-title :height 1.0)))
+  "Face for title cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-todo
+  '((t (:inherit org-todo)))
+  "Face for open TODO cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-done
+  '((t (:inherit org-done)))
+  "Face for closed TODO cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-priority
+  '((t (:inherit org-priority)))
+  "Face for priority cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-tag
+  '((t (:inherit org-tag)))
+  "Face for tag cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-date
+  '((t (:inherit org-date)))
+  "Face for date cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-file-name
+  '((t (:inherit org-document-info)))
+  "Face for file-name cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-file-path
+  '((t (:inherit shadow)))
+  "Face for file-path cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-keyword-name
+  '((t (:inherit org-special-keyword)))
+  "Face for keyword-name cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-keyword-value
+  '((t (:inherit org-document-info)))
+  "Face for keyword-value cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-property-name
+  '((t (:inherit org-special-keyword)))
+  "Face for property-name cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-property-value
+  '((t (:inherit org-property-value)))
+  "Face for property-value cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defconst org-files-db--heading-faces
+  [org-files-db-heading-1 org-files-db-heading-2 org-files-db-heading-3
+                          org-files-db-heading-4 org-files-db-heading-5 org-files-db-heading-6
+                          org-files-db-heading-7 org-files-db-heading-8]
+  "Heading faces indexed by zero-based heading level.")
+
+(defconst org-files-db--candidate-identity-base #x1900
+  "Number of private-use characters used for candidate identities.")
+
 (cl-defstruct (org-files-db-presentation
                (:constructor org-files-db--make-presentation))
   "One decoded presentation-json response."
   version
   database-id
   generation
+  config
   results
   schemas
   rows)
@@ -536,6 +647,169 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
        :results results
        :schemas schemas
        :rows rows))))
+
+(defun org-files-db--presentation-result-level (result)
+  "Return a normalized heading level for RESULT."
+  (let ((level (and (listp result)
+                    (or (alist-get 'level result)
+                        (alist-get 'heading_level result)))))
+    (if (and (integerp level) (> level 0))
+        (min 8 level)
+      1)))
+
+(defun org-files-db--presentation-role-face (role result)
+  "Return the Emacs face for semantic ROLE and original RESULT."
+  (pcase role
+    ('heading
+     (aref org-files-db--heading-faces
+           (1- (org-files-db--presentation-result-level result))))
+    ('title 'org-files-db-title)
+    ('todo 'org-files-db-todo)
+    ('done 'org-files-db-done)
+    ('priority 'org-files-db-priority)
+    ('tag 'org-files-db-tag)
+    ('date 'org-files-db-date)
+    ('file-name 'org-files-db-file-name)
+    ('file-path 'org-files-db-file-path)
+    ('keyword-name 'org-files-db-keyword-name)
+    ('keyword-value 'org-files-db-keyword-value)
+    ('property-name 'org-files-db-property-name)
+    ('property-value 'org-files-db-property-value)
+    (_ nil)))
+
+(defun org-files-db--presentation-visible-row (row result)
+  "Return the Rust-prepared visible string for ROW and RESULT."
+  (let ((cells (org-files-db-presentation-row-cells row))
+        segments)
+    (dotimes (index (length cells))
+      (let* ((cell (aref cells index))
+             (segment
+              (copy-sequence
+               (org-files-db-presentation-cell-display-text cell)))
+             (face
+              (org-files-db--presentation-role-face
+               (org-files-db-presentation-cell-role cell) result)))
+        (when (and face (> (length segment) 0))
+          (add-text-properties 0 (length segment) (list 'face face) segment))
+        (push segment segments)))
+    (string-join (nreverse segments) "  ")))
+
+(defun org-files-db--presentation-search-row (row)
+  "Return complete searchable text for presentation ROW."
+  (let ((cells (org-files-db-presentation-row-cells row))
+        values)
+    (dotimes (index (length cells))
+      (let ((value
+             (org-files-db-presentation-cell-search-text
+              (aref cells index))))
+        (unless (string-empty-p value)
+          (push value values))))
+    (string-join (nreverse values) "  ")))
+
+(defun org-files-db--candidate-identity (index)
+  "Return a compact hidden identity suffix for zero-based INDEX."
+  (let ((value (1+ index))
+        characters)
+    (while (> value 0)
+      (push (+ #xe000 (% value org-files-db--candidate-identity-base))
+            characters)
+      (setq value (/ value org-files-db--candidate-identity-base)))
+    (apply #'string #x2063 characters)))
+
+(defun org-files-db--candidate-identity-index (candidate)
+  "Return the zero-based identity encoded at the end of CANDIDATE."
+  (when (stringp candidate)
+    (let* ((end (length candidate))
+           (start end))
+      (while (and (> start 0)
+                  (let ((character (aref candidate (1- start))))
+                    (and (>= character #xe000)
+                         (< character
+                            (+ #xe000 org-files-db--candidate-identity-base)))))
+        (setq start (1- start)))
+      (when (and (< start end)
+                 (> start 0)
+                 (= (aref candidate (1- start)) #x2063))
+        (let ((value 0)
+              (position start))
+          (while (< position end)
+            (setq value
+                  (+ (* value org-files-db--candidate-identity-base)
+                     (- (aref candidate position) #xe000))
+                  position (1+ position)))
+          (and (> value 0) (1- value)))))))
+
+(defun org-files-db--presentation-candidate (presentation row index)
+  "Return one completion candidate for ROW at INDEX in PRESENTATION."
+  (let* ((result (org-files-db--presentation-row-result presentation row))
+         (visible (org-files-db--presentation-visible-row row result))
+         (search (org-files-db--presentation-search-row row))
+         (body (if (string-empty-p search) (string #x2060) search))
+         (body-length (length body))
+         (candidate (concat body (org-files-db--candidate-identity index)))
+         (metadata
+          (list 'org-files-db-presentation-row row
+                'org-files-db-result result
+                'org-files-db-row-context
+                (org-files-db-presentation-row-row-context row)
+                'org-files-db-config
+                (org-files-db-presentation-config presentation)
+                'rear-nonsticky t)))
+    (add-text-properties 0 (length candidate) metadata candidate)
+    (add-text-properties 0 body-length (list 'display visible) candidate)
+    (add-text-properties body-length (length candidate) '(display "") candidate)
+    candidate))
+
+(defun org-files-db--presentation-candidates (presentation)
+  "Return lightweight completion candidates for PRESENTATION."
+  (let* ((rows (org-files-db-presentation-rows presentation))
+         (count (length rows))
+         candidates)
+    (dotimes (index count)
+      (push
+       (org-files-db--presentation-candidate
+        presentation (aref rows index) index)
+       candidates))
+    (nreverse candidates)))
+
+(defun org-files-db--completion-table (candidates)
+  "Return a standard completion table that preserves CANDIDATES order."
+  (lambda (string predicate action)
+    (cond
+     ((eq action 'metadata)
+      '(metadata
+        (display-sort-function . identity)
+        (cycle-sort-function . identity)))
+     ((eq action 'org-files-db--candidates) candidates)
+     (t (complete-with-action action candidates string predicate)))))
+
+(defun org-files-db--completion-candidates (table)
+  "Return the candidate list stored in completion TABLE."
+  (funcall table "" nil 'org-files-db--candidates))
+
+(defun org-files-db--candidate-result (selected presentation)
+  "Return the original result for SELECTED from PRESENTATION."
+  (or (and (stringp selected)
+           (> (length selected) 0)
+           (get-text-property 0 'org-files-db-result selected))
+      (when-let* ((index (org-files-db--candidate-identity-index selected)))
+        (let ((rows (org-files-db-presentation-rows presentation)))
+          (when (< index (length rows))
+            (org-files-db--presentation-row-result
+             presentation (aref rows index)))))))
+
+(defun org-files-db--read-presentation (presentation &optional prompt)
+  "Read one result from PRESENTATION with standard completion and PROMPT."
+  (let ((candidates (org-files-db--presentation-candidates presentation)))
+    (unless candidates
+      (user-error "The query returned no results"))
+    (let ((selected
+           (completing-read
+            (or prompt "Result: ")
+            (org-files-db--completion-table candidates)
+            nil t)))
+      (or (org-files-db--candidate-result selected presentation)
+          (user-error "Selected result is no longer available")))))
 
 (defun org-files-db--presentation-row-result (presentation row)
   "Return the original result for ROW in PRESENTATION."

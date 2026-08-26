@@ -156,7 +156,7 @@ Acceptance criteria:
 - Prefix selection and explicit configuration names work.
 - Setup checks work with multiple named configurations.
 
-** REVIEW Step 3 - Implement PresentationSpec and presentation-json version 2
+** DONE Step 3 - Implement PresentationSpec and presentation-json version 2
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
@@ -215,10 +215,12 @@ Acceptance criteria:
 - The data-only path does not open completion.
 - Unsupported presentation versions fail with a clear error.
 
-** TODO Step 4 - Build lightweight completion and semantic faces
+** REVIEW Step 4 - Build lightweight completion and semantic faces
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
+
+[[./2026-08-26--build-lightweight-completion-and-semantic-faces.org][Task file]]
 
 Goal: Build completion candidates from prepared Rust rows with minimal Emacs-side work.
 
