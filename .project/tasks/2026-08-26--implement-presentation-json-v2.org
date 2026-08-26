@@ -1,0 +1,143 @@
+#+TITLE: Implement PresentationSpec and Presentation JSON Version 2
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-26 Wed 18:25]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Implement Step 3 of the ~org-files-db.el~ rebuild.
+
+* Planning
+
+** Problem summary
+
+The rebuilt package can call ~orgfdb~, but it cannot use the Rust presentation interface yet.
+
+Step 3 needs one serializer for ~PresentationSpec~ and one decoder for ~presentation-json~ version 2.
+
+** Goals
+
+- Serialize flat Emacs column, sort, and row-source configuration to ~PresentationSpec~ JSON.
+- Keep Rust responsible for presentation semantics and presentation validation.
+- Decode ~presentation-json~ version 2 into small Emacs data structures.
+- Keep original results separate from presentation rows.
+- Resolve row results through ~result_index~.
+- Decode roles through ~schemas.role_values~.
+- Preserve ~row_context~ metadata.
+- Treat a null ~display_text~ as ~search_text~.
+- Add ~org-files-db-query-results~ as a data-only query interface.
+
+** Non-goals
+
+- Do not build completion candidates.
+- Do not add faces.
+- Do not run actions.
+- Do not add watcher or cached-view commands.
+- Do not duplicate Rust column support, include inference, sorting, row expansion, width, truncation, padding, or outline construction.
+
+** Architecture
+
+Keep ~PresentationSpec~ serialization and version 2 decoding in ~org-files-db-presentation.el~.
+
+Keep query expression handling and the one-shot presentation call in ~org-files-db-query.el~.
+
+Represent decoded rows and cells with small Emacs structures. Keep the original ~results~ vector once on the presentation response.
+
+Rows store only ~result_index~, ~row_context~, and cells. A helper resolves the original result when a caller needs it.
+
+Use the wire schemas for positional field indexes and semantic role decoding.
+
+** Execution plan
+
+1. Add tests for ~PresentationSpec~ serialization.
+2. Add tests for version 2 row, cell, role, and row-context decoding.
+3. Add tests for shared result references and unsupported versions.
+4. Implement the serializer and decoder in ~org-files-db-presentation.el~.
+5. Implement ~org-files-db-query-results~ in ~org-files-db-query.el~.
+6. Run the available checks and review the changed code.
+
+** Risks & assumptions
+
+~presentation-json~ version 2 is the current Rust client contract.
+
+The data-only query path returns the decoded presentation response. It does not open completion or run an action.
+
+** Open questions
+
+None.
+
+** Proposed checks
+
+- Run the Buttercup tests.
+- Byte-compile the package.
+- Run the repository lint checks.
+- Inspect that no Emacs sorting, truncation, padding, or row expansion exists.
+- Inspect that several rows share one original result through ~result_index~.
+
+* Results
+
+** Approach
+
+~org-files-db-presentation.el~ now owns ~PresentationSpec~ serialization and version 2 decoding.
+
+The serializer maps flat Emacs forms to the Rust JSON shape. It does not keep a local registry of supported columns.
+
+The decoder compiles wire schema positions once per response. Rows and cells use these compiled positions.
+
+Original results stay in one response vector. Each row stores only its ~result_index~, ~row_context~, and decoded cells.
+
+~org-files-db-query-results~ runs one synchronous ~presentation-json~ query and returns the decoded presentation response.
+
+** Changed files
+
+- ~lisp/org-files-db-presentation.el~
+- ~lisp/org-files-db-query.el~
+- ~tests/org-files-db-test.el~
+- ~.project/tasks/todo.org~
+- ~.project/tasks/2026-08-26--implement-presentation-json-v2.org~
+
+** Checks performed
+
+- Compared the serializer with the current Rust ~PresentationSpec~ structures.
+- Compared the decoder with the current ~presentation-json~ version 2 wire format.
+- Checked balanced parentheses in all changed Emacs Lisp files.
+- Checked that the new code contains no sorting, truncation, padding, or row expansion implementation.
+- Checked that the query path contains no shell or asynchronous process path.
+- Checked that role decoding uses ~schemas.role_values~.
+- Checked that row-context decoding uses ~schemas.row_context_shapes~.
+- Checked that wire field indexes compile once per response.
+- Tried ~make ci~.
+
+** Test results
+
+New Buttercup tests cover:
+
+- complete ~PresentationSpec~ serialization
+- width, truncation, outline, sort, and row-source mapping
+- version 2 schema decoding
+- null ~display_text~ fallback
+- semantic role decoding
+- row-context decoding
+- shared original results through ~result_index~
+- invalid result and role indexes
+- unsupported presentation versions
+- default and overridden data-only query options
+- data-only execution without completion or actions
+
+The static checks pass.
+
+~make ci~ stops before the checks because the sandbox does not contain ~eask~.
+
+The sandbox also does not contain Emacs, so the Buttercup tests cannot run here.
+
+** Blockers
+
+Run ~make ci~ in the normal development environment before approval.
+
+** Follow-ups
+
+Step 4 can build completion candidates directly from decoded rows and cells.

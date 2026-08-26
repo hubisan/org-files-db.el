@@ -156,10 +156,12 @@ Acceptance criteria:
 - Prefix selection and explicit configuration names work.
 - Setup checks work with multiple named configurations.
 
-** TODO Step 3 - Implement PresentationSpec and presentation-json version 2
+** REVIEW Step 3 - Implement PresentationSpec and presentation-json version 2
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
+
+[[./2026-08-26--implement-presentation-json-v2.org][Task file]]
 
 Goal: Translate Emacs configuration to Rust ~PresentationSpec~ and decode the Rust response without duplicating presentation work.
 

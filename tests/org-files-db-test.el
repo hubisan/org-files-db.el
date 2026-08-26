@@ -349,6 +349,268 @@
           (expect (alist-get 'read-check report)
                   :to-match "missing database"))))))
 
+
+(describe "presentation-json version 2"
+  (before-each
+    (setq org-files-db-test--directory
+          (make-temp-file "org-files-db-presentation-test-" t)))
+
+  (after-each
+    (when (file-directory-p org-files-db-test--directory)
+      (delete-directory org-files-db-test--directory t)))
+
+  (it "serializes flat Emacs presentation configuration to PresentationSpec JSON"
+    (let* ((json
+            (org-files-db--presentation-spec-json
+             '((outline-path
+                :width (max 80)
+                :truncate (:position right :marker "…")
+                :separator " / "
+                :include-root t
+                :include-match nil)
+               (file-name :width auto))
+             '((priority :direction desc))
+             'tags))
+           (spec (org-files-db--parse-json json))
+           (columns (alist-get 'columns spec))
+           (first (aref columns 0))
+           (second (aref columns 1))
+           (sort (aref (alist-get 'sort spec) 0))
+           (row-source (alist-get 'row_source spec)))
+      (expect (length columns) :to-equal 2)
+      (expect (alist-get 'name first) :to-equal "outline-path")
+      (expect (alist-get 'mode (alist-get 'width first)) :to-equal "max")
+      (expect (alist-get 'value (alist-get 'width first)) :to-equal 80)
+      (expect (alist-get 'position (alist-get 'truncate first)) :to-equal "right")
+      (expect (alist-get 'marker (alist-get 'truncate first)) :to-equal "…")
+      (expect (alist-get 'separator (alist-get 'outline_path first)) :to-equal " / ")
+      (expect (alist-get 'include_root (alist-get 'outline_path first)) :to-equal t)
+      (expect (alist-get 'include_match (alist-get 'outline_path first)) :to-equal :false)
+      (expect (alist-get 'name second) :to-equal "file-name")
+      (expect (alist-get 'mode (alist-get 'width second)) :to-equal "auto")
+      (expect (alist-get 'column sort) :to-equal "priority")
+      (expect (alist-get 'direction sort) :to-equal "desc")
+      (expect (alist-get 'kind row-source) :to-equal "tags")))
+
+  (it "serializes Rust defaults without duplicating presentation semantics"
+    (let* ((json (org-files-db--presentation-spec-json '((title)) nil nil))
+           (spec (org-files-db--parse-json json))
+           (column (aref (alist-get 'columns spec) 0)))
+      (expect (alist-get 'name column) :to-equal "title")
+      (expect (alist-get 'mode (alist-get 'width column)) :to-equal "auto")
+      (expect (alist-get 'truncate column) :to-equal nil)
+      (expect (alist-get 'outline_path column) :to-equal nil)
+      (expect (alist-get 'sort spec) :to-equal [])
+      (expect (alist-get 'row_source spec) :to-equal nil)))
+
+  (it "decodes rows, cells, roles, and row context from version 2 schemas"
+    (let* ((result '((kind . "heading") (level . 2) (title . "Task")))
+           (wire
+            `((presentation_version . 2)
+              (database_id . "db-1")
+              (generation . 7)
+              (results . [,result])
+              (schemas
+               . ((row_fields . ["result_index" "row_context" "cells"])
+                  (cell_fields . ["search_text" "display_text" "role"])
+                  (row_context_shapes
+                   . ((tag . ["kind" "value"])
+                      (effective-property . ["kind" "name" "value"])
+                      (keyword . ["kind" "name" "value"])))
+                  (display_text_null . "same-as-search_text")
+                  (role_encoding . "null-or-index-into-role_values")
+                  (role_values . ["heading" "title" "todo" "done" "priority" "tag"])))
+              (rows
+               . [[0 nil [["Task" nil 1]]]
+                  [0 ["tag" "project"] [["project" "project " 5]]]])))
+           (presentation (org-files-db--decode-presentation wire))
+           (rows (org-files-db-presentation-rows presentation))
+           (first-row (aref rows 0))
+           (second-row (aref rows 1))
+           (first-cell (aref (org-files-db-presentation-row-cells first-row) 0))
+           (second-cell (aref (org-files-db-presentation-row-cells second-row) 0)))
+      (expect (org-files-db-presentation-version presentation) :to-equal 2)
+      (expect (org-files-db-presentation-database-id presentation) :to-equal "db-1")
+      (expect (org-files-db-presentation-generation presentation) :to-equal 7)
+      (expect (length rows) :to-equal 2)
+      (expect (org-files-db-presentation-row-result-index first-row) :to-equal 0)
+      (expect (org-files-db-presentation-row-row-context first-row) :to-equal nil)
+      (expect (org-files-db-presentation-cell-search-text first-cell) :to-equal "Task")
+      (expect (org-files-db-presentation-cell-display-text first-cell) :to-equal "Task")
+      (expect (org-files-db-presentation-cell-role first-cell) :to-equal 'title)
+      (expect (org-files-db-presentation-row-row-context second-row)
+              :to-equal '((kind . "tag") (value . "project")))
+      (expect (org-files-db-presentation-cell-display-text second-cell)
+              :to-equal "project ")
+      (expect (org-files-db-presentation-cell-role second-cell) :to-equal 'tag)
+      (expect (eq (org-files-db--presentation-row-result presentation first-row)
+                  result)
+              :to-equal t)
+      (expect (eq (org-files-db--presentation-row-result presentation second-row)
+                  result)
+              :to-equal t)))
+
+  (it "uses emitted schema field positions instead of fixed row positions"
+    (let* ((result '((kind . "file") (path . "/tmp/a.org")))
+           (wire
+            `((presentation_version . 2)
+              (database_id . "db-2")
+              (generation . 9)
+              (results . [,result])
+              (schemas
+               . ((row_fields . ["cells" "result_index" "row_context"])
+                  (cell_fields . ["role" "display_text" "search_text"])
+                  (row_context_shapes . ((tag . ["value" "kind"])))
+                  (display_text_null . "same-as-search_text")
+                  (role_encoding . "null-or-index-into-role_values")
+                  (role_values . ["file-name"])))
+              (rows . [[[[0 nil "a.org"]] 0 ["project" "tag"]]])))
+           (presentation (org-files-db--decode-presentation wire))
+           (row (aref (org-files-db-presentation-rows presentation) 0))
+           (cell (aref (org-files-db-presentation-row-cells row) 0)))
+      (expect (org-files-db-presentation-row-result-index row) :to-equal 0)
+      (expect (org-files-db-presentation-row-row-context row)
+              :to-equal '((value . "project") (kind . "tag")))
+      (expect (org-files-db-presentation-cell-search-text cell) :to-equal "a.org")
+      (expect (org-files-db-presentation-cell-display-text cell) :to-equal "a.org")
+      (expect (org-files-db-presentation-cell-role cell) :to-equal 'file-name)))
+
+  (it "rejects unsupported presentation versions"
+    (let (message)
+      (condition-case err
+          (org-files-db--decode-presentation
+           '((presentation_version . 3)
+             (database_id . "db")
+             (generation . 1)
+             (results . [])
+             (schemas . nil)
+             (rows . [])))
+        (org-files-db-error
+         (setq message (error-message-string err))))
+      (expect message :to-match "Unsupported presentation version")
+      (expect message :to-match "expected 2")))
+
+  (it "rejects invalid result and role indexes"
+    (let ((base
+           '((presentation_version . 2)
+             (database_id . "db")
+             (generation . 1)
+             (results . [])
+             (schemas
+              . ((row_fields . ["result_index" "row_context" "cells"])
+                 (cell_fields . ["search_text" "display_text" "role"])
+                 (row_context_shapes . nil)
+                 (display_text_null . "same-as-search_text")
+                 (role_encoding . "null-or-index-into-role_values")
+                 (role_values . ["title"])))
+             (rows . [[0 nil []]]))))
+      (expect (org-files-db--decode-presentation base)
+              :to-throw 'org-files-db-error))
+    (let ((wire
+           '((presentation_version . 2)
+             (database_id . "db")
+             (generation . 1)
+             (results . [((kind . "heading"))])
+             (schemas
+              . ((row_fields . ["result_index" "row_context" "cells"])
+                 (cell_fields . ["search_text" "display_text" "role"])
+                 (row_context_shapes . nil)
+                 (display_text_null . "same-as-search_text")
+                 (role_encoding . "null-or-index-into-role_values")
+                 (role_values . ["title"])))
+             (rows . [[0 nil [["Task" nil 5]]]]))))
+      (expect (org-files-db--decode-presentation wire)
+              :to-throw 'org-files-db-error)))
+
+  (it "parses structural query strings without evaluation state"
+    (expect (org-files-db--query-form "(headings (not (done)))")
+            :to-equal '(headings (not (done)))))
+
+  (it "runs the data-only query path with defaults and no completion or actions"
+    (let* ((main (org-files-db-test--config-file "main.toml"))
+           (org-files-db-configs `(("main" . ,main)))
+           (org-files-db-default-config "main")
+           (org-files-db-heading-columns '((title :width (max 40))))
+           (org-files-db-heading-sort '((priority :direction asc)))
+           called-arguments)
+      (cl-letf (((symbol-function 'org-files-db--call-json)
+                 (lambda (arguments &optional _input)
+                   (setq called-arguments arguments)
+                   '((presentation_version . 2)
+                     (database_id . "db")
+                     (generation . 1)
+                     (results . [])
+                     (schemas
+                      . ((row_fields . ["result_index" "row_context" "cells"])
+                         (cell_fields . ["search_text" "display_text" "role"])
+                         (row_context_shapes . nil)
+                         (display_text_null . "same-as-search_text")
+                         (role_encoding . "null-or-index-into-role_values")
+                         (role_values . [])))
+                     (rows . []))))
+                ((symbol-function 'completing-read)
+                 (lambda (&rest _args)
+                   (error "completion must not run")))
+                ((symbol-function 'org-files-db-actions-open-result)
+                 (lambda (&rest _args)
+                   (error "actions must not run"))))
+        (let* ((presentation
+                (org-files-db-query-results '(headings (not (done)))))
+               (spec-index (cl-position "--presentation-spec-json"
+                                        called-arguments :test #'equal))
+               (spec-json (nth (1+ spec-index) called-arguments))
+               (spec (org-files-db--parse-json spec-json)))
+          (expect (org-files-db-presentation-p presentation) :to-equal t)
+          (expect called-arguments
+                  :to-equal
+                  (list "query"
+                        "--format" "presentation-json"
+                        "--presentation-spec-json" spec-json
+                        "--config" (expand-file-name main)
+                        "(headings (not (done)))"))
+          (expect (alist-get 'name (aref (alist-get 'columns spec) 0))
+                  :to-equal "title")
+          (expect (alist-get 'column (aref (alist-get 'sort spec) 0))
+                  :to-equal "priority")))))
+
+  (it "lets data-only callers override config, sorting, and row source"
+    (let* ((main (org-files-db-test--config-file "main.toml"))
+           (work (org-files-db-test--config-file "work.toml"))
+           (org-files-db-configs `(("main" . ,main) ("work" . ,work)))
+           (org-files-db-default-config "main")
+           (org-files-db-heading-sort '((priority :direction asc)))
+           called-arguments)
+      (cl-letf (((symbol-function 'org-files-db--call-json)
+                 (lambda (arguments &optional _input)
+                   (setq called-arguments arguments)
+                   '((presentation_version . 2)
+                     (database_id . "db")
+                     (generation . 1)
+                     (results . [])
+                     (schemas
+                      . ((row_fields . ["result_index" "row_context" "cells"])
+                         (cell_fields . ["search_text" "display_text" "role"])
+                         (row_context_shapes . nil)
+                         (display_text_null . "same-as-search_text")
+                         (role_encoding . "null-or-index-into-role_values")
+                         (role_values . [])))
+                     (rows . [])))))
+        (org-files-db-query-results
+         "(headings)"
+         :config "work"
+         :columns '((tag :width (fixed 12)))
+         :sort nil
+         :row-source 'tags)
+        (let* ((spec-index (cl-position "--presentation-spec-json"
+                                       called-arguments :test #'equal))
+               (spec (org-files-db--parse-json
+                      (nth (1+ spec-index) called-arguments))))
+          (expect (not (null (member (expand-file-name work) called-arguments)))
+                  :to-equal t)
+          (expect (alist-get 'sort spec) :to-equal [])
+          (expect (alist-get 'kind (alist-get 'row_source spec))
+                  :to-equal "tags"))))))
+
 (provide 'org-files-db-test)
 
 ;;; org-files-db-test.el ends here
