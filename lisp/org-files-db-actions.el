@@ -30,7 +30,7 @@
   "Open RESULT at its stored source location.
 The rebuilt navigation implementation is added in a later rebuild step."
   (ignore result)
-  (user-error "org-files-db result navigation is not available yet"))
+  (user-error "Org-files-db result navigation is not available yet"))
 
 (defcustom org-files-db-heading-action #'org-files-db-actions-open-result
   "Default action for heading query results."

@@ -1,0 +1,127 @@
+#+TITLE: Implement the Shared orgfdb Process Layer
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-25 Tue 00:11]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Implement Step 2 of the ~org-files-db.el~ rebuild.
+
+* Planning
+
+** Problem summary
+
+The rebuilt package resolves named configurations but cannot execute ~orgfdb~ yet.
+
+All short-lived CLI commands need one synchronous process implementation.
+
+** Goals
+
+- Resolve ~org-files-db-executable~ to an executable file.
+- Resolve configuration names to readable files.
+- Run ~orgfdb~ without a shell.
+- Pass each CLI argument as a separate process argument.
+- Capture stdout and stderr separately as UTF-8.
+- Report runtime and CLI usage errors with stderr text.
+- Provide raw-output and JSON-output call helpers.
+- Provide one helper for default or prefix-selected configurations.
+- Rebuild ~org-files-db-check-setup~ for named configurations.
+
+** Non-goals
+
+- Do not implement watcher processes.
+- Do not implement ~PresentationSpec~.
+- Do not implement query completion.
+- Do not implement Rust view registration or reads.
+- Do not add asynchronous short-lived CLI calls.
+
+** Architecture
+
+Keep process execution and configuration resolution in ~org-files-db-process.el~.
+
+Use one low-level synchronous process function. Build raw and JSON call helpers on this function.
+
+Use ~make-process~ with a command list. Do not build a shell command string.
+
+Keep the watcher outside this process path because the watcher is long-lived.
+
+** Execution plan
+
+1. Add process and configuration tests for the Step 2 interface.
+2. Add executable resolution and configuration argument helpers.
+3. Add the synchronous process runner and CLI error types.
+4. Add raw-output and JSON-output helpers.
+5. Add default and prefix configuration selection.
+6. Add ~org-files-db-check-setup~.
+7. Run the available checks and review the changed code.
+
+** Risks & assumptions
+
+The process runner must remain small because query and view modules will reuse it.
+
+The setup check uses the read-only ~orgfdb status~ command for the selected configuration.
+
+** Open questions
+
+None.
+
+** Proposed checks
+
+- Run the Buttercup tests.
+- Byte-compile the package.
+- Run the repository lint checks.
+- Inspect the process command construction for shell use.
+- Inspect the rebuilt package for asynchronous short-lived CLI calls.
+
+* Results
+
+** Approach
+
+The process module now owns all short-lived CLI execution.
+
+~org-files-db--run-process~ uses ~make-process~ with a command list. It captures stdout and stderr in separate UTF-8 buffers.
+
+Raw and JSON helpers use this one process path. CLI exit status ~2~ has a separate usage-error type.
+
+Interactive commands can use the default configuration or call the shared prefix-selection helper.
+
+~org-files-db-check-setup~ checks the selected configuration with ~orgfdb status --format json~.
+
+** Changed files
+
+- ~lisp/org-files-db-process.el~
+- ~tests/org-files-db-test.el~
+- ~.project/tasks/todo.org~
+- ~.project/tasks/2026-08-25--implement-shared-orgfdb-process-layer.org~
+
+** Checks performed
+
+- Checked balanced parentheses in the changed Lisp files.
+- Checked that the package uses ~make-process~ only for short-lived process execution.
+- Checked that no short-lived asynchronous process path exists.
+- Checked that no shell command function exists in the rebuilt Lisp files.
+- Compared the setup command with the current ~orgfdb~ CLI documentation.
+- Reviewed the changed code against the Step 2 acceptance criteria.
+- Tried ~make ci~.
+
+** Test results
+
+The static checks pass.
+
+New Buttercup tests cover executable resolution, separate process arguments, UTF-8 output, stderr errors, JSON parsing, configuration selection, and setup checks.
+
+~make ci~ stops before the checks because the sandbox does not contain ~eask~.
+
+The sandbox also does not contain Emacs, so the Buttercup tests cannot run here.
+
+** Blockers
+
+Run ~make ci~ in the normal development environment before approval.
+
+** Follow-ups
+
+Step 3 can use ~org-files-db--call-json~ and the shared configuration helpers for ~presentation-json~.
