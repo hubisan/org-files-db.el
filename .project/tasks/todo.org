@@ -215,7 +215,7 @@ Acceptance criteria:
 - The data-only path does not open completion.
 - Unsupported presentation versions fail with a clear error.
 
-** REVIEW Step 4 - Build lightweight completion and semantic faces
+** DONE Step 4 - Build lightweight completion and semantic faces
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
