@@ -272,10 +272,12 @@ Acceptance criteria:
 - Candidate creation does not recalculate presentation data.
 - Selecting one candidate resolves to the correct original result.
 
-** TODO Step 5 - Implement the new query command and default action flow
+** DONE Step 5 - Implement the new query command and default action flow
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
+
+[[./2026-08-26--implement-new-query-command-and-default-action-flow.org][Task file]]
 
 Goal: Provide one general structural query command on top of the shared presentation pipeline.
 
@@ -323,6 +325,465 @@ Acceptance criteria:
 - The selected action receives the original result.
 - Lisp callers receive the selected original result.
 - Interactive use does not print the complete result object.
+  
+** TODO Refactor Emacs Lisp naming and customization layout
+  :PROPERTIES:
+  :VISIBILITY: folded
+  :END:
+
+Do this task before Step 6.
+
+Goal: Make module ownership clear in private symbol names.
+
+Keep the public user interface independent from the internal file structure.
+
+Do not change runtime behavior in this task.
+
+*** Centralize user customization
+
+Add a small ~org-files-db-core.el~ module.
+
+Move all public ~defcustom~ forms to this module.
+
+This includes:
+
+- ~org-files-db-executable~
+- ~org-files-db-configs~
+- ~org-files-db-default-config~
+- ~org-files-db-heading-columns~
+- ~org-files-db-file-columns~
+- ~org-files-db-link-columns~
+- ~org-files-db-heading-sort~
+- ~org-files-db-file-sort~
+- ~org-files-db-link-sort~
+- ~org-files-db-heading-action~
+- ~org-files-db-file-action~
+- ~org-files-db-link-action~
+- ~org-files-db-views~
+
+Move all public ~defface~ forms to ~org-files-db-core.el~.
+
+Keep the existing short public names.
+
+Do not add internal module names to public customization names.
+
+For example, keep:
+
+#+begin_src emacs-lisp
+org-files-db-heading-columns
+org-files-db-heading-action
+org-files-db-heading-1
+#+end_src
+
+Do not rename them to:
+
+#+begin_src emacs-lisp
+org-files-db-presentation-heading-columns
+org-files-db-actions-heading-action
+org-files-db-presentation-heading-1
+#+end_src
+
+The file layout is an implementation detail.
+
+*** Rename private module symbols
+
+Every private function and private variable must show its owning module.
+
+Use this form:
+
+#+begin_example
+org-files-db-MODULE--NAME
+#+end_example
+
+For example, rename:
+
+#+begin_src emacs-lisp
+org-files-db--resolve-executable
+#+end_src
+
+to:
+
+#+begin_src emacs-lisp
+org-files-db-process--resolve-executable
+#+end_src
+
+Apply the same rule to private variables.
+
+Examples:
+
+#+begin_example
+org-files-db-process--*
+org-files-db-presentation--*
+org-files-db-query--*
+org-files-db-views--*
+org-files-db-actions--*
+org-files-db-core--*
+#+end_example
+
+Do not keep generic ~org-files-db--*~ private symbols when one module clearly owns them.
+
+*** Shared private helpers
+
+Put a private helper in ~org-files-db-core.el~ only when several modules genuinely use it.
+
+Name such helpers:
+
+#+begin_example
+org-files-db-core--*
+#+end_example
+
+Do not move helpers to Core only to shorten another module.
+
+Keep implementation knowledge local to its owning module.
+
+*** Public functions
+
+Do not rename a public function only because its implementation lives in a specific file.
+
+Keep simple package entry points such as:
+
+#+begin_example
+org-files-db-query
+org-files-db-query-results
+org-files-db-view
+org-files-db-check-setup
+org-files-db-current-config
+#+end_example
+
+A public functional group can keep a group prefix when the group is meaningful to users.
+
+For example:
+
+#+begin_example
+org-files-db-actions-open-result
+org-files-db-actions-open-link-target
+#+end_example
+
+Do not use file names as public prefixes without a user-facing reason.
+
+*** Module dependencies
+
+Make ~org-files-db-core.el~ the lowest common module.
+
+Modules that need public customization or faces can require Core.
+
+Avoid circular dependencies.
+
+The intended direction is:
+
+#+begin_example
+org-files-db-core
+↑
+process / presentation / query / views / actions
+↑
+org-files-db
+#+end_example
+
+A specialised module must not require the package entry file only to access customization values.
+
+*** Audit existing symbols
+
+Audit all ~defun~, ~defvar~, ~defconst~, ~defcustom~, and ~defface~ forms in ~lisp/~.
+
+Classify each symbol as:
+
+- public package interface
+- public customization
+- public face
+- module-private implementation
+- shared Core implementation
+
+Rename symbols that do not follow the selected rule.
+
+Update all call sites and tests in the same change.
+
+Do not add compatibility aliases for renamed private symbols.
+
+This package is still in the rebuild phase.
+
+*** Tests
+
+Update the tests for the new private names.
+
+Add tests where useful to make sure that:
+
+- Core loads without specialised modules
+- all public customization variables remain available
+- all public faces remain available
+- package entry points keep their current names
+- renamed private helpers still support the existing behavior
+- loading the package does not create circular dependencies
+
+Do not test private names only to preserve old private names.
+
+*** Validation
+
+Run:
+
+#+begin_src sh
+make fmt
+make ci
+#+end_src
+
+Check the repository for generic private symbols:
+
+#+begin_src sh
+rg 'org-files-db--' lisp tests
+#+end_src
+
+Review each remaining match.
+
+Remove each match unless a specific package-wide reason exists.
+
+*** Acceptance criteria
+
+- ~org-files-db-core.el~ contains the shared public customization.
+- ~org-files-db-core.el~ contains the public faces.
+- Public customization names remain short and stable.
+- Private functions use their owning module prefix.
+- Private variables use their owning module prefix.
+- Generic ~org-files-db--*~ names do not remain without a clear reason.
+- Public entry-point names remain unchanged.
+- Module-specific public actions keep meaningful public names.
+- Core does not contain unrelated implementation logic.
+- Module dependencies contain no cycles.
+- Tests use the new private names where necessary.
+- ~make fmt~ completes successfully.
+- ~make ci~ is green.
+  
+** TODO Use Org TODO keyword faces in completion
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Do this task before Step 6.
+
+Goal: Use the user's Org TODO keyword colors in org-files-db completion.
+
+Keep ~org-files-db-todo~ and ~org-files-db-done~ as fallback faces.
+
+*** Resolve the face from the TODO keyword
+
+For cells with the semantic role ~todo~ or ~done~, read the displayed TODO keyword.
+
+Check ~org-todo-keyword-faces~ for a matching keyword.
+
+If Org defines a custom face for the keyword, use that face.
+
+For example:
+
+#+begin_src emacs-lisp
+(setq org-todo-keyword-faces
+      '(("TODO" . "#FF85C2")
+        ("NEXT" . "#FF256F")
+        ("WAIT" . "#ba843b")
+        ("REVIEW" . "#FF6D3C")
+        ("DONE" . "#2a5c4a")
+        ("CANCEL" . "#2a5c4a")))
+#+end_src
+
+The completion must then use the configured color for each matching keyword.
+
+*** Fallback faces
+
+If ~org-todo-keyword-faces~ has no entry for the keyword, use the semantic role.
+
+Use:
+
+#+begin_example
+todo -> org-files-db-todo
+done -> org-files-db-done
+#+end_example
+
+Keep these fallback faces:
+
+#+begin_src emacs-lisp
+(defface org-files-db-todo
+  '((t (:inherit org-todo)))
+  "Face for open TODO cells in org-files-db completion."
+  :group 'org-files-db)
+
+(defface org-files-db-done
+  '((t (:inherit org-done)))
+  "Face for closed TODO cells in org-files-db completion."
+  :group 'org-files-db)
+#+end_src
+
+This gives the following order:
+
+#+begin_example
+1. Face from org-todo-keyword-faces
+2. org-files-db-todo or org-files-db-done
+3. org-todo or org-done through face inheritance
+#+end_example
+
+*** Keep Rust semantics
+
+Use the Rust semantic role to distinguish open and closed TODO states.
+
+Do not infer the TODO state from the keyword text.
+
+The keyword controls only the specific Emacs face.
+
+Rust remains the source of truth for the semantic role.
+
+*** Use Org-compatible face values
+
+Support the face values that Org accepts in ~org-todo-keyword-faces~.
+
+Do not assume that every configured value is a named face.
+
+Use Org's existing interpretation when practical.
+
+Do not copy unnecessary Org face logic into org-files-db.
+
+*** Keep face resolution local
+
+Put the private resolver in the presentation module.
+
+After the naming refactor, use a name such as:
+
+#+begin_src emacs-lisp
+org-files-db-presentation--todo-face
+#+end_src
+
+Do not put this resolver in Core.
+
+Core owns the public fallback faces.
+
+The presentation module owns the mapping from presentation cells to faces.
+
+*** Tests
+
+Add tests for:
+
+- an open TODO keyword with a custom color
+- a done keyword with a custom color
+- a TODO keyword without a custom face
+- a done keyword without a custom face
+- different keywords with different configured faces
+- the Rust ~todo~ role using the TODO fallback
+- the Rust ~done~ role using the done fallback
+- unknown semantic roles staying unchanged
+
+Tests must not depend on the user's real Emacs configuration.
+
+Bind ~org-todo-keyword-faces~ locally in each relevant test.
+
+*** Acceptance criteria
+
+- Completion uses ~org-todo-keyword-faces~ for matching TODO keywords.
+- Different TODO keywords can use different faces.
+- Different done keywords can use different faces.
+- ~org-files-db-todo~ remains the fallback for open TODO cells.
+- ~org-files-db-done~ remains the fallback for closed TODO cells.
+- Rust still determines whether a cell has the ~todo~ or ~done~ role.
+- Face resolution does not add presentation logic that belongs in Rust.
+- The private resolver uses the presentation module prefix.
+- ~make fmt~ completes successfully.
+- ~make ci~ is green.
+  
+** TODO Simplify heading completion faces
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Do this task before Step 6.
+
+Goal: Use one face for all heading cells in org-files-db completion.
+
+The completion does not need a different face for each Org heading level.
+
+*** Replace level-specific faces
+
+Remove:
+
+#+begin_example
+org-files-db-heading-1
+org-files-db-heading-2
+org-files-db-heading-3
+org-files-db-heading-4
+org-files-db-heading-5
+org-files-db-heading-6
+org-files-db-heading-7
+org-files-db-heading-8
+#+end_example
+
+Add one public fallback face:
+
+#+begin_src emacs-lisp
+(defface org-files-db-heading
+  '((t (:inherit org-level-1 :height 1.0)))
+  "Face for heading cells in org-files-db completion."
+  :group 'org-files-db)
+#+end_src
+
+Keep the normal text height.
+
+Org heading faces can use large font sizes that do not fit completion results.
+
+*** Simplify semantic face resolution
+
+Map the Rust semantic role ~heading~ directly to:
+
+#+begin_example
+org-files-db-heading
+#+end_example
+
+Do not inspect the heading level for face selection.
+
+Remove private code that reads:
+
+#+begin_example
+level
+heading_level
+#+end_example
+
+only to select a heading face.
+
+Keep these result fields if another feature uses them.
+
+Do not remove data from the decoded Rust result.
+
+*** Keep Rust semantics
+
+Rust continues to mark heading cells with the semantic role ~heading~.
+
+Emacs only maps this role to the configured face.
+
+Do not add heading-level presentation logic to Emacs.
+
+*** Core layout
+
+Put ~org-files-db-heading~ in ~org-files-db-core.el~ with the other public faces.
+
+Keep private face-resolution helpers in the presentation module.
+
+Use the module-private naming convention from the naming refactor.
+
+*** Tests
+
+Update the completion face tests.
+
+Test that:
+
+- a level 1 heading uses ~org-files-db-heading~
+- a deeper heading uses the same ~org-files-db-heading~
+- a link heading with ~heading_level~ uses the same face
+- the face uses normal completion text height
+- heading level does not affect face selection
+
+Remove tests for separate heading-level faces.
+
+*** Acceptance criteria
+
+- Only one public org-files-db heading face exists.
+- All heading cells use ~org-files-db-heading~.
+- Heading level does not affect completion styling.
+- No level-specific heading face resolver remains.
+- Rust presentation data remains unchanged.
+- ~make fmt~ completes successfully.
+- ~make ci~ is green.
 
 ** TODO Step 6 - Implement watcher lifecycle management
 :PROPERTIES:

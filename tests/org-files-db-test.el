@@ -32,6 +32,31 @@
       (insert "[database]\n"))
     file))
 
+(defun org-files-db-test--single-result-presentation (result config)
+  "Return a one-row presentation for RESULT and configuration CONFIG."
+  (org-files-db--make-presentation
+   :version 2
+   :database-id "db"
+   :generation 1
+   :config config
+   :results (vector result)
+   :schemas nil
+   :rows
+   (vector
+    (org-files-db--make-presentation-row
+     :result-index 0
+     :row-context nil
+     :cells
+     (vector
+      (org-files-db--make-presentation-cell
+       :search-text "Selected result"
+       :display-text "Selected result"
+       :role 'title))))))
+
+(defun org-files-db-test--select-first-candidate (_prompt table &rest _args)
+  "Return the first candidate from completion TABLE."
+  (car (org-files-db--completion-candidates table)))
+
 (describe "clean package foundation"
           (before-each
            (setq org-files-db-test--directory
@@ -840,6 +865,173 @@
                    (org-files-db-presentation-config
                     (org-files-db-query-results '(files) :config "work"))
                    :to-equal "work")))))
+
+
+(describe "public structural query command"
+          (it "uses the target-specific default action for headings files and links"
+              (dolist (case '(((headings) . headings)
+                              ((files) . files)
+                              ((links) . links)))
+                (let* ((query (car case))
+                       (target (cdr case))
+                       (result `((kind . ,(symbol-name target))))
+                       (presentation
+                        (org-files-db-test--single-result-presentation result "main"))
+                       (called nil)
+                       (org-files-db-heading-action
+                        (lambda (value) (setq called (list 'headings value))))
+                       (org-files-db-file-action
+                        (lambda (value) (setq called (list 'files value))))
+                       (org-files-db-link-action
+                        (lambda (value) (setq called (list 'links value)))))
+                  (cl-letf (((symbol-function 'org-files-db-query-results)
+                             (lambda (&rest _args) presentation))
+                            ((symbol-function 'completing-read)
+                             #'org-files-db-test--select-first-candidate))
+                    (expect (org-files-db-query query) :to-equal result)
+                    (expect (car called) :to-equal target)
+                    (expect (cadr called) :to-be result)))))
+
+          (it "lets a per-call action override the target default"
+              (let* ((result '((kind . "heading") (title . "Task")))
+                     (presentation
+                      (org-files-db-test--single-result-presentation result "main"))
+                     (default-called nil)
+                     (override-called nil)
+                     (org-files-db-heading-action
+                      (lambda (_value) (setq default-called t))))
+                (cl-letf (((symbol-function 'org-files-db-query-results)
+                           (lambda (&rest _args) presentation))
+                          ((symbol-function 'completing-read)
+                           #'org-files-db-test--select-first-candidate))
+                  (expect
+                   (org-files-db-query
+                    '(headings)
+                    :action (lambda (value) (setq override-called value)))
+                   :to-equal result)
+                  (expect default-called :to-equal nil)
+                  (expect override-called :to-be result))))
+
+          (it "passes per-call presentation and configuration overrides to the data path"
+              (let* ((result '((kind . "heading")))
+                     (presentation
+                      (org-files-db-test--single-result-presentation result "work"))
+                     (called-arguments nil)
+                     (org-files-db-heading-action #'ignore))
+                (cl-letf (((symbol-function 'org-files-db-query-results)
+                           (lambda (query &rest arguments)
+                             (setq called-arguments (cons query arguments))
+                             presentation))
+                          ((symbol-function 'completing-read)
+                           #'org-files-db-test--select-first-candidate))
+                  (org-files-db-query
+                   '(headings (not (done)))
+                   :config "work"
+                   :columns '((title :width (max 40)))
+                   :sort '((priority :direction asc))
+                   :row-source 'tags)
+                  (expect (car called-arguments)
+                          :to-equal '(headings (not (done))))
+                  (expect (plist-get (cdr called-arguments) :config)
+                          :to-equal "work")
+                  (expect (plist-get (cdr called-arguments) :columns)
+                          :to-equal '((title :width (max 40))))
+                  (expect (not (null (plist-member (cdr called-arguments) :sort)))
+                          :to-equal t)
+                  (expect (plist-get (cdr called-arguments) :sort)
+                          :to-equal '((priority :direction asc)))
+                  (expect (plist-get (cdr called-arguments) :row-source)
+                          :to-equal 'tags))))
+
+          (it "provides the effective configuration only while the action runs"
+              (let* ((result '((kind . "file") (path . "/tmp/example.org")))
+                     (presentation
+                      (org-files-db-test--single-result-presentation result "work"))
+                     (seen-config nil)
+                     (org-files-db-file-action
+                      (lambda (_value)
+                        (setq seen-config (org-files-db-current-config)))))
+                (expect (org-files-db-current-config) :to-equal nil)
+                (cl-letf (((symbol-function 'org-files-db-query-results)
+                           (lambda (&rest _args) presentation))
+                          ((symbol-function 'completing-read)
+                           #'org-files-db-test--select-first-candidate))
+                  (expect (org-files-db-query '(files)) :to-equal result))
+                (expect seen-config :to-equal "work")
+                (expect (org-files-db-current-config) :to-equal nil)))
+
+          (it "uses the default configuration for an interactive query without a prefix"
+              (let* ((result '((kind . "heading")))
+                     (presentation
+                      (org-files-db-test--single-result-presentation result "main"))
+                     (seen-prefix 'unset)
+                     (seen-config nil)
+                     (org-files-db-heading-action #'ignore))
+                (cl-letf (((symbol-function 'org-files-db--read-query)
+                           (lambda () '(headings)))
+                          ((symbol-function 'org-files-db--interactive-config-name)
+                           (lambda (&optional prefix)
+                             (setq seen-prefix prefix)
+                             "main"))
+                          ((symbol-function 'org-files-db-query-results)
+                           (lambda (_query &rest arguments)
+                             (setq seen-config (plist-get arguments :config))
+                             presentation))
+                          ((symbol-function 'completing-read)
+                           #'org-files-db-test--select-first-candidate))
+                  (let ((current-prefix-arg nil))
+                    (call-interactively #'org-files-db-query)))
+                (expect seen-prefix :to-equal nil)
+                (expect seen-config :to-equal "main")))
+
+          (it "lets an interactive prefix select another configuration"
+              (let* ((result '((kind . "heading")))
+                     (presentation
+                      (org-files-db-test--single-result-presentation result "work"))
+                     (seen-prefix nil)
+                     (seen-config nil)
+                     (org-files-db-heading-action #'ignore))
+                (cl-letf (((symbol-function 'org-files-db--read-query)
+                           (lambda () '(headings)))
+                          ((symbol-function 'org-files-db--interactive-config-name)
+                           (lambda (&optional prefix)
+                             (setq seen-prefix prefix)
+                             "work"))
+                          ((symbol-function 'org-files-db-query-results)
+                           (lambda (_query &rest arguments)
+                             (setq seen-config (plist-get arguments :config))
+                             presentation))
+                          ((symbol-function 'completing-read)
+                           #'org-files-db-test--select-first-candidate))
+                  (let ((current-prefix-arg '(4)))
+                    (call-interactively #'org-files-db-query)))
+                (expect seen-prefix :to-equal '(4))
+                (expect seen-config :to-equal "work")))
+
+          (it "does not print the selected result from the query command"
+              (let* ((result '((kind . "heading") (title . "Private data")))
+                     (presentation
+                      (org-files-db-test--single-result-presentation result "main"))
+                     (messages nil)
+                     (org-files-db-heading-action #'ignore))
+                (cl-letf (((symbol-function 'org-files-db-query-results)
+                           (lambda (&rest _args) presentation))
+                          ((symbol-function 'completing-read)
+                           #'org-files-db-test--select-first-candidate)
+                          ((symbol-function 'message)
+                           (lambda (&rest args) (push args messages))))
+                  (expect (org-files-db-query '(headings)) :to-equal result))
+                (expect messages :to-equal nil)))
+
+          (it "rejects a non-callable action before execution"
+              (cl-letf (((symbol-function 'org-files-db-query-results)
+                         (lambda (&rest _args)
+                           (error "Query must not run for an invalid action")))
+                        ((symbol-function 'completing-read)
+                         (lambda (&rest _args)
+                           (error "Completion must not run for an invalid action"))))
+                (expect (org-files-db-query '(headings) :action 'not-a-function)
+                        :to-throw 'user-error))))
 
 (provide 'org-files-db-test)
 

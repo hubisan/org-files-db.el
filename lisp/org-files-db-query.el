@@ -19,14 +19,24 @@
 
 ;;; Commentary:
 
-;; Structural query data access for the rebuilt client.
-;; Interactive completion and action execution are added in a later step.
+;; Structural query data access and the public interactive query command.
+;; All result display data comes from the shared Rust presentation pipeline.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'subr-x)
 (require 'org-files-db-presentation)
+(require 'org-files-db-actions)
+
+(defvar org-files-db-query-history nil
+  "History for interactive structural org-files-db queries.")
+
+(defun org-files-db--read-query ()
+  "Read and return one structural org-files-db query form."
+  (org-files-db--query-form
+   (read-from-minibuffer "orgfdb query: " nil nil nil
+                         'org-files-db-query-history)))
 
 (defun org-files-db--query-form (query)
   "Return QUERY as one Emacs Lisp structural query form."
@@ -85,6 +95,48 @@ presentation forms.  This function does not open completion or run an action."
             (org-files-db--call-json arguments))))
       (setf (org-files-db-presentation-config presentation) config-name)
       presentation)))
+
+(defun org-files-db--effective-action (target action)
+  "Return ACTION or the configured default action for TARGET."
+  (let ((effective-action (or action (org-files-db--default-action target))))
+    (unless (functionp effective-action)
+      (user-error "Org-files-db action is not callable: %S" effective-action))
+    effective-action))
+
+(defun org-files-db--run-presentation-action (presentation target &optional action)
+  "Select one row from PRESENTATION and run ACTION for TARGET.
+Use the configured default action when ACTION is nil.  Return the selected
+original result."
+  (let* ((effective-action (org-files-db--effective-action target action))
+         (result (org-files-db--read-presentation presentation))
+         (org-files-db--current-action-config
+          (org-files-db-presentation-config presentation)))
+    (funcall effective-action result)
+    result))
+
+;;;###autoload
+(cl-defun org-files-db-query
+    (query &key config columns (sort nil sort-supplied-p) row-source action)
+  "Run structural QUERY, select one result, and execute its action.
+CONFIG is a name from `org-files-db-configs'.  COLUMNS, SORT, and ROW-SOURCE
+override the configured presentation defaults.  ACTION overrides the default
+action for the query target.  Return the selected original result.
+
+With an interactive prefix argument, select the configuration before running
+the query."
+  (interactive
+   (list (org-files-db--read-query)
+         :config (org-files-db--interactive-config-name current-prefix-arg)))
+  (let* ((target (org-files-db--query-target query))
+         (effective-action (org-files-db--effective-action target action))
+         (arguments (list :config config
+                          :columns columns
+                          :row-source row-source))
+         (arguments (if sort-supplied-p
+                        (append arguments (list :sort sort))
+                      arguments))
+         (presentation (apply #'org-files-db-query-results query arguments)))
+    (org-files-db--run-presentation-action presentation target effective-action)))
 
 (provide 'org-files-db-query)
 

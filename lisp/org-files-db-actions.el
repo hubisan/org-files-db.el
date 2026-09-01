@@ -19,12 +19,20 @@
 
 ;;; Commentary:
 
-;; Default action configuration for the rebuilt client.
-;; Result navigation is added after the new query pipeline exists.
+;; Default action configuration and dynamic action context for the rebuilt
+;; client.  Result navigation is added in a later rebuild step.
 
 ;;; Code:
 
 (require 'org-files-db-process)
+
+(defvar org-files-db--current-action-config nil
+  "Effective configuration name while an org-files-db action runs.")
+
+(defun org-files-db-current-config ()
+  "Return the effective configuration name for the current result action.
+Return nil outside an org-files-db result action."
+  org-files-db--current-action-config)
 
 (defun org-files-db-actions-open-result (result)
   "Open RESULT at its stored source location.
