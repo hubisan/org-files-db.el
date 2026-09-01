@@ -326,7 +326,7 @@ Acceptance criteria:
 - Lisp callers receive the selected original result.
 - Interactive use does not print the complete result object.
   
-** TODO Refactor Emacs Lisp naming and customization layout
+** DONE Refactor Emacs Lisp naming and customization layout
   :PROPERTIES:
   :VISIBILITY: folded
   :END:
@@ -551,7 +551,7 @@ Remove each match unless a specific package-wide reason exists.
 - ~make fmt~ completes successfully.
 - ~make ci~ is green.
   
-** TODO Use Org TODO keyword faces in completion
+** DONE Use Org TODO keyword faces in completion
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
