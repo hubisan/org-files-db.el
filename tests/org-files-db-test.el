@@ -772,6 +772,62 @@
                 (expect (org-files-db-presentation--role-face 'future-role result)
                         :to-equal nil)))
 
+          (it "uses Org TODO keyword faces before semantic fallback faces"
+              (let ((org-todo-keyword-faces
+                     '(("REVIEW" . org-warning)
+                       ("DONE" . "green")
+                       ("CANCEL" . (:foreground "blue" :weight bold))
+                       ("WAIT" . "orange")))
+                    (result '((kind . "heading") (level . 2))))
+                (expect
+                 (org-files-db-presentation--role-face 'todo result "REVIEW")
+                 :to-equal 'org-warning)
+                (expect
+                 (org-files-db-presentation--role-face 'done result "DONE")
+                 :to-equal
+                 (org-face-from-face-or-color 'todo 'org-todo "green"))
+                (expect
+                 (org-files-db-presentation--role-face 'done result "CANCEL")
+                 :to-equal '(:foreground "blue" :weight bold))
+                (expect
+                 (org-files-db-presentation--role-face 'todo result "WAIT")
+                 :to-equal
+                 (org-face-from-face-or-color 'todo 'org-todo "orange"))
+                (expect
+                 (org-files-db-presentation--role-face 'todo result "NEXT")
+                 :to-equal 'org-files-db-todo)
+                (expect
+                 (org-files-db-presentation--role-face 'done result "CLOSED")
+                 :to-equal 'org-files-db-done)))
+
+          (it "uses the Rust TODO role for fallback state"
+              (let ((org-todo-keyword-faces nil)
+                    (result '((kind . "heading") (level . 1))))
+                (expect
+                 (org-files-db-presentation--role-face 'todo result "DONE")
+                 :to-equal 'org-files-db-todo)
+                (expect
+                 (org-files-db-presentation--role-face 'done result "TODO")
+                 :to-equal 'org-files-db-done)))
+
+          (it "uses full TODO search text when display text is formatted"
+              (let* ((org-todo-keyword-faces '(("REVIEW" . org-warning)))
+                     (result '((kind . "heading") (level . 1)))
+                     (row
+                      (org-files-db-presentation--make-presentation-row
+                       :result-index 0
+                       :row-context nil
+                       :cells
+                       (vector
+                        (org-files-db-presentation--make-presentation-cell
+                         :search-text "REVIEW"
+                         :display-text "REVI…     "
+                         :role 'todo))))
+                     (visible
+                      (org-files-db-presentation--visible-row row result)))
+                (expect (get-text-property 0 'face visible)
+                        :to-equal 'org-warning)))
+
           (it "defines heading faces with normal completion text height"
               (dolist (face '(org-files-db-heading-1
                               org-files-db-heading-2

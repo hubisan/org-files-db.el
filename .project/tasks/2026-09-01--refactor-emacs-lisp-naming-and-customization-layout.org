@@ -1,4 +1,4 @@
-* REVIEW Refactor Emacs Lisp naming and customization layout
+* DONE Refactor Emacs Lisp naming and customization layout
 :PROPERTIES:
 :VISIBILITY: folded
 :END:

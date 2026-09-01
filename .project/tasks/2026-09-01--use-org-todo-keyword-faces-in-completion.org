@@ -1,0 +1,41 @@
+* REVIEW Use Org TODO keyword faces in completion
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Use the user's Org TODO keyword faces in org-files-db completion.
+
+Keep Rust as the source of truth for the ~todo~ and ~done~ semantic roles.
+
+** Implemented
+
+Added ~org-files-db-presentation--todo-face~ in the presentation module.
+
+For ~todo~ and ~done~ cells:
+
+- use a matching entry from ~org-todo-keyword-faces~ first
+- use Org's existing face-or-color interpretation
+- fall back to ~org-files-db-todo~ for the Rust ~todo~ role
+- fall back to ~org-files-db-done~ for the Rust ~done~ role
+
+The lookup uses the full Rust ~search_text~, not padded or truncated ~display_text~.
+
+Added tests for custom symbols, property lists, colors, fallbacks, Rust role ownership, and formatted display text.
+
+** Validation
+
+Run:
+
+#+begin_src sh
+make fmt
+make ci
+#+end_src
+
+** Acceptance criteria
+
+- Matching TODO keywords use ~org-todo-keyword-faces~.
+- Org-compatible face values work.
+- Rust determines the ~todo~ or ~done~ fallback.
+- Unknown semantic roles remain unchanged.
+- ~make fmt~ completes successfully.
+- ~make ci~ is green.

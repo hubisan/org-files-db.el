@@ -517,15 +517,23 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
         (min 8 level)
       1)))
 
-(defun org-files-db-presentation--role-face (role result)
-  "Return the Emacs face for semantic ROLE and original RESULT."
+(defun org-files-db-presentation--todo-face (keyword role)
+  "Return the face for TODO KEYWORD with semantic ROLE."
+  (or (org-face-from-face-or-color
+       'todo 'org-todo (cdr (assoc keyword org-todo-keyword-faces)))
+      (pcase role
+        ('todo 'org-files-db-todo)
+        ('done 'org-files-db-done))))
+
+(defun org-files-db-presentation--role-face (role result &optional cell-text)
+  "Return the face for semantic ROLE, original RESULT, and CELL-TEXT."
   (pcase role
     ('heading
      (aref org-files-db-presentation--heading-faces
            (1- (org-files-db-presentation--result-level result))))
     ('title 'org-files-db-title)
-    ('todo 'org-files-db-todo)
-    ('done 'org-files-db-done)
+    ((or 'todo 'done)
+     (org-files-db-presentation--todo-face cell-text role))
     ('priority 'org-files-db-priority)
     ('tag 'org-files-db-tag)
     ('date 'org-files-db-date)
@@ -548,7 +556,9 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
                (org-files-db-presentation-cell-display-text cell)))
              (face
               (org-files-db-presentation--role-face
-               (org-files-db-presentation-cell-role cell) result)))
+               (org-files-db-presentation-cell-role cell)
+               result
+               (org-files-db-presentation-cell-search-text cell))))
         (when (and face (> (length segment) 0))
           (add-text-properties 0 (length segment) (list 'face face) segment))
         (push segment segments)))
