@@ -19,20 +19,20 @@
 
 ;;; Commentary:
 
-;; Default action configuration and dynamic action context for the rebuilt
-;; client.  Result navigation is added in a later rebuild step.
+;; Default action selection and dynamic action context for the rebuilt client.
+;; Result navigation is added in a later rebuild step.
 
 ;;; Code:
 
-(require 'org-files-db-process)
+(require 'org-files-db-core)
 
-(defvar org-files-db--current-action-config nil
+(defvar org-files-db-actions--current-action-config nil
   "Effective configuration name while an org-files-db action runs.")
 
 (defun org-files-db-current-config ()
   "Return the effective configuration name for the current result action.
 Return nil outside an org-files-db result action."
-  org-files-db--current-action-config)
+  org-files-db-actions--current-action-config)
 
 (defun org-files-db-actions-open-result (result)
   "Open RESULT at its stored source location.
@@ -40,22 +40,7 @@ The rebuilt navigation implementation is added in a later rebuild step."
   (ignore result)
   (user-error "Org-files-db result navigation is not available yet"))
 
-(defcustom org-files-db-heading-action #'org-files-db-actions-open-result
-  "Default action for heading query results."
-  :type 'function
-  :group 'org-files-db)
-
-(defcustom org-files-db-file-action #'org-files-db-actions-open-result
-  "Default action for file query results."
-  :type 'function
-  :group 'org-files-db)
-
-(defcustom org-files-db-link-action #'org-files-db-actions-open-result
-  "Default action for link query results."
-  :type 'function
-  :group 'org-files-db)
-
-(defun org-files-db--default-action (target)
+(defun org-files-db-actions--default-action (target)
   "Return the configured default action for TARGET."
   (pcase target
     ('headings org-files-db-heading-action)

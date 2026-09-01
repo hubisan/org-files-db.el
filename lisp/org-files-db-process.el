@@ -25,42 +25,19 @@
 ;;; Code:
 
 (require 'json)
-(require 'org)
+(require 'org-files-db-core)
 (require 'subr-x)
 
-(defgroup org-files-db nil
-  "Emacs interface for orgfdb."
-  :group 'org
-  :prefix "org-files-db-")
-
-(define-error 'org-files-db-error "org-files-db error")
 (define-error 'org-files-db-cli-error
               "orgfdb command failed" 'org-files-db-error)
 (define-error 'org-files-db-cli-usage-error
               "Invalid orgfdb command usage" 'org-files-db-cli-error)
 
-(defcustom org-files-db-executable "orgfdb"
-  "Path or command name of the orgfdb executable."
-  :type 'string
-  :group 'org-files-db)
-
-(defcustom org-files-db-configs nil
-  "Named orgfdb configuration files.
-Each entry has the form (NAME . FILE).  NAME is a unique non-empty string.
-FILE is the configuration file for that name."
-  :type '(alist :key-type string :value-type file)
-  :group 'org-files-db)
-
-(defcustom org-files-db-default-config nil
-  "Name of the default entry in `org-files-db-configs'."
-  :type '(choice (const :tag "Not configured" nil) string)
-  :group 'org-files-db)
-
-(defun org-files-db--resolve-executable ()
+(defun org-files-db-process--resolve-executable ()
   "Return the absolute path to `org-files-db-executable'."
   (unless (and (stringp org-files-db-executable)
                (not (string-empty-p org-files-db-executable)))
-    (user-error "Org-files-db-executable must be a non-empty string"))
+    (user-error "The value of org-files-db-executable must be a non-empty string"))
   (let ((path
          (if (file-name-directory org-files-db-executable)
              (expand-file-name org-files-db-executable)
@@ -69,10 +46,10 @@ FILE is the configuration file for that name."
       (user-error "Cannot find orgfdb executable: %s"
                   org-files-db-executable))
     (unless (file-executable-p path)
-      (user-error "Orgfdb executable is not executable: %s" path))
+      (user-error "The orgfdb executable is not executable: %s" path))
     path))
 
-(defun org-files-db--validated-configs ()
+(defun org-files-db-process--validated-configs ()
   "Return validated `org-files-db-configs'.
 Signal a user error for invalid entries or duplicate names.
 If configurations exist, require a valid `org-files-db-default-config'."
@@ -91,7 +68,7 @@ If configurations exist, require a valid `org-files-db-default-config'."
         (progn
           (unless (and (stringp org-files-db-default-config)
                        (not (string-empty-p org-files-db-default-config)))
-            (user-error "Org-files-db-default-config is not configured"))
+            (user-error "No org-files-db-default-config is configured"))
           (unless (gethash org-files-db-default-config seen)
             (user-error "Unknown default org-files-db configuration: %s"
                         org-files-db-default-config)))
@@ -100,65 +77,65 @@ If configurations exist, require a valid `org-files-db-default-config'."
                     org-files-db-default-config)))
     org-files-db-configs))
 
-(defun org-files-db--config-entry (name)
+(defun org-files-db-process--config-entry (name)
   "Return the configuration entry for NAME.
 Signal a user error if NAME does not exist."
-  (org-files-db--validated-configs)
+  (org-files-db-process--validated-configs)
   (or (assoc name org-files-db-configs)
       (user-error "Unknown org-files-db configuration: %s" name)))
 
-(defun org-files-db--config-name (&optional name)
+(defun org-files-db-process--config-name (&optional name)
   "Return a validated configuration NAME.
 Use `org-files-db-default-config' when NAME is nil."
   (let ((effective-name (or name org-files-db-default-config)))
     (unless (and (stringp effective-name)
                  (not (string-empty-p effective-name)))
       (user-error "No org-files-db configuration is selected"))
-    (car (org-files-db--config-entry effective-name))))
+    (car (org-files-db-process--config-entry effective-name))))
 
-(defun org-files-db--config-file (&optional name)
+(defun org-files-db-process--config-file (&optional name)
   "Return the readable configuration file for NAME.
 Use `org-files-db-default-config' when NAME is nil."
-  (let* ((effective-name (org-files-db--config-name name))
-         (entry (org-files-db--config-entry effective-name))
+  (let* ((effective-name (org-files-db-process--config-name name))
+         (entry (org-files-db-process--config-entry effective-name))
          (file (expand-file-name (cdr entry))))
     (unless (and (file-regular-p file) (file-readable-p file))
-      (user-error "Org-files-db configuration is not readable: %s" file))
+      (user-error "The org-files-db configuration is not readable: %s" file))
     file))
 
-(defun org-files-db--config-arguments (&optional name)
+(defun org-files-db-process--config-arguments (&optional name)
   "Return orgfdb configuration arguments for configuration NAME.
 Use `org-files-db-default-config' when NAME is nil."
-  (list "--config" (org-files-db--config-file name)))
+  (list "--config" (org-files-db-process--config-file name)))
 
-(defun org-files-db--read-config-name ()
+(defun org-files-db-process--read-config-name ()
   "Read and return one configured orgfdb configuration name."
-  (let* ((configs (org-files-db--validated-configs))
+  (let* ((configs (org-files-db-process--validated-configs))
          (names (mapcar #'car configs)))
     (unless names
       (user-error "No org-files-db configurations are configured"))
-    (org-files-db--config-name
+    (org-files-db-process--config-name
      (completing-read "orgfdb configuration: " names nil t nil nil
                       org-files-db-default-config))))
 
-(defun org-files-db--interactive-config-name (&optional prefix)
+(defun org-files-db-process--interactive-config-name (&optional prefix)
   "Return the configuration name for an interactive command.
 When PREFIX is non-nil, let the user select a configured name.
 Otherwise, return `org-files-db-default-config'."
   (if prefix
-      (org-files-db--read-config-name)
-    (org-files-db--config-name)))
+      (org-files-db-process--read-config-name)
+    (org-files-db-process--config-name)))
 
-(defun org-files-db--buffer-string (buffer)
+(defun org-files-db-process--buffer-string (buffer)
   "Return BUFFER contents without text properties."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (buffer-substring-no-properties (point-min) (point-max)))))
 
-(defun org-files-db--run-process (arguments &optional input)
+(defun org-files-db-process--run-process (arguments &optional input)
   "Run orgfdb synchronously with ARGUMENTS and optional standard INPUT.
 Return a plist with :status, :stdout, and :stderr."
-  (let* ((program (org-files-db--resolve-executable))
+  (let* ((program (org-files-db-process--resolve-executable))
          (stdout (generate-new-buffer " *org-files-db-stdout*"))
          (stderr (generate-new-buffer " *org-files-db-stderr*"))
          process)
@@ -180,8 +157,8 @@ Return a plist with :status, :stdout, and :stderr."
           (while (process-live-p process)
             (accept-process-output process 0.05))
           (list :status (process-exit-status process)
-                :stdout (org-files-db--buffer-string stdout)
-                :stderr (org-files-db--buffer-string stderr)))
+                :stdout (org-files-db-process--buffer-string stdout)
+                :stderr (org-files-db-process--buffer-string stderr)))
       (when (and process (process-live-p process))
         (delete-process process))
       (when (buffer-live-p stdout)
@@ -189,16 +166,16 @@ Return a plist with :status, :stdout, and :stderr."
       (when (buffer-live-p stderr)
         (kill-buffer stderr)))))
 
-(defun org-files-db--error-message (status stderr)
+(defun org-files-db-process--error-message (status stderr)
   "Return an orgfdb error message for STATUS and STDERR."
   (let ((text (string-trim (or stderr ""))))
     (if (string-empty-p text)
         (format "orgfdb exited with status %d" status)
       (format "orgfdb exited with status %d: %s" status text))))
 
-(defun org-files-db--signal-cli-error (status stderr)
+(defun org-files-db-process--signal-cli-error (status stderr)
   "Signal an orgfdb error for STATUS and STDERR."
-  (let ((data (list (org-files-db--error-message status stderr)
+  (let ((data (list (org-files-db-process--error-message status stderr)
                     status
                     (string-trim (or stderr "")))))
     (signal (if (= status 2)
@@ -206,18 +183,18 @@ Return a plist with :status, :stdout, and :stderr."
               'org-files-db-cli-error)
             data)))
 
-(defun org-files-db--call-raw (arguments &optional input)
+(defun org-files-db-process--call-raw (arguments &optional input)
   "Run orgfdb with ARGUMENTS and optional standard INPUT.
 Return stdout as a string."
-  (let* ((result (org-files-db--run-process arguments input))
+  (let* ((result (org-files-db-process--run-process arguments input))
          (status (plist-get result :status))
          (stdout (plist-get result :stdout))
          (stderr (plist-get result :stderr)))
     (if (zerop status)
         stdout
-      (org-files-db--signal-cli-error status stderr))))
+      (org-files-db-process--signal-cli-error status stderr))))
 
-(defun org-files-db--parse-json (text)
+(defun org-files-db-process--parse-json (text)
   "Parse JSON TEXT into alists and vectors."
   (condition-case err
       (json-parse-string text
@@ -230,30 +207,30 @@ Return stdout as a string."
              (list (format "Invalid JSON from orgfdb: %s"
                            (error-message-string err)))))))
 
-(defun org-files-db--call-json (arguments &optional input)
+(defun org-files-db-process--call-json (arguments &optional input)
   "Run orgfdb with ARGUMENTS and optional standard INPUT.
 Parse and return the JSON stdout."
-  (org-files-db--parse-json
-   (org-files-db--call-raw arguments input)))
+  (org-files-db-process--parse-json
+   (org-files-db-process--call-raw arguments input)))
 
 ;;;###autoload
 (defun org-files-db-check-setup (&optional config-name)
   "Check orgfdb and the selected configuration CONFIG-NAME.
 Use the default configuration when CONFIG-NAME is nil.
 With an interactive prefix argument, let the user select a configuration."
-  (interactive (list (org-files-db--interactive-config-name
+  (interactive (list (org-files-db-process--interactive-config-name
                       current-prefix-arg)))
-  (let* ((name (org-files-db--config-name config-name))
-         (executable (org-files-db--resolve-executable))
-         (config-file (org-files-db--config-file name))
+  (let* ((name (org-files-db-process--config-name config-name))
+         (executable (org-files-db-process--resolve-executable))
+         (config-file (org-files-db-process--config-file name))
          (version (string-trim
-                   (org-files-db--call-raw '("--version"))))
+                   (org-files-db-process--call-raw '("--version"))))
          (read-check
           (condition-case err
               (progn
-                (org-files-db--call-json
+                (org-files-db-process--call-json
                  (append '("status" "--format" "json")
-                         (org-files-db--config-arguments name)))
+                         (org-files-db-process--config-arguments name)))
                 "ok")
             (error (error-message-string err))))
          (report

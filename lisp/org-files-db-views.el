@@ -19,30 +19,23 @@
 
 ;;; Commentary:
 
-;; Public named view configuration for the rebuilt client.
+;; Named view validation for the rebuilt client.
 ;; View execution and Rust cache integration are added in later rebuild steps.
 
 ;;; Code:
 
+(require 'org-files-db-core)
 (require 'org-files-db-process)
 (require 'subr-x)
 
-(defcustom org-files-db-views nil
-  "Named org-files-db query views.
-Each entry starts with a unique view name.  A :config value selects one
-entry from `org-files-db-configs'.  A view without :config uses
-`org-files-db-default-config'."
-  :type '(repeat sexp)
-  :group 'org-files-db)
-
-(defun org-files-db--view-name (view)
+(defun org-files-db-views--name (view)
   "Return the validated name of VIEW."
   (let ((name (car-safe view)))
     (unless (and (stringp name) (not (string-empty-p name)))
       (user-error "Invalid org-files-db view name: %S" name))
     name))
 
-(defun org-files-db--view-config-name (view)
+(defun org-files-db-views--config-name (view)
   "Return the validated effective configuration name for VIEW."
   (let* ((properties (cdr view))
          (has-config (plist-member properties :config))
@@ -51,22 +44,22 @@ entry from `org-files-db-configs'.  A view without :config uses
                    org-files-db-default-config)))
     (unless (and (stringp config) (not (string-empty-p config)))
       (user-error "View `%s' has no valid configuration"
-                  (org-files-db--view-name view)))
-    (org-files-db--config-name config)))
+                  (org-files-db-views--name view)))
+    (org-files-db-process--config-name config)))
 
-(defun org-files-db--validate-views ()
+(defun org-files-db-views--validate-views ()
   "Validate `org-files-db-views' and return it."
   (let ((seen (make-hash-table :test #'equal)))
-    (org-files-db--validated-configs)
+    (org-files-db-process--validated-configs)
     (dolist (view org-files-db-views)
       (unless (consp view)
         (user-error "Invalid org-files-db view: %S" view))
-      (let ((name (org-files-db--view-name view)))
+      (let ((name (org-files-db-views--name view)))
         (when (gethash name seen)
           (user-error "Duplicate org-files-db view name: %s" name))
         (puthash name t seen))
-      (org-files-db--config-file
-       (org-files-db--view-config-name view)))
+      (org-files-db-process--config-file
+       (org-files-db-views--config-name view)))
     org-files-db-views))
 
 (provide 'org-files-db-views)

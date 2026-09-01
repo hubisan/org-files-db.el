@@ -32,6 +32,7 @@
 
 ;;; Code:
 
+(require 'org-files-db-core)
 (require 'org-files-db-process)
 (require 'org-files-db-presentation)
 (require 'org-files-db-actions)

@@ -34,7 +34,7 @@
 
 (defun org-files-db-test--single-result-presentation (result config)
   "Return a one-row presentation for RESULT and configuration CONFIG."
-  (org-files-db--make-presentation
+  (org-files-db-presentation--make-presentation
    :version 2
    :database-id "db"
    :generation 1
@@ -43,19 +43,19 @@
    :schemas nil
    :rows
    (vector
-    (org-files-db--make-presentation-row
+    (org-files-db-presentation--make-presentation-row
      :result-index 0
      :row-context nil
      :cells
      (vector
-      (org-files-db--make-presentation-cell
+      (org-files-db-presentation--make-presentation-cell
        :search-text "Selected result"
        :display-text "Selected result"
        :role 'title))))))
 
 (defun org-files-db-test--select-first-candidate (_prompt table &rest _args)
   "Return the first candidate from completion TABLE."
-  (car (org-files-db--completion-candidates table)))
+  (car (org-files-db-presentation--completion-candidates table)))
 
 (describe "clean package foundation"
           (before-each
@@ -68,6 +68,7 @@
 
           (it "loads only the rebuilt package foundation"
               (expect (featurep 'org-files-db) :to-equal t)
+              (expect (featurep 'org-files-db-core) :to-equal t)
               (expect (featurep 'org-files-db-process) :to-equal t)
               (expect (featurep 'org-files-db-presentation) :to-equal t)
               (expect (featurep 'org-files-db-query) :to-equal t)
@@ -75,6 +76,63 @@
               (expect (featurep 'org-files-db-actions) :to-equal t)
               (expect (featurep 'org-files-db-search) :to-equal nil)
               (expect (featurep 'org-files-db-cache) :to-equal nil))
+
+          (it "loads Core without specialized org-files-db modules"
+              (let* ((emacs (expand-file-name invocation-name invocation-directory))
+                     (library-directory
+                      (file-name-directory (locate-library "org-files-db-core")))
+                     (form
+                      "(progn (require 'org-files-db-core) (when (or (featurep 'org-files-db-process) (featurep 'org-files-db-presentation) (featurep 'org-files-db-query) (featurep 'org-files-db-views) (featurep 'org-files-db-actions) (featurep 'org-files-db)) (kill-emacs 7)))"))
+                (expect
+                 (call-process emacs nil nil nil
+                               "--batch" "-Q" "-L" library-directory
+                               "--eval" form)
+                 :to-equal 0)))
+
+          (it "keeps public customization and faces available"
+              (dolist (variable '(org-files-db-executable
+                                  org-files-db-configs
+                                  org-files-db-default-config
+                                  org-files-db-heading-columns
+                                  org-files-db-file-columns
+                                  org-files-db-link-columns
+                                  org-files-db-heading-sort
+                                  org-files-db-file-sort
+                                  org-files-db-link-sort
+                                  org-files-db-heading-action
+                                  org-files-db-file-action
+                                  org-files-db-link-action
+                                  org-files-db-views))
+                (expect (not (null (custom-variable-p variable))) :to-equal t))
+              (dolist (face '(org-files-db-heading-1
+                              org-files-db-heading-2
+                              org-files-db-heading-3
+                              org-files-db-heading-4
+                              org-files-db-heading-5
+                              org-files-db-heading-6
+                              org-files-db-heading-7
+                              org-files-db-heading-8
+                              org-files-db-title
+                              org-files-db-todo
+                              org-files-db-done
+                              org-files-db-priority
+                              org-files-db-tag
+                              org-files-db-date
+                              org-files-db-file-name
+                              org-files-db-file-path
+                              org-files-db-keyword-name
+                              org-files-db-keyword-value
+                              org-files-db-property-name
+                              org-files-db-property-value))
+                (expect (not (null (facep face))) :to-equal t)))
+
+          (it "keeps current public entry points unchanged"
+              (dolist (function '(org-files-db-query
+                                  org-files-db-query-results
+                                  org-files-db-check-setup
+                                  org-files-db-current-config
+                                  org-files-db-actions-open-result))
+                (expect (not (null (fboundp function))) :to-equal t)))
 
           (it "does not define old configuration or search options"
               (expect (boundp 'org-files-db-config-file) :to-equal nil)
@@ -86,25 +144,25 @@
               (expect (> (length org-files-db-heading-columns) 0) :to-equal t)
               (expect (> (length org-files-db-file-columns) 0) :to-equal t)
               (expect (> (length org-files-db-link-columns) 0) :to-equal t)
-              (expect (org-files-db--default-columns 'headings)
+              (expect (org-files-db-presentation--default-columns 'headings)
                       :to-equal org-files-db-heading-columns)
-              (expect (org-files-db--default-columns 'files)
+              (expect (org-files-db-presentation--default-columns 'files)
                       :to-equal org-files-db-file-columns)
-              (expect (org-files-db--default-columns 'links)
+              (expect (org-files-db-presentation--default-columns 'links)
                       :to-equal org-files-db-link-columns)
-              (expect (org-files-db--default-sort 'headings)
+              (expect (org-files-db-presentation--default-sort 'headings)
                       :to-equal org-files-db-heading-sort)
-              (expect (org-files-db--default-sort 'files)
+              (expect (org-files-db-presentation--default-sort 'files)
                       :to-equal org-files-db-file-sort)
-              (expect (org-files-db--default-sort 'links)
+              (expect (org-files-db-presentation--default-sort 'links)
                       :to-equal org-files-db-link-sort))
 
           (it "defines separate default actions for all query targets"
-              (expect (org-files-db--default-action 'headings)
+              (expect (org-files-db-actions--default-action 'headings)
                       :to-equal org-files-db-heading-action)
-              (expect (org-files-db--default-action 'files)
+              (expect (org-files-db-actions--default-action 'files)
                       :to-equal org-files-db-file-action)
-              (expect (org-files-db--default-action 'links)
+              (expect (org-files-db-actions--default-action 'links)
                       :to-equal org-files-db-link-action)
               (expect org-files-db-heading-action
                       :to-equal #'org-files-db-actions-open-result)
@@ -118,11 +176,11 @@
                      (work (org-files-db-test--config-file "work.toml"))
                      (org-files-db-configs `(("main" . ,main) ("work" . ,work)))
                      (org-files-db-default-config "main"))
-                (expect (org-files-db--config-name) :to-equal "main")
-                (expect (org-files-db--config-name "work") :to-equal "work")
-                (expect (org-files-db--config-file)
+                (expect (org-files-db-process--config-name) :to-equal "main")
+                (expect (org-files-db-process--config-name "work") :to-equal "work")
+                (expect (org-files-db-process--config-file)
                         :to-equal (expand-file-name main))
-                (expect (org-files-db--config-file "work")
+                (expect (org-files-db-process--config-file "work")
                         :to-equal (expand-file-name work))))
 
           (it "rejects duplicate configuration names"
@@ -130,27 +188,27 @@
                      (other (org-files-db-test--config-file "other.toml"))
                      (org-files-db-configs `(("main" . ,main) ("main" . ,other)))
                      (org-files-db-default-config "main"))
-                (expect (org-files-db--validated-configs)
+                (expect (org-files-db-process--validated-configs)
                         :to-throw 'user-error)))
 
           (it "rejects an unknown default configuration"
               (let* ((main (org-files-db-test--config-file "main.toml"))
                      (org-files-db-configs `(("main" . ,main)))
                      (org-files-db-default-config "missing"))
-                (expect (org-files-db--validated-configs)
+                (expect (org-files-db-process--validated-configs)
                         :to-throw 'user-error)))
 
           (it "requires a default when configurations exist"
               (let* ((main (org-files-db-test--config-file "main.toml"))
                      (org-files-db-configs `(("main" . ,main)))
                      (org-files-db-default-config nil))
-                (expect (org-files-db--validated-configs)
+                (expect (org-files-db-process--validated-configs)
                         :to-throw 'user-error)))
 
           (it "rejects a default name without configurations"
               (let ((org-files-db-configs nil)
                     (org-files-db-default-config "main"))
-                (expect (org-files-db--validated-configs)
+                (expect (org-files-db-process--validated-configs)
                         :to-throw 'user-error)))
 
           (it "rejects unknown and unreadable configuration files"
@@ -165,11 +223,11 @@
                         ("directory" . ,directory)))
                      (org-files-db-default-config "main"))
                 (make-directory directory)
-                (expect (org-files-db--config-file "unknown")
+                (expect (org-files-db-process--config-file "unknown")
                         :to-throw 'user-error)
-                (expect (org-files-db--config-file "missing")
+                (expect (org-files-db-process--config-file "missing")
                         :to-throw 'user-error)
-                (expect (org-files-db--config-file "directory")
+                (expect (org-files-db-process--config-file "directory")
                         :to-throw 'user-error)))
 
           (it "validates view configuration names and readable files"
@@ -180,11 +238,11 @@
                      (org-files-db-views
                       '(("default-view" :query (headings))
                         ("work-view" :config "work" :query (files)))))
-                (expect (org-files-db--validate-views)
+                (expect (org-files-db-views--validate-views)
                         :to-equal org-files-db-views)
-                (expect (org-files-db--view-config-name (car org-files-db-views))
+                (expect (org-files-db-views--config-name (car org-files-db-views))
                         :to-equal "main")
-                (expect (org-files-db--view-config-name (cadr org-files-db-views))
+                (expect (org-files-db-views--config-name (cadr org-files-db-views))
                         :to-equal "work")))
 
           (it "rejects unknown and duplicate view configuration"
@@ -193,20 +251,20 @@
                      (org-files-db-default-config "main"))
                 (let ((org-files-db-views
                        '(("bad" :config "missing" :query (headings)))))
-                  (expect (org-files-db--validate-views)
+                  (expect (org-files-db-views--validate-views)
                           :to-throw 'user-error))
                 (let ((org-files-db-views
                        '(("same" :query (headings))
                          ("same" :query (files)))))
-                  (expect (org-files-db--validate-views)
+                  (expect (org-files-db-views--validate-views)
                           :to-throw 'user-error))))
 
           (it "rejects unsupported query targets for defaults"
-              (expect (org-files-db--default-columns 'search)
+              (expect (org-files-db-presentation--default-columns 'search)
                       :to-throw 'user-error)
-              (expect (org-files-db--default-sort 'search)
+              (expect (org-files-db-presentation--default-sort 'search)
                       :to-throw 'user-error)
-              (expect (org-files-db--default-action 'search)
+              (expect (org-files-db-actions--default-action 'search)
                       :to-throw 'user-error)))
 
 
@@ -226,18 +284,18 @@
                              (and (equal name "orgfdb") "/opt/bin/orgfdb")))
                           ((symbol-function 'file-executable-p)
                            (lambda (file) (equal file "/opt/bin/orgfdb"))))
-                  (expect (org-files-db--resolve-executable)
+                  (expect (org-files-db-process--resolve-executable)
                           :to-equal "/opt/bin/orgfdb"))))
 
           (it "rejects a missing executable"
               (let ((org-files-db-executable "missing-orgfdb"))
                 (cl-letf (((symbol-function 'executable-find) (lambda (_name) nil)))
-                  (expect (org-files-db--resolve-executable)
+                  (expect (org-files-db-process--resolve-executable)
                           :to-throw 'user-error))))
 
           (it "passes every process argument separately and captures UTF-8 output"
               (let (command coding)
-                (cl-letf (((symbol-function 'org-files-db--resolve-executable)
+                (cl-letf (((symbol-function 'org-files-db-process--resolve-executable)
                            (lambda () "/opt/bin/orgfdb"))
                           ((symbol-function 'make-process)
                            (lambda (&rest properties)
@@ -251,7 +309,7 @@
                           ((symbol-function 'process-live-p) (lambda (_process) nil))
                           ((symbol-function 'process-exit-status) (lambda (_process) 0)))
                   (let ((result
-                         (org-files-db--run-process
+                         (org-files-db-process--run-process
                           '("query" "value with spaces" "$(not-a-shell-command)"))))
                     (expect command
                             :to-equal
@@ -264,40 +322,40 @@
                     (expect (plist-get result :stderr) :to-equal "Fehler ä\n")))))
 
           (it "reports runtime stderr in CLI errors"
-              (cl-letf (((symbol-function 'org-files-db--run-process)
+              (cl-letf (((symbol-function 'org-files-db-process--run-process)
                          (lambda (&rest _args)
                            '(:status 1 :stdout "" :stderr "database is stale\n"))))
                 (let (message)
                   (condition-case err
-                      (org-files-db--call-raw '("query" "(headings)"))
+                      (org-files-db-process--call-raw '("query" "(headings)"))
                     (org-files-db-cli-error
                      (setq message (error-message-string err))))
                   (expect message :to-match "status 1")
                   (expect message :to-match "database is stale"))))
 
           (it "uses a separate error type for CLI usage errors"
-              (cl-letf (((symbol-function 'org-files-db--run-process)
+              (cl-letf (((symbol-function 'org-files-db-process--run-process)
                          (lambda (&rest _args)
                            '(:status 2 :stdout "" :stderr "unexpected argument\n"))))
-                (expect (org-files-db--call-raw '("query" "--bad"))
+                (expect (org-files-db-process--call-raw '("query" "--bad"))
                         :to-throw 'org-files-db-cli-usage-error)))
 
           (it "parses requested JSON as alists and vectors"
-              (cl-letf (((symbol-function 'org-files-db--run-process)
+              (cl-letf (((symbol-function 'org-files-db-process--run-process)
                          (lambda (&rest _args)
                            '(:status 0
                                      :stdout "{\"name\":\"Grüezi\",\"items\":[1,2],\"flag\":false}"
                                      :stderr ""))))
-                (let ((value (org-files-db--call-json '("status"))))
+                (let ((value (org-files-db-process--call-json '("status"))))
                   (expect (alist-get 'name value) :to-equal "Grüezi")
                   (expect (vectorp (alist-get 'items value)) :to-equal t)
                   (expect (alist-get 'flag value) :to-equal :false))))
 
           (it "reports invalid JSON as an org-files-db error"
-              (cl-letf (((symbol-function 'org-files-db--run-process)
+              (cl-letf (((symbol-function 'org-files-db-process--run-process)
                          (lambda (&rest _args)
                            '(:status 0 :stdout "not json" :stderr ""))))
-                (expect (org-files-db--call-json '("status"))
+                (expect (org-files-db-process--call-json '("status"))
                         :to-throw 'org-files-db-error)))
 
           (it "uses the default configuration unless a prefix selects another one"
@@ -310,10 +368,10 @@
                            (lambda (&rest _args)
                              (setq read-count (1+ read-count))
                              "work")))
-                  (expect (org-files-db--interactive-config-name nil)
+                  (expect (org-files-db-process--interactive-config-name nil)
                           :to-equal "main")
                   (expect read-count :to-equal 0)
-                  (expect (org-files-db--interactive-config-name '(4))
+                  (expect (org-files-db-process--interactive-config-name '(4))
                           :to-equal "work")
                   (expect read-count :to-equal 1))))
 
@@ -322,9 +380,9 @@
                      (work (org-files-db-test--config-file "work.toml"))
                      (org-files-db-configs `(("main" . ,main) ("work" . ,work)))
                      (org-files-db-default-config "main"))
-                (expect (org-files-db--config-arguments)
+                (expect (org-files-db-process--config-arguments)
                         :to-equal (list "--config" (expand-file-name main)))
-                (expect (org-files-db--config-arguments "work")
+                (expect (org-files-db-process--config-arguments "work")
                         :to-equal (list "--config" (expand-file-name work)))))
 
           (it "checks a selected named configuration with the shared process helpers"
@@ -334,13 +392,13 @@
                      (org-files-db-default-config "main")
                      raw-arguments
                      json-arguments)
-                (cl-letf (((symbol-function 'org-files-db--resolve-executable)
+                (cl-letf (((symbol-function 'org-files-db-process--resolve-executable)
                            (lambda () "/opt/bin/orgfdb"))
-                          ((symbol-function 'org-files-db--call-raw)
+                          ((symbol-function 'org-files-db-process--call-raw)
                            (lambda (arguments &optional _input)
                              (setq raw-arguments arguments)
                              "orgfdb 0.1.0\n"))
-                          ((symbol-function 'org-files-db--call-json)
+                          ((symbol-function 'org-files-db-process--call-json)
                            (lambda (arguments &optional _input)
                              (setq json-arguments arguments)
                              '((generation . 3)))))
@@ -361,11 +419,11 @@
               (let* ((main (org-files-db-test--config-file "main.toml"))
                      (org-files-db-configs `(("main" . ,main)))
                      (org-files-db-default-config "main"))
-                (cl-letf (((symbol-function 'org-files-db--resolve-executable)
+                (cl-letf (((symbol-function 'org-files-db-process--resolve-executable)
                            (lambda () "/opt/bin/orgfdb"))
-                          ((symbol-function 'org-files-db--call-raw)
+                          ((symbol-function 'org-files-db-process--call-raw)
                            (lambda (&rest _args) "orgfdb 0.1.0\n"))
-                          ((symbol-function 'org-files-db--call-json)
+                          ((symbol-function 'org-files-db-process--call-json)
                            (lambda (&rest _args)
                              (signal 'org-files-db-cli-error
                                      '("orgfdb exited with status 1: missing database")))))
@@ -386,7 +444,7 @@
 
           (it "serializes flat Emacs presentation configuration to PresentationSpec JSON"
               (let* ((json
-                      (org-files-db--presentation-spec-json
+                      (org-files-db-presentation--spec-json
                        '((outline-path
                           :width (max 80)
                           :truncate (:position right :marker "…")
@@ -396,7 +454,7 @@
                          (file-name :width auto))
                        '((priority :direction desc))
                        'tags))
-                     (spec (org-files-db--parse-json json))
+                     (spec (org-files-db-process--parse-json json))
                      (columns (alist-get 'columns spec))
                      (first (aref columns 0))
                      (second (aref columns 1))
@@ -418,8 +476,8 @@
                 (expect (alist-get 'kind row-source) :to-equal "tags")))
 
           (it "serializes Rust defaults without duplicating presentation semantics"
-              (let* ((json (org-files-db--presentation-spec-json '((title)) nil nil))
-                     (spec (org-files-db--parse-json json))
+              (let* ((json (org-files-db-presentation--spec-json '((title)) nil nil))
+                     (spec (org-files-db-process--parse-json json))
                      (column (aref (alist-get 'columns spec) 0)))
                 (expect (alist-get 'name column) :to-equal "title")
                 (expect (alist-get 'mode (alist-get 'width column)) :to-equal "auto")
@@ -448,7 +506,7 @@
                         (rows
                          . [[0 nil [["Task" nil 1]]]
                             [0 ["tag" "project"] [["project" "project " 5]]]])))
-                     (presentation (org-files-db--decode-presentation wire))
+                     (presentation (org-files-db-presentation--decode wire))
                      (rows (org-files-db-presentation-rows presentation))
                      (first-row (aref rows 0))
                      (second-row (aref rows 1))
@@ -468,10 +526,10 @@
                 (expect (org-files-db-presentation-cell-display-text second-cell)
                         :to-equal "project ")
                 (expect (org-files-db-presentation-cell-role second-cell) :to-equal 'tag)
-                (expect (eq (org-files-db--presentation-row-result presentation first-row)
+                (expect (eq (org-files-db-presentation--row-result presentation first-row)
                             result)
                         :to-equal t)
-                (expect (eq (org-files-db--presentation-row-result presentation second-row)
+                (expect (eq (org-files-db-presentation--row-result presentation second-row)
                             result)
                         :to-equal t)))
 
@@ -490,7 +548,7 @@
                             (role_encoding . "null-or-index-into-role_values")
                             (role_values . ["file-name"])))
                         (rows . [[[[0 nil "a.org"]] 0 ["project" "tag"]]])))
-                     (presentation (org-files-db--decode-presentation wire))
+                     (presentation (org-files-db-presentation--decode wire))
                      (row (aref (org-files-db-presentation-rows presentation) 0))
                      (cell (aref (org-files-db-presentation-row-cells row) 0)))
                 (expect (org-files-db-presentation-row-result-index row) :to-equal 0)
@@ -503,7 +561,7 @@
           (it "rejects unsupported presentation versions"
               (let (message)
                 (condition-case err
-                    (org-files-db--decode-presentation
+                    (org-files-db-presentation--decode
                      '((presentation_version . 3)
                        (database_id . "db")
                        (generation . 1)
@@ -529,7 +587,7 @@
                            (role_encoding . "null-or-index-into-role_values")
                            (role_values . ["title"])))
                        (rows . [[0 nil []]]))))
-                (expect (org-files-db--decode-presentation base)
+                (expect (org-files-db-presentation--decode base)
                         :to-throw 'org-files-db-error))
               (let ((wire
                      '((presentation_version . 2)
@@ -544,11 +602,11 @@
                            (role_encoding . "null-or-index-into-role_values")
                            (role_values . ["title"])))
                        (rows . [[0 nil [["Task" nil 5]]]]))))
-                (expect (org-files-db--decode-presentation wire)
+                (expect (org-files-db-presentation--decode wire)
                         :to-throw 'org-files-db-error)))
 
           (it "parses structural query strings without evaluation state"
-              (expect (org-files-db--query-form "(headings (not (done)))")
+              (expect (org-files-db-query--form "(headings (not (done)))")
                       :to-equal '(headings (not (done)))))
 
           (it "runs the data-only query path with defaults and no completion or actions"
@@ -558,7 +616,7 @@
                      (org-files-db-heading-columns '((title :width (max 40))))
                      (org-files-db-heading-sort '((priority :direction asc)))
                      called-arguments)
-                (cl-letf (((symbol-function 'org-files-db--call-json)
+                (cl-letf (((symbol-function 'org-files-db-process--call-json)
                            (lambda (arguments &optional _input)
                              (setq called-arguments arguments)
                              '((presentation_version . 2)
@@ -584,7 +642,7 @@
                          (spec-index (cl-position "--presentation-spec-json"
                                                   called-arguments :test #'equal))
                          (spec-json (nth (1+ spec-index) called-arguments))
-                         (spec (org-files-db--parse-json spec-json)))
+                         (spec (org-files-db-process--parse-json spec-json)))
                     (expect (org-files-db-presentation-p presentation) :to-equal t)
                     (expect called-arguments
                             :to-equal
@@ -605,7 +663,7 @@
                      (org-files-db-default-config "main")
                      (org-files-db-heading-sort '((priority :direction asc)))
                      called-arguments)
-                (cl-letf (((symbol-function 'org-files-db--call-json)
+                (cl-letf (((symbol-function 'org-files-db-process--call-json)
                            (lambda (arguments &optional _input)
                              (setq called-arguments arguments)
                              '((presentation_version . 2)
@@ -628,7 +686,7 @@
                    :row-source 'tags)
                   (let* ((spec-index (cl-position "--presentation-spec-json"
                                                   called-arguments :test #'equal))
-                         (spec (org-files-db--parse-json
+                         (spec (org-files-db-process--parse-json
                                 (nth (1+ spec-index) called-arguments))))
                     (expect (not (null (member (expand-file-name work) called-arguments)))
                             :to-equal t)
@@ -649,21 +707,21 @@
           (it "keeps full search text and shows Rust-prepared display text"
               (let* ((result '((kind . "heading") (level . 3) (title . "Long heading")))
                      (row
-                      (org-files-db--make-presentation-row
+                      (org-files-db-presentation--make-presentation-row
                        :result-index 0
                        :row-context nil
                        :cells
                        (vector
-                        (org-files-db--make-presentation-cell
+                        (org-files-db-presentation--make-presentation-cell
                          :search-text "A complete heading value"
                          :display-text "A complete…"
                          :role 'heading)
-                        (org-files-db--make-presentation-cell
+                        (org-files-db-presentation--make-presentation-cell
                          :search-text "notes.org"
                          :display-text "notes.org  "
                          :role 'file-name))))
                      (presentation
-                      (org-files-db--make-presentation
+                      (org-files-db-presentation--make-presentation
                        :version 2
                        :database-id "db"
                        :generation 1
@@ -671,7 +729,7 @@
                        :results (vector result)
                        :schemas nil
                        :rows (vector row)))
-                     (candidate (car (org-files-db--presentation-candidates presentation)))
+                     (candidate (car (org-files-db-presentation--candidates presentation)))
                      (searchable (substring-no-properties candidate))
                      (visible (get-text-property 0 'display candidate)))
                 (expect searchable :to-match "A complete heading value")
@@ -685,33 +743,33 @@
 
           (it "maps all supported semantic roles and ignores unknown roles"
               (let ((result '((kind . "heading") (level . 2))))
-                (expect (org-files-db--presentation-role-face 'heading result)
+                (expect (org-files-db-presentation--role-face 'heading result)
                         :to-equal 'org-files-db-heading-2)
-                (expect (org-files-db--presentation-role-face 'title result)
+                (expect (org-files-db-presentation--role-face 'title result)
                         :to-equal 'org-files-db-title)
-                (expect (org-files-db--presentation-role-face 'todo result)
+                (expect (org-files-db-presentation--role-face 'todo result)
                         :to-equal 'org-files-db-todo)
-                (expect (org-files-db--presentation-role-face 'done result)
+                (expect (org-files-db-presentation--role-face 'done result)
                         :to-equal 'org-files-db-done)
-                (expect (org-files-db--presentation-role-face 'priority result)
+                (expect (org-files-db-presentation--role-face 'priority result)
                         :to-equal 'org-files-db-priority)
-                (expect (org-files-db--presentation-role-face 'tag result)
+                (expect (org-files-db-presentation--role-face 'tag result)
                         :to-equal 'org-files-db-tag)
-                (expect (org-files-db--presentation-role-face 'date result)
+                (expect (org-files-db-presentation--role-face 'date result)
                         :to-equal 'org-files-db-date)
-                (expect (org-files-db--presentation-role-face 'file-name result)
+                (expect (org-files-db-presentation--role-face 'file-name result)
                         :to-equal 'org-files-db-file-name)
-                (expect (org-files-db--presentation-role-face 'file-path result)
+                (expect (org-files-db-presentation--role-face 'file-path result)
                         :to-equal 'org-files-db-file-path)
-                (expect (org-files-db--presentation-role-face 'keyword-name result)
+                (expect (org-files-db-presentation--role-face 'keyword-name result)
                         :to-equal 'org-files-db-keyword-name)
-                (expect (org-files-db--presentation-role-face 'keyword-value result)
+                (expect (org-files-db-presentation--role-face 'keyword-value result)
                         :to-equal 'org-files-db-keyword-value)
-                (expect (org-files-db--presentation-role-face 'property-name result)
+                (expect (org-files-db-presentation--role-face 'property-name result)
                         :to-equal 'org-files-db-property-name)
-                (expect (org-files-db--presentation-role-face 'property-value result)
+                (expect (org-files-db-presentation--role-face 'property-value result)
                         :to-equal 'org-files-db-property-value)
-                (expect (org-files-db--presentation-role-face 'future-role result)
+                (expect (org-files-db-presentation--role-face 'future-role result)
                         :to-equal nil)))
 
           (it "defines heading faces with normal completion text height"
@@ -731,17 +789,17 @@
               (let* ((result '((kind . "heading") (level . 1) (title . "Task")))
                      (context '((kind . "tag") (value . "project")))
                      (row
-                      (org-files-db--make-presentation-row
+                      (org-files-db-presentation--make-presentation-row
                        :result-index 0
                        :row-context context
                        :cells
                        (vector
-                        (org-files-db--make-presentation-cell
+                        (org-files-db-presentation--make-presentation-cell
                          :search-text "project"
                          :display-text "project"
                          :role 'tag))))
                      (presentation
-                      (org-files-db--make-presentation
+                      (org-files-db-presentation--make-presentation
                        :version 2
                        :database-id "db"
                        :generation 1
@@ -749,7 +807,7 @@
                        :results (vector result)
                        :schemas nil
                        :rows (vector row)))
-                     (candidate (car (org-files-db--presentation-candidates presentation))))
+                     (candidate (car (org-files-db-presentation--candidates presentation))))
                 (expect (eq (get-text-property 0 'org-files-db-presentation-row candidate)
                             row)
                         :to-equal t)
@@ -765,13 +823,13 @@
               (let* ((first '((kind . "heading") (level . 1) (title . "Same")))
                      (second '((kind . "heading") (level . 1) (title . "Same")))
                      (cell-1
-                      (org-files-db--make-presentation-cell
+                      (org-files-db-presentation--make-presentation-cell
                        :search-text "Same" :display-text "Same" :role 'title))
                      (cell-2
-                      (org-files-db--make-presentation-cell
+                      (org-files-db-presentation--make-presentation-cell
                        :search-text "Same" :display-text "Same" :role 'title))
                      (presentation
-                      (org-files-db--make-presentation
+                      (org-files-db-presentation--make-presentation
                        :version 2
                        :database-id "db"
                        :generation 1
@@ -780,17 +838,17 @@
                        :schemas nil
                        :rows
                        (vector
-                        (org-files-db--make-presentation-row
+                        (org-files-db-presentation--make-presentation-row
                          :result-index 0 :row-context nil :cells (vector cell-1))
-                        (org-files-db--make-presentation-row
+                        (org-files-db-presentation--make-presentation-row
                          :result-index 1 :row-context nil :cells (vector cell-2)))))
                      captured-candidates)
                 (cl-letf (((symbol-function 'completing-read)
                            (lambda (_prompt collection &rest _args)
                              (setq captured-candidates
-                                   (org-files-db--completion-candidates collection))
+                                   (org-files-db-presentation--completion-candidates collection))
                              (substring-no-properties (cadr captured-candidates)))))
-                  (expect (eq (org-files-db--read-presentation presentation "Result: ")
+                  (expect (eq (org-files-db-presentation--read presentation "Result: ")
                               second)
                           :to-equal t))
                 (expect (length captured-candidates) :to-equal 2)
@@ -805,29 +863,29 @@
 
           (it "preserves Rust row order in completion metadata"
               (let* ((candidates '("b" "a"))
-                     (table (org-files-db--completion-table candidates))
+                     (table (org-files-db-presentation--completion-table candidates))
                      (metadata (funcall table "" nil 'metadata)))
                 (expect (cdr (assq 'display-sort-function (cdr metadata)))
                         :to-equal #'identity)
                 (expect (cdr (assq 'cycle-sort-function (cdr metadata)))
                         :to-equal #'identity)
-                (expect (org-files-db--completion-candidates table)
+                (expect (org-files-db-presentation--completion-candidates table)
                         :to-equal candidates)))
 
           (it "does not recalculate Rust presentation data while building candidates"
               (let* ((result '((kind . "file") (title . "File")))
                      (row
-                      (org-files-db--make-presentation-row
+                      (org-files-db-presentation--make-presentation-row
                        :result-index 0
                        :row-context nil
                        :cells
                        (vector
-                        (org-files-db--make-presentation-cell
+                        (org-files-db-presentation--make-presentation-cell
                          :search-text "File"
                          :display-text "File   "
                          :role 'title))))
                      (presentation
-                      (org-files-db--make-presentation
+                      (org-files-db-presentation--make-presentation
                        :version 2
                        :database-id "db"
                        :generation 1
@@ -839,7 +897,7 @@
                            (lambda (&rest _args) (error "width calculation must not run")))
                           ((symbol-function 'truncate-string-to-width)
                            (lambda (&rest _args) (error "truncation must not run"))))
-                  (expect (length (org-files-db--presentation-candidates presentation))
+                  (expect (length (org-files-db-presentation--candidates presentation))
                           :to-equal 1))))
 
           (it "stores the effective configuration on one-shot presentation results"
@@ -847,7 +905,7 @@
                      (work (org-files-db-test--config-file "work.toml"))
                      (org-files-db-configs `(("main" . ,main) ("work" . ,work)))
                      (org-files-db-default-config "main"))
-                (cl-letf (((symbol-function 'org-files-db--call-json)
+                (cl-letf (((symbol-function 'org-files-db-process--call-json)
                            (lambda (&rest _args)
                              '((presentation_version . 2)
                                (database_id . "db")
@@ -967,9 +1025,9 @@
                      (seen-prefix 'unset)
                      (seen-config nil)
                      (org-files-db-heading-action #'ignore))
-                (cl-letf (((symbol-function 'org-files-db--read-query)
+                (cl-letf (((symbol-function 'org-files-db-query--read-query)
                            (lambda () '(headings)))
-                          ((symbol-function 'org-files-db--interactive-config-name)
+                          ((symbol-function 'org-files-db-process--interactive-config-name)
                            (lambda (&optional prefix)
                              (setq seen-prefix prefix)
                              "main"))
@@ -991,9 +1049,9 @@
                      (seen-prefix nil)
                      (seen-config nil)
                      (org-files-db-heading-action #'ignore))
-                (cl-letf (((symbol-function 'org-files-db--read-query)
+                (cl-letf (((symbol-function 'org-files-db-query--read-query)
                            (lambda () '(headings)))
-                          ((symbol-function 'org-files-db--interactive-config-name)
+                          ((symbol-function 'org-files-db-process--interactive-config-name)
                            (lambda (&optional prefix)
                              (setq seen-prefix prefix)
                              "work"))

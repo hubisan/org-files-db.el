@@ -26,19 +26,20 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'org-files-db-process)
 (require 'org-files-db-presentation)
 (require 'org-files-db-actions)
 
-(defvar org-files-db-query-history nil
+(defvar org-files-db-query--history nil
   "History for interactive structural org-files-db queries.")
 
-(defun org-files-db--read-query ()
+(defun org-files-db-query--read-query ()
   "Read and return one structural org-files-db query form."
-  (org-files-db--query-form
+  (org-files-db-query--form
    (read-from-minibuffer "orgfdb query: " nil nil nil
-                         'org-files-db-query-history)))
+                         'org-files-db-query--history)))
 
-(defun org-files-db--query-form (query)
+(defun org-files-db-query--form (query)
   "Return QUERY as one Emacs Lisp structural query form."
   (cond
    ((consp query) query)
@@ -55,19 +56,19 @@
    (t
     (user-error "Query must be an Emacs Lisp form or string: %S" query))))
 
-(defun org-files-db--query-target (query)
+(defun org-files-db-query--target (query)
   "Return the structural query target for QUERY."
-  (let* ((form (org-files-db--query-form query))
+  (let* ((form (org-files-db-query--form query))
          (target (and (consp form) (car form))))
     (unless (memq target '(headings files links))
       (user-error "Unsupported org-files-db query target: %S" target))
     target))
 
-(defun org-files-db--query-string (query)
+(defun org-files-db-query--string (query)
   "Return QUERY as the structural expression sent to orgfdb."
   (if (stringp query)
       query
-    (prin1-to-string (org-files-db--query-form query))))
+    (prin1-to-string (org-files-db-query--form query))))
 
 (cl-defun org-files-db-query-results
     (query &key config columns (sort nil sort-supplied-p) row-source)
@@ -75,41 +76,41 @@
 CONFIG is a name from `org-files-db-configs'.  When CONFIG is nil, use the
 configured default.  COLUMNS, SORT, and ROW-SOURCE use the flat Emacs
 presentation forms.  This function does not open completion or run an action."
-  (let* ((target (org-files-db--query-target query))
-         (config-name (org-files-db--config-name config))
-         (effective-columns (or columns (org-files-db--default-columns target)))
+  (let* ((target (org-files-db-query--target query))
+         (config-name (org-files-db-process--config-name config))
+         (effective-columns (or columns (org-files-db-presentation--default-columns target)))
          (effective-sort
-          (if sort-supplied-p sort (org-files-db--default-sort target)))
+          (if sort-supplied-p sort (org-files-db-presentation--default-sort target)))
          (spec-json
-          (org-files-db--presentation-spec-json
+          (org-files-db-presentation--spec-json
            effective-columns effective-sort row-source))
          (arguments
           (append
            (list "query"
                  "--format" "presentation-json"
                  "--presentation-spec-json" spec-json)
-           (org-files-db--config-arguments config-name)
-           (list (org-files-db--query-string query)))))
+           (org-files-db-process--config-arguments config-name)
+           (list (org-files-db-query--string query)))))
     (let ((presentation
-           (org-files-db--decode-presentation
-            (org-files-db--call-json arguments))))
+           (org-files-db-presentation--decode
+            (org-files-db-process--call-json arguments))))
       (setf (org-files-db-presentation-config presentation) config-name)
       presentation)))
 
-(defun org-files-db--effective-action (target action)
+(defun org-files-db-query--effective-action (target action)
   "Return ACTION or the configured default action for TARGET."
-  (let ((effective-action (or action (org-files-db--default-action target))))
+  (let ((effective-action (or action (org-files-db-actions--default-action target))))
     (unless (functionp effective-action)
       (user-error "Org-files-db action is not callable: %S" effective-action))
     effective-action))
 
-(defun org-files-db--run-presentation-action (presentation target &optional action)
+(defun org-files-db-query--run-presentation-action (presentation target &optional action)
   "Select one row from PRESENTATION and run ACTION for TARGET.
 Use the configured default action when ACTION is nil.  Return the selected
 original result."
-  (let* ((effective-action (org-files-db--effective-action target action))
-         (result (org-files-db--read-presentation presentation))
-         (org-files-db--current-action-config
+  (let* ((effective-action (org-files-db-query--effective-action target action))
+         (result (org-files-db-presentation--read presentation))
+         (org-files-db-actions--current-action-config
           (org-files-db-presentation-config presentation)))
     (funcall effective-action result)
     result))
@@ -125,10 +126,10 @@ action for the query target.  Return the selected original result.
 With an interactive prefix argument, select the configuration before running
 the query."
   (interactive
-   (list (org-files-db--read-query)
-         :config (org-files-db--interactive-config-name current-prefix-arg)))
-  (let* ((target (org-files-db--query-target query))
-         (effective-action (org-files-db--effective-action target action))
+   (list (org-files-db-query--read-query)
+         :config (org-files-db-process--interactive-config-name current-prefix-arg)))
+  (let* ((target (org-files-db-query--target query))
+         (effective-action (org-files-db-query--effective-action target action))
          (arguments (list :config config
                           :columns columns
                           :row-source row-source))
@@ -136,7 +137,7 @@ the query."
                         (append arguments (list :sort sort))
                       arguments))
          (presentation (apply #'org-files-db-query-results query arguments)))
-    (org-files-db--run-presentation-action presentation target effective-action)))
+    (org-files-db-query--run-presentation-action presentation target effective-action)))
 
 (provide 'org-files-db-query)
 

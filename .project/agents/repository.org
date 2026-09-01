@@ -1,38 +1,60 @@
 #+TITLE: Repository-specific AI Instructions
 #+STARTUP: showall
 
-* Preferred checks
+* Checks
 
-- Run all checks with:
+- Run ~make fmt~ after editing Emacs Lisp.
+- Run ~make ci~ before marking a task ~DONE~.
+- Use ~make compile~, ~make lint~, and ~make test~ to investigate failures.
+- Add or update Buttercup tests for behavior changes.
+- Treat compiler and linter warnings as errors.
 
-  #+begin_src sh
-  make ci
-  #+end_src
+* Modules
 
-- Use ~make compile~, ~make lint~, or ~make test~ to investigate failures.
-- Run ~make setup~ after changing development dependencies in ~Eask~.
-- Add or update Buttercup tests for behaviour changes.
-- Stub ~orgfdb~ and external services in tests.
-- Keep GitHub Actions consistent with ~make ci~.
+- Put package files in ~lisp/~ and tests in ~tests/~.
+- Keep public ~defcustom~ and ~defface~ forms in the core file (...-core.el).
+- Keep Core small and free from specialized implementation logic.
+- Avoid circular module dependencies.
 
-* Project structure
+* Symbol names
 
-- Package files belong in ~lisp/~.
-- Tests belong in ~tests/~.
-- Test fixtures belong in ~tests/fixtures/~.
-- User-visible changes belong in ~CHANGELOG.org~.
-- The package communicates with ~orgfdb~ through its CLI and JSON output.
-- Do not access the SQLite database directly.
+Prefix all global symbols with the package prefix.
 
-* Coding style
+Name public symbols by their user-facing purpose, not by the file that implements them.
 
-- Prefix public symbols with ~org-files-db-~.
-- Prefix internal (private) symbols with ~org-files-db--~.
-- Keep process execution, JSON decoding, transformation, and presentation separate.
-- Pass process arguments separately; do not build shell command strings.
-- Stub external processes in unit tests.
+A public symbol can include a subsystem name when that subsystem is part of the user-facing concept.
+
+Private symbols must use the prefix of their defining file or module before ~--~.
+
+Example for package ~example~ and module ~example-process.el~:
+
+#+begin_example
+example-query
+example-config
+example-process-start
+
+example-process--resolve-executable
+example-process--run
+#+end_example
+
+Do not use a generic private prefix such as ~example--*~ when one module clearly owns the symbol.
+
+Apply the same rule to private functions, variables, and constants.
+
+Use a separate test prefix such as ~example-test--*~ for test-only helpers.
+
+* Emacs Lisp style
+
+- Use one space after a full stop. Never use two-space sentence spacing.
+- Start docstrings, messages, and error strings with a capital letter.
+- Do not add an empty line after the first line of a docstring.
+- Avoid obsolete Emacs APIs.
+- Use ~when-let*~ instead of obsolete ~when-let~.
+- Do not leave unused lexical variables.
+- When renaming private state, update all bindings and readers.
+- Pass process arguments separately. Do not build shell command strings.
 - Avoid unrelated formatting changes.
 
-* Folders/Files to ignore
+* Generated files
 
-- Ignore generated Eask state, dependencies, package archives, ~*.elc~, editor backups, ~node_modules/~, and temporary test output.
+Do not edit generated Eask state, package archives, ~*.elc~, autoload files, package files, or temporary test output.

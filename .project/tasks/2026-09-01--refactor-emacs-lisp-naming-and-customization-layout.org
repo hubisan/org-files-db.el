@@ -1,0 +1,82 @@
+* REVIEW Refactor Emacs Lisp naming and customization layout
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Make module ownership clear in private symbol names.
+
+Keep the public user interface independent from the internal file structure.
+
+Do not change runtime behavior in this task.
+
+** Implemented
+
+Added ~org-files-db-core.el~ as the lowest shared org-files-db module.
+
+Core now owns:
+
+- the ~org-files-db~ customization group
+- the base ~org-files-db-error~ type
+- all public ~defcustom~ forms
+- all public ~defface~ forms
+
+Kept the existing short public customization and face names.
+
+Renamed private functions and variables to show module ownership:
+
+#+begin_example
+org-files-db-process--*
+org-files-db-presentation--*
+org-files-db-query--*
+org-files-db-views--*
+org-files-db-actions--*
+#+end_example
+
+Removed generic ~org-files-db--*~ private names from ~lisp/~ and ~tests/~.
+
+Kept current public entry points unchanged.
+
+Updated module dependencies so that specialized modules depend on Core.
+
+Added tests for:
+
+- Core loading in a clean Emacs without specialized org-files-db modules
+- public customization variables
+- public faces
+- current public entry points
+- renamed private helpers through the existing behavior tests
+
+** Validation
+
+Static checks in the build environment confirm:
+
+- all edited Lisp files have balanced delimiters
+- no generic ~org-files-db--*~ symbols remain in ~lisp/~ or ~tests/~
+- no ~defcustom~ or ~defface~ forms remain outside ~org-files-db-core.el~
+- private definitions use their owning module prefix
+- the dependency graph has no org-files-db module cycle
+
+Run the full local checks after applying the patch:
+
+#+begin_src sh
+make fmt
+make ci
+#+end_src
+
+The build environment for this task does not contain Emacs or Eask.
+
+** Acceptance criteria
+
+- ~org-files-db-core.el~ contains the shared public customization.
+- ~org-files-db-core.el~ contains the public faces.
+- Public customization names remain short and stable.
+- Private functions use their owning module prefix.
+- Private variables use their owning module prefix.
+- Generic ~org-files-db--*~ names do not remain.
+- Public entry-point names remain unchanged.
+- Module-specific public actions keep meaningful public names.
+- Core does not contain unrelated implementation logic.
+- Module dependencies contain no cycles.
+- Tests use the new private names where necessary.
+- ~make fmt~ completes successfully.
+- ~make ci~ is green.
