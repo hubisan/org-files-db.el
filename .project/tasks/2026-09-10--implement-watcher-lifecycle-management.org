@@ -1,0 +1,168 @@
+#+TITLE: Implement Watcher Lifecycle Management
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-09-10 Thu 19:33]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Let Emacs use or start ~orgfdb watch~ for all configured databases without becoming a hidden process supervisor.
+
+Provide:
+
+#+begin_src emacs-lisp
+(org-files-db-watch-mode 1)
+(org-files-db-watch-start)
+(org-files-db-watch-stop)
+#+end_src
+
+~org-files-db-watch-start~ enables ~org-files-db-watch-mode~.
+
+~org-files-db-watch-stop~ disables ~org-files-db-watch-mode~.
+
+When the mode starts:
+
+- inspect all entries in ~org-files-db-configs~
+- accept an already running external watcher
+- start a watcher when none is active
+- wait until the watcher reports ~watcher ready~
+- track only watcher processes started by this Emacs instance
+
+When the mode stops:
+
+- stop only watcher processes owned by this Emacs instance
+- leave external watchers running
+
+Use an activation snapshot for owned watcher processes.
+
+If configuration changes while the mode runs, apply the new configuration after the next disable and enable cycle.
+
+Activation must be atomic.
+
+If one required watcher cannot start:
+
+- stop watchers started by that activation attempt
+- leave pre-existing external watchers unchanged
+- keep the mode disabled
+- report the error
+
+Do not restart a watcher automatically after an unexpected exit. Report the failure and keep the state visible.
+
+Add cleanup to ~kill-emacs-hook~.
+
+At normal Emacs exit:
+
+- remove active Emacs-owned view registrations first
+- stop watcher processes owned by this Emacs instance second
+- leave external watchers running
+
+Acceptance criteria:
+
+- Watch mode works without cache mode.
+- All configured databases can have active watchers.
+- Existing external watchers count as valid.
+- Emacs stops only processes that it owns.
+- Partial activation rolls back cleanly.
+- Unexpected watcher exits do not start a hidden restart loop.
+- Normal Emacs exit cleans up owned processes.
+
+* Planning
+
+** Problem summary
+
+Emacs needs active ~orgfdb watch~ processes for later Rust view caching. It must not take ownership of already running watchers.
+
+** Goals
+
+- Reuse an active external watcher.
+- Start missing watchers and wait for ~watcher ready~.
+- Track and stop only Emacs-owned watcher processes.
+- Roll back partial activation.
+- Preserve the activation snapshot until the mode restarts.
+- Report unexpected exits without automatic restart.
+- Provide ordered normal-exit cleanup.
+
+** Non-goals
+
+- View registration or cache reads.
+- Automatic watcher restart.
+- Direct access to Rust control sockets or cache files.
+
+** Architecture
+
+Use ~orgfdb view show~ as a read-only watcher availability probe. Keep long-lived watcher process management in ~org-files-db-watch.el~, separate from the short-lived process layer.
+
+Keep one activation snapshot with external and owned watcher state. Only owned entries contain Emacs processes.
+
+Use a private pre-exit hook so Step 7 can remove owned view registrations before watcher shutdown.
+
+** Execution plan
+
+1. Add the watcher module and public mode commands.
+2. Probe each configured database for an active watcher.
+3. Start missing watchers and wait for readiness.
+4. Add rollback, stop, sentinel, and exit cleanup logic.
+5. Add Buttercup coverage for ownership and lifecycle behavior.
+
+** Risks & assumptions
+
+The public ~orgfdb view show~ command distinguishes a reachable watcher from a missing watcher through its documented control errors.
+
+** Open questions
+
+None.
+
+** Proposed checks
+
+#+begin_src sh
+make fmt
+make ci
+#+end_src
+
+* Results
+
+** Approach
+
+Added ~org-files-db-watch.el~ with a global watch mode and explicit start/stop commands. The mode probes all configured databases, reuses external watchers, and starts only missing watchers.
+
+Owned watchers run as foreground Emacs processes. Activation waits for the Rust ~watcher ready~ marker on stderr. Emacs waits on the separate stderr process created by ~make-process~. A configurable startup timeout prevents an endless synchronous wait. Graceful shutdown sends SIGINT so Rust can flush pending work.
+
+Activation uses a fixed snapshot and rolls back owned watchers after any startup failure. Repeated activation is idempotent. Unexpected exits are recorded and reported without restart.
+
+The normal exit path runs a private pre-exit hook before stopping owned watchers. Step 7 can use this hook for view-registration cleanup.
+
+** Changed files
+
+- ~lisp/org-files-db-watch.el~
+- ~lisp/org-files-db.el~
+- ~tests/org-files-db-test.el~
+- ~.project/tasks/todo.org~
+- ~.project/tasks/2026-09-02--simplify-heading-completion-faces.org~
+- ~.project/tasks/2026-09-10--implement-watcher-lifecycle-management.org~
+
+** Checks performed
+
+Static Lisp balance, naming, sentence-spacing, obsolete-macro, and diff-whitespace checks pass. Emacs and Eask are not installed in the assistant environment.
+
+** Test results
+
+Buttercup coverage was added for external detection, owned startup, rollback, snapshots, owned-only shutdown, unexpected exits, exit ordering, failed activation, idempotent activation, stderr readiness handling, and startup timeout.
+
+Run ~make fmt~ and ~make ci~ locally before approval.
+
+** Bug fix after manual review
+
+The first Step 6 implementation waited for output from the main watcher process. Rust writes ~watcher ready~ to stderr. With a separate ~:stderr~ buffer, Emacs creates a separate stderr process, so waiting on the main process does not receive that marker.
+
+The startup loop now waits on the stderr process. A startup timeout also prevents an indefinite wait when Rust never reaches readiness.
+
+** Blockers
+
+None.
+
+** Follow-ups
+
+Step 7 can register Rust views and attach view cleanup to ~org-files-db-watch--before-exit-hook~.

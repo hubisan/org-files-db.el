@@ -1,4 +1,4 @@
-* REVIEW Simplify heading completion faces
+* DONE Simplify heading completion faces
 :PROPERTIES:
 :VISIBILITY: folded
 :END:

@@ -74,6 +74,7 @@
               (expect (featurep 'org-files-db-query) :to-equal t)
               (expect (featurep 'org-files-db-views) :to-equal t)
               (expect (featurep 'org-files-db-actions) :to-equal t)
+              (expect (featurep 'org-files-db-watch) :to-equal t)
               (expect (featurep 'org-files-db-search) :to-equal nil)
               (expect (featurep 'org-files-db-cache) :to-equal nil))
 
@@ -102,7 +103,8 @@
                                   org-files-db-heading-action
                                   org-files-db-file-action
                                   org-files-db-link-action
-                                  org-files-db-views))
+                                  org-files-db-views
+                                  org-files-db-watch-startup-timeout))
                 (expect (not (null (custom-variable-p variable))) :to-equal t))
               (dolist (face '(org-files-db-heading
                               org-files-db-title
@@ -124,7 +126,10 @@
                                   org-files-db-query-results
                                   org-files-db-check-setup
                                   org-files-db-current-config
-                                  org-files-db-actions-open-result))
+                                  org-files-db-actions-open-result
+                                  org-files-db-watch-mode
+                                  org-files-db-watch-start
+                                  org-files-db-watch-stop))
                 (expect (not (null (fboundp function))) :to-equal t)))
 
           (it "does not define old configuration or search options"
@@ -1156,6 +1161,345 @@
                            (error "Completion must not run for an invalid action"))))
                 (expect (org-files-db-query '(headings) :action 'not-a-function)
                         :to-throw 'user-error))))
+
+
+(describe "watcher lifecycle management"
+          (before-each
+           (setq org-files-db-watch-mode nil
+                 org-files-db-watch--activation nil))
+
+          (after-each
+           (setq org-files-db-watch-mode nil
+                 org-files-db-watch--activation nil))
+
+          (it "detects an external watcher through the read-only view probe"
+              (let (arguments)
+                (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                           (lambda (value)
+                             (setq arguments value)
+                             '(:status 1
+                                       :stdout ""
+                                       :stderr "presentation view request failed (view_not_found): presentation view `__org-files-db-emacs-watcher-probe__` is not registered\n"))))
+                  (expect (org-files-db-watch--probe-active-p "/tmp/config.toml")
+                          :to-equal t))
+                (expect arguments
+                        :to-equal
+                        '("view" "show" "--config" "/tmp/config.toml"
+                          "__org-files-db-emacs-watcher-probe__"))))
+
+          (it "treats a watcher control connection failure as no active watcher"
+              (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                         (lambda (_arguments)
+                           '(:status 1
+                                     :stdout ""
+                                     :stderr "failed to connect to the active watcher presentation view registry at /tmp/view.sock: No such file or directory\n"))))
+                (expect (org-files-db-watch--probe-active-p "/tmp/config.toml")
+                        :to-equal nil)))
+
+          (it "rejects watcher probe errors that do not mean absence"
+              (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                         (lambda (_arguments)
+                           '(:status 1
+                                     :stdout ""
+                                     :stderr "invalid configuration\n"))))
+                (expect (org-files-db-watch--probe-active-p "/tmp/config.toml")
+                        :to-throw 'org-files-db-cli-error)))
+
+          (it "starts missing watchers and keeps external watchers"
+              (let (started)
+                (cl-letf (((symbol-function 'org-files-db-watch--configured-targets)
+                           (lambda ()
+                             '(("main" . "/tmp/main.toml")
+                               ("work" . "/tmp/work.toml"))))
+                          ((symbol-function 'org-files-db-watch--probe-active-p)
+                           (lambda (file) (equal file "/tmp/main.toml")))
+                          ((symbol-function 'org-files-db-watch--start-owned-watcher)
+                           (lambda (name file)
+                             (push name started)
+                             (org-files-db-watch--entry-create
+                              :config name
+                              :config-file file
+                              :ownership 'owned
+                              :state 'ready
+                              :process 'work-process))))
+                  (let ((snapshot (org-files-db-watch--activate)))
+                    (expect started :to-equal '("work"))
+                    (expect (length snapshot) :to-equal 2)
+                    (expect (org-files-db-watch--entry-ownership (car snapshot))
+                            :to-equal 'external)
+                    (expect (org-files-db-watch--entry-ownership (cadr snapshot))
+                            :to-equal 'owned)))))
+
+          (it "rolls back owned watchers after partial activation failure"
+              (let (stopped caught)
+                (cl-letf (((symbol-function 'org-files-db-watch--configured-targets)
+                           (lambda ()
+                             '(("main" . "/tmp/main.toml")
+                               ("work" . "/tmp/work.toml"))))
+                          ((symbol-function 'org-files-db-watch--probe-active-p)
+                           (lambda (_file) nil))
+                          ((symbol-function 'org-files-db-watch--start-owned-watcher)
+                           (lambda (name file)
+                             (if (equal name "work")
+                                 (signal 'org-files-db-error
+                                         '("Cannot start work watcher"))
+                               (org-files-db-watch--entry-create
+                                :config name
+                                :config-file file
+                                :ownership 'owned
+                                :state 'ready
+                                :process 'main-process))))
+                          ((symbol-function 'org-files-db-watch--stop-owned-entry)
+                           (lambda (entry)
+                             (push (org-files-db-watch--entry-config entry) stopped))))
+                  (condition-case err
+                      (org-files-db-watch--activate)
+                    (org-files-db-error
+                     (setq caught err)))
+                  (expect (car caught) :to-equal 'org-files-db-error)
+                  (expect (cadr caught) :to-equal "Cannot start work watcher")
+                  (expect stopped :to-equal '("main"))
+                  (expect org-files-db-watch--activation :to-equal nil))))
+
+          (it "stops only Emacs-owned watcher entries"
+              (let ((owned
+                     (org-files-db-watch--entry-create
+                      :config "main"
+                      :config-file "/tmp/main.toml"
+                      :ownership 'owned
+                      :state 'ready
+                      :process 'main-process))
+                    (external
+                     (org-files-db-watch--entry-create
+                      :config "work"
+                      :config-file "/tmp/work.toml"
+                      :ownership 'external
+                      :state 'ready
+                      :process nil))
+                    stopped)
+                (cl-letf (((symbol-function 'org-files-db-watch--stop-owned-entry)
+                           (lambda (entry)
+                             (push (org-files-db-watch--entry-config entry) stopped))))
+                  (org-files-db-watch--stop-owned-entries (list owned external)))
+                (expect stopped :to-equal '("main"))))
+
+          (it "uses the activation snapshot when stopping"
+              (let* ((entry
+                      (org-files-db-watch--entry-create
+                       :config "main"
+                       :config-file "/tmp/old.toml"
+                       :ownership 'owned
+                       :state 'ready
+                       :process 'old-process))
+                     (org-files-db-watch--activation (list entry))
+                     (org-files-db-configs '(("new" . "/tmp/new.toml")))
+                     stopped)
+                (cl-letf (((symbol-function 'org-files-db-watch--stop-owned-entry)
+                           (lambda (value)
+                             (push (org-files-db-watch--entry-config-file value)
+                                   stopped))))
+                  (org-files-db-watch--deactivate))
+                (expect stopped :to-equal '("/tmp/old.toml"))
+                (expect org-files-db-watch--activation :to-equal nil)))
+
+          (it "keeps startup diagnostics until activation reports the failure"
+              (let* ((stderr (generate-new-buffer " *org-files-db-watch-startup-error*"))
+                     (entry
+                      (org-files-db-watch--entry-create
+                       :config "main"
+                       :config-file "/tmp/main.toml"
+                       :ownership 'owned
+                       :state 'starting
+                       :process 'watcher))
+                     cleaned)
+                (with-current-buffer stderr
+                  (insert "Cannot open configured source\n"))
+                (cl-letf (((symbol-function 'process-status)
+                           (lambda (_process) 'exit))
+                          ((symbol-function 'process-get)
+                           (lambda (_process key)
+                             (pcase key
+                               ('org-files-db-watch--entry entry)
+                               ('org-files-db-watch--expected-stop nil)
+                               ('org-files-db-watch--starting t)
+                               ('org-files-db-watch--stderr-buffer stderr))))
+                          ((symbol-function 'org-files-db-watch--cleanup-process-buffers)
+                           (lambda (_process) (setq cleaned t))))
+                  (org-files-db-watch--sentinel
+                   'watcher "exited abnormally with code 1\n"))
+                (expect cleaned :to-equal nil)
+                (expect (buffer-live-p stderr) :to-equal t)
+                (expect (org-files-db-watch--entry-state entry) :to-equal 'failed)
+                (expect (org-files-db-watch--entry-failure entry)
+                        :to-match "Cannot open configured source")
+                (kill-buffer stderr)))
+
+          (it "records unexpected watcher exits without restarting"
+              (let* ((entry
+                      (org-files-db-watch--entry-create
+                       :config "main"
+                       :config-file "/tmp/main.toml"
+                       :ownership 'owned
+                       :state 'ready
+                       :process 'watcher))
+                     (org-files-db-watch-mode t)
+                     warning)
+                (cl-letf (((symbol-function 'display-warning)
+                           (lambda (_type message &rest _args)
+                             (setq warning message)))
+                          ((symbol-function 'org-files-db-watch--start-owned-watcher)
+                           (lambda (&rest _args)
+                             (error "Unexpected restart"))))
+                  (org-files-db-watch--record-unexpected-exit
+                   entry "exited abnormally with code 1" "watcher failed"))
+                (expect (org-files-db-watch--entry-state entry) :to-equal 'failed)
+                (expect (org-files-db-watch--entry-failure entry)
+                        :to-match "watcher failed")
+                (expect warning :to-match "Watcher for configuration `main' exited unexpectedly")))
+
+          (it "runs exit cleanup hooks before stopping owned watchers"
+              (let* ((order nil)
+                     (entry
+                      (org-files-db-watch--entry-create
+                       :config "main"
+                       :config-file "/tmp/main.toml"
+                       :ownership 'owned
+                       :state 'ready
+                       :process 'watcher))
+                     (org-files-db-watch--activation (list entry))
+                     (org-files-db-watch--before-exit-hook
+                      (list (lambda () (push 'views order)))))
+                (cl-letf (((symbol-function 'org-files-db-watch--stop-owned-entry)
+                           (lambda (_entry) (push 'watcher order))))
+                  (org-files-db-watch--cleanup-at-exit))
+                (expect (nreverse order) :to-equal '(views watcher))
+                (expect org-files-db-watch--activation :to-equal nil)))
+
+          (it "starts and stops through the public mode commands"
+              (let (events)
+                (cl-letf (((symbol-function 'org-files-db-watch--activate)
+                           (lambda () (push 'start events)))
+                          ((symbol-function 'org-files-db-watch--deactivate)
+                           (lambda () (push 'stop events))))
+                  (org-files-db-watch-start)
+                  (expect org-files-db-watch-mode :to-equal t)
+                  (org-files-db-watch-stop)
+                  (expect org-files-db-watch-mode :to-equal nil))
+                (expect (nreverse events) :to-equal '(start stop))))
+
+          (it "keeps watch mode disabled when activation fails"
+              (let ((org-files-db-watch-mode nil)
+                    (org-files-db-watch--activation nil)
+                    caught)
+                (cl-letf (((symbol-function 'org-files-db-watch--activate)
+                           (lambda ()
+                             (signal 'org-files-db-error
+                                     '("Watcher startup failed")))))
+                  (condition-case err
+                      (org-files-db-watch-mode 1)
+                    (org-files-db-error
+                     (setq caught err))))
+                (expect (car caught) :to-equal 'org-files-db-error)
+                (expect org-files-db-watch-mode :to-equal nil)
+                (expect org-files-db-watch--activation :to-equal nil)))
+
+          (it "does not reactivate an already active watch mode"
+              (let ((org-files-db-watch-mode nil)
+                    (org-files-db-watch--activation nil)
+                    activations)
+                (cl-letf (((symbol-function 'org-files-db-watch--activate)
+                           (lambda ()
+                             (push 'activate activations)
+                             (setq org-files-db-watch--activation '(snapshot))
+                             org-files-db-watch--activation))
+                          ((symbol-function 'org-files-db-watch--deactivate)
+                           #'ignore))
+                  (org-files-db-watch-mode 1)
+                  (org-files-db-watch-mode 1))
+                (expect activations :to-equal '(activate))))
+
+          (it "recognizes the exact Rust watcher readiness line"
+              (let ((buffer (generate-new-buffer " *org-files-db-watch-ready*")))
+                (unwind-protect
+                    (progn
+                      (with-current-buffer buffer
+                        (insert "watcher ready\n"))
+                      (expect (not (null (org-files-db-watch--ready-p buffer)))
+                              :to-equal t))
+                  (when (buffer-live-p buffer)
+                    (kill-buffer buffer)))))
+
+          (it "accepts process output until the ready marker arrives"
+              (let ((live t)
+                    command
+                    stdout-buffer
+                    stderr-buffer
+                    accepted)
+                (cl-letf (((symbol-function 'org-files-db-process--resolve-executable)
+                           (lambda () "/opt/bin/orgfdb"))
+                          ((symbol-function 'make-process)
+                           (lambda (&rest properties)
+                             (setq command (plist-get properties :command)
+                                   stdout-buffer (plist-get properties :buffer)
+                                   stderr-buffer (plist-get properties :stderr))
+                             'watcher-process))
+                          ((symbol-function 'process-live-p)
+                           (lambda (_process) live))
+                          ((symbol-function 'process-put)
+                           (lambda (&rest _args) nil))
+                          ((symbol-function 'process-exit-status)
+                           (lambda (_process) 1))
+                          ((symbol-function 'accept-process-output)
+                           (lambda (process &rest _args)
+                             (push process accepted)
+                             (with-current-buffer stderr-buffer
+                               (insert "watcher ready\n"))
+                             t)))
+                  (let ((entry
+                         (org-files-db-watch--start-owned-watcher
+                          "main" "/tmp/main.toml")))
+                    (expect command
+                            :to-equal
+                            '("/opt/bin/orgfdb" "watch" "--config" "/tmp/main.toml"))
+                    (expect (org-files-db-watch--entry-state entry) :to-equal 'ready)
+                    (expect (org-files-db-watch--entry-process entry)
+                            :to-equal 'watcher-process)
+                    (expect accepted :to-contain nil)))
+                (when (buffer-live-p stdout-buffer)
+                  (kill-buffer stdout-buffer))
+                (when (buffer-live-p stderr-buffer)
+                  (kill-buffer stderr-buffer))))
+
+          (it "times out watcher startup instead of waiting forever"
+              (let ((org-files-db-watch-startup-timeout 0)
+                    (live t)
+                    stdout-buffer
+                    stderr-buffer)
+                (cl-letf (((symbol-function 'org-files-db-process--resolve-executable)
+                           (lambda () "/opt/bin/orgfdb"))
+                          ((symbol-function 'make-process)
+                           (lambda (&rest properties)
+                             (setq stdout-buffer (plist-get properties :buffer)
+                                   stderr-buffer (plist-get properties :stderr))
+                             'watcher-process))
+                          ((symbol-function 'process-live-p)
+                           (lambda (_process) live))
+                          ((symbol-function 'process-put)
+                           (lambda (&rest _args) nil))
+                          ((symbol-function 'org-files-db-watch--cleanup-process-buffers)
+                           #'ignore)
+                          ((symbol-function 'accept-process-output)
+                           (lambda (&rest _args) nil))
+                          ((symbol-function 'interrupt-process)
+                           (lambda (_process) (setq live nil))))
+                  (expect
+                   (org-files-db-watch--start-owned-watcher
+                    "main" "/tmp/main.toml")
+                   :to-throw 'org-files-db-error))
+                (when (buffer-live-p stdout-buffer)
+                  (kill-buffer stdout-buffer))
+                (when (buffer-live-p stderr-buffer)
+                  (kill-buffer stderr-buffer)))))
 
 (provide 'org-files-db-test)
 

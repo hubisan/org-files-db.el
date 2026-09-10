@@ -785,10 +785,12 @@ Remove tests for separate heading-level faces.
 - ~make fmt~ completes successfully.
 - ~make ci~ is green.
 
-** TODO Step 6 - Implement watcher lifecycle management
+** DONE Step 6 - Implement watcher lifecycle management
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
+
+[[./2026-09-10--implement-watcher-lifecycle-management.org][Task file]]
 
 Goal: Let Emacs use or start ~orgfdb watch~ for all configured databases without becoming a hidden process supervisor.
 

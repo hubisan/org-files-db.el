@@ -114,6 +114,12 @@ entry from `org-files-db-configs'.  A view without :config uses
   :type '(repeat sexp)
   :group 'org-files-db)
 
+(defcustom org-files-db-watch-startup-timeout 60
+  "Maximum seconds to wait for an orgfdb watcher to become ready.
+Set this to nil to wait without a timeout."
+  :type '(choice (const :tag "No timeout" nil) number)
+  :group 'org-files-db)
+
 (defface org-files-db-heading
   '((t (:inherit org-level-1 :height 1.0)))
   "Face for heading cells in org-files-db completion."

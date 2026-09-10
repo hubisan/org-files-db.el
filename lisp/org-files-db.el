@@ -38,6 +38,7 @@
 (require 'org-files-db-actions)
 (require 'org-files-db-query)
 (require 'org-files-db-views)
+(require 'org-files-db-watch)
 
 (provide 'org-files-db)
 
