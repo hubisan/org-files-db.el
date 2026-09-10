@@ -33,12 +33,6 @@
 (defconst org-files-db-presentation--version 2
   "Presentation JSON version supported by this package.")
 
-(defconst org-files-db-presentation--heading-faces
-  [org-files-db-heading-1 org-files-db-heading-2 org-files-db-heading-3
-                          org-files-db-heading-4 org-files-db-heading-5 org-files-db-heading-6
-                          org-files-db-heading-7 org-files-db-heading-8]
-  "Heading faces indexed by zero-based heading level.")
-
 (defconst org-files-db-presentation--candidate-identity-base #x1900
   "Number of private-use characters used for candidate identities.")
 
@@ -508,15 +502,6 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
        :schemas schemas
        :rows rows))))
 
-(defun org-files-db-presentation--result-level (result)
-  "Return a normalized heading level for RESULT."
-  (let ((level (and (listp result)
-                    (or (alist-get 'level result)
-                        (alist-get 'heading_level result)))))
-    (if (and (integerp level) (> level 0))
-        (min 8 level)
-      1)))
-
 (defun org-files-db-presentation--todo-face (keyword role)
   "Return the face for TODO KEYWORD with semantic ROLE."
   (or (org-face-from-face-or-color
@@ -525,12 +510,10 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
         ('todo 'org-files-db-todo)
         ('done 'org-files-db-done))))
 
-(defun org-files-db-presentation--role-face (role result &optional cell-text)
-  "Return the face for semantic ROLE, original RESULT, and CELL-TEXT."
+(defun org-files-db-presentation--role-face (role &optional cell-text)
+  "Return the face for semantic ROLE and CELL-TEXT."
   (pcase role
-    ('heading
-     (aref org-files-db-presentation--heading-faces
-           (1- (org-files-db-presentation--result-level result))))
+    ('heading 'org-files-db-heading)
     ('title 'org-files-db-title)
     ((or 'todo 'done)
      (org-files-db-presentation--todo-face cell-text role))
@@ -545,8 +528,8 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
     ('property-value 'org-files-db-property-value)
     (_ nil)))
 
-(defun org-files-db-presentation--visible-row (row result)
-  "Return the Rust-prepared visible string for ROW and RESULT."
+(defun org-files-db-presentation--visible-row (row)
+  "Return the Rust-prepared visible string for ROW."
   (let ((cells (org-files-db-presentation-row-cells row))
         segments)
     (dotimes (index (length cells))
@@ -557,7 +540,6 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
              (face
               (org-files-db-presentation--role-face
                (org-files-db-presentation-cell-role cell)
-               result
                (org-files-db-presentation-cell-search-text cell))))
         (when (and face (> (length segment) 0))
           (add-text-properties 0 (length segment) (list 'face face) segment))
@@ -612,7 +594,7 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
 (defun org-files-db-presentation--candidate (presentation row index)
   "Return one completion candidate for ROW at INDEX in PRESENTATION."
   (let* ((result (org-files-db-presentation--row-result presentation row))
-         (visible (org-files-db-presentation--visible-row row result))
+         (visible (org-files-db-presentation--visible-row row))
          (search (org-files-db-presentation--search-row row))
          (body (if (string-empty-p search) (string #x2060) search))
          (body-length (length body))

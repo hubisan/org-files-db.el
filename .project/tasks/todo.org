@@ -683,7 +683,7 @@ Bind ~org-todo-keyword-faces~ locally in each relevant test.
 - ~make fmt~ completes successfully.
 - ~make ci~ is green.
   
-** TODO Simplify heading completion faces
+** DONE Simplify heading completion faces
 :PROPERTIES:
 :VISIBILITY: folded
 :END:

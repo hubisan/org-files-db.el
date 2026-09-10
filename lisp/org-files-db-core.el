@@ -114,44 +114,9 @@ entry from `org-files-db-configs'.  A view without :config uses
   :type '(repeat sexp)
   :group 'org-files-db)
 
-(defface org-files-db-heading-1
+(defface org-files-db-heading
   '((t (:inherit org-level-1 :height 1.0)))
-  "Face for level 1 headings in org-files-db completion."
-  :group 'org-files-db)
-
-(defface org-files-db-heading-2
-  '((t (:inherit org-level-2 :height 1.0)))
-  "Face for level 2 headings in org-files-db completion."
-  :group 'org-files-db)
-
-(defface org-files-db-heading-3
-  '((t (:inherit org-level-3 :height 1.0)))
-  "Face for level 3 headings in org-files-db completion."
-  :group 'org-files-db)
-
-(defface org-files-db-heading-4
-  '((t (:inherit org-level-4 :height 1.0)))
-  "Face for level 4 headings in org-files-db completion."
-  :group 'org-files-db)
-
-(defface org-files-db-heading-5
-  '((t (:inherit org-level-5 :height 1.0)))
-  "Face for level 5 headings in org-files-db completion."
-  :group 'org-files-db)
-
-(defface org-files-db-heading-6
-  '((t (:inherit org-level-6 :height 1.0)))
-  "Face for level 6 headings in org-files-db completion."
-  :group 'org-files-db)
-
-(defface org-files-db-heading-7
-  '((t (:inherit org-level-7 :height 1.0)))
-  "Face for level 7 headings in org-files-db completion."
-  :group 'org-files-db)
-
-(defface org-files-db-heading-8
-  '((t (:inherit org-level-8 :height 1.0)))
-  "Face for level 8 headings in org-files-db completion."
+  "Face for heading cells in org-files-db completion."
   :group 'org-files-db)
 
 (defface org-files-db-title

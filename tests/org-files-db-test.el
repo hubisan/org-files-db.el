@@ -104,14 +104,7 @@
                                   org-files-db-link-action
                                   org-files-db-views))
                 (expect (not (null (custom-variable-p variable))) :to-equal t))
-              (dolist (face '(org-files-db-heading-1
-                              org-files-db-heading-2
-                              org-files-db-heading-3
-                              org-files-db-heading-4
-                              org-files-db-heading-5
-                              org-files-db-heading-6
-                              org-files-db-heading-7
-                              org-files-db-heading-8
+              (dolist (face '(org-files-db-heading
                               org-files-db-title
                               org-files-db-todo
                               org-files-db-done
@@ -737,82 +730,78 @@
                 (expect (substring-no-properties visible)
                         :to-equal "A complete…  notes.org  ")
                 (expect (get-text-property 0 'face visible)
-                        :to-equal 'org-files-db-heading-3)
+                        :to-equal 'org-files-db-heading)
                 (expect (get-text-property (length "A complete…  ") 'face visible)
                         :to-equal 'org-files-db-file-name)))
 
           (it "maps all supported semantic roles and ignores unknown roles"
-              (let ((result '((kind . "heading") (level . 2))))
-                (expect (org-files-db-presentation--role-face 'heading result)
-                        :to-equal 'org-files-db-heading-2)
-                (expect (org-files-db-presentation--role-face 'title result)
-                        :to-equal 'org-files-db-title)
-                (expect (org-files-db-presentation--role-face 'todo result)
-                        :to-equal 'org-files-db-todo)
-                (expect (org-files-db-presentation--role-face 'done result)
-                        :to-equal 'org-files-db-done)
-                (expect (org-files-db-presentation--role-face 'priority result)
-                        :to-equal 'org-files-db-priority)
-                (expect (org-files-db-presentation--role-face 'tag result)
-                        :to-equal 'org-files-db-tag)
-                (expect (org-files-db-presentation--role-face 'date result)
-                        :to-equal 'org-files-db-date)
-                (expect (org-files-db-presentation--role-face 'file-name result)
-                        :to-equal 'org-files-db-file-name)
-                (expect (org-files-db-presentation--role-face 'file-path result)
-                        :to-equal 'org-files-db-file-path)
-                (expect (org-files-db-presentation--role-face 'keyword-name result)
-                        :to-equal 'org-files-db-keyword-name)
-                (expect (org-files-db-presentation--role-face 'keyword-value result)
-                        :to-equal 'org-files-db-keyword-value)
-                (expect (org-files-db-presentation--role-face 'property-name result)
-                        :to-equal 'org-files-db-property-name)
-                (expect (org-files-db-presentation--role-face 'property-value result)
-                        :to-equal 'org-files-db-property-value)
-                (expect (org-files-db-presentation--role-face 'future-role result)
-                        :to-equal nil)))
+              (expect (org-files-db-presentation--role-face 'heading)
+                      :to-equal 'org-files-db-heading)
+              (expect (org-files-db-presentation--role-face 'title)
+                      :to-equal 'org-files-db-title)
+              (expect (org-files-db-presentation--role-face 'todo)
+                      :to-equal 'org-files-db-todo)
+              (expect (org-files-db-presentation--role-face 'done)
+                      :to-equal 'org-files-db-done)
+              (expect (org-files-db-presentation--role-face 'priority)
+                      :to-equal 'org-files-db-priority)
+              (expect (org-files-db-presentation--role-face 'tag)
+                      :to-equal 'org-files-db-tag)
+              (expect (org-files-db-presentation--role-face 'date)
+                      :to-equal 'org-files-db-date)
+              (expect (org-files-db-presentation--role-face 'file-name)
+                      :to-equal 'org-files-db-file-name)
+              (expect (org-files-db-presentation--role-face 'file-path)
+                      :to-equal 'org-files-db-file-path)
+              (expect (org-files-db-presentation--role-face 'keyword-name)
+                      :to-equal 'org-files-db-keyword-name)
+              (expect (org-files-db-presentation--role-face 'keyword-value)
+                      :to-equal 'org-files-db-keyword-value)
+              (expect (org-files-db-presentation--role-face 'property-name)
+                      :to-equal 'org-files-db-property-name)
+              (expect (org-files-db-presentation--role-face 'property-value)
+                      :to-equal 'org-files-db-property-value)
+              (expect (org-files-db-presentation--role-face 'future-role)
+                      :to-equal nil))
 
           (it "uses Org TODO keyword faces before semantic fallback faces"
               (let ((org-todo-keyword-faces
                      '(("REVIEW" . org-warning)
                        ("DONE" . "green")
                        ("CANCEL" . (:foreground "blue" :weight bold))
-                       ("WAIT" . "orange")))
-                    (result '((kind . "heading") (level . 2))))
+                       ("WAIT" . "orange"))))
                 (expect
-                 (org-files-db-presentation--role-face 'todo result "REVIEW")
+                 (org-files-db-presentation--role-face 'todo "REVIEW")
                  :to-equal 'org-warning)
                 (expect
-                 (org-files-db-presentation--role-face 'done result "DONE")
+                 (org-files-db-presentation--role-face 'done "DONE")
                  :to-equal
                  (org-face-from-face-or-color 'todo 'org-todo "green"))
                 (expect
-                 (org-files-db-presentation--role-face 'done result "CANCEL")
+                 (org-files-db-presentation--role-face 'done "CANCEL")
                  :to-equal '(:foreground "blue" :weight bold))
                 (expect
-                 (org-files-db-presentation--role-face 'todo result "WAIT")
+                 (org-files-db-presentation--role-face 'todo "WAIT")
                  :to-equal
                  (org-face-from-face-or-color 'todo 'org-todo "orange"))
                 (expect
-                 (org-files-db-presentation--role-face 'todo result "NEXT")
+                 (org-files-db-presentation--role-face 'todo "NEXT")
                  :to-equal 'org-files-db-todo)
                 (expect
-                 (org-files-db-presentation--role-face 'done result "CLOSED")
+                 (org-files-db-presentation--role-face 'done "CLOSED")
                  :to-equal 'org-files-db-done)))
 
           (it "uses the Rust TODO role for fallback state"
-              (let ((org-todo-keyword-faces nil)
-                    (result '((kind . "heading") (level . 1))))
+              (let ((org-todo-keyword-faces nil))
                 (expect
-                 (org-files-db-presentation--role-face 'todo result "DONE")
+                 (org-files-db-presentation--role-face 'todo "DONE")
                  :to-equal 'org-files-db-todo)
                 (expect
-                 (org-files-db-presentation--role-face 'done result "TODO")
+                 (org-files-db-presentation--role-face 'done "TODO")
                  :to-equal 'org-files-db-done)))
 
           (it "uses full TODO search text when display text is formatted"
               (let* ((org-todo-keyword-faces '(("REVIEW" . org-warning)))
-                     (result '((kind . "heading") (level . 1)))
                      (row
                       (org-files-db-presentation--make-presentation-row
                        :result-index 0
@@ -824,22 +813,43 @@
                          :display-text "REVI…     "
                          :role 'todo))))
                      (visible
-                      (org-files-db-presentation--visible-row row result)))
+                      (org-files-db-presentation--visible-row row)))
                 (expect (get-text-property 0 'face visible)
                         :to-equal 'org-warning)))
 
-          (it "defines heading faces with normal completion text height"
-              (dolist (face '(org-files-db-heading-1
-                              org-files-db-heading-2
-                              org-files-db-heading-3
-                              org-files-db-heading-4
-                              org-files-db-heading-5
-                              org-files-db-heading-6
-                              org-files-db-heading-7
-                              org-files-db-heading-8))
-                (expect (not (null (facep face))) :to-equal t)
-                (expect (= (face-attribute face :height nil 'default) 1.0)
-                        :to-equal t)))
+          (it "defines one heading face with normal completion text height"
+              (expect (not (null (facep 'org-files-db-heading))) :to-equal t)
+              (expect (= (face-attribute 'org-files-db-heading :height nil 'default) 1.0)
+                      :to-equal t))
+
+          (it "uses the same heading face for all heading result levels"
+              (let ((row
+                     (org-files-db-presentation--make-presentation-row
+                      :result-index 0
+                      :row-context nil
+                      :cells
+                      (vector
+                       (org-files-db-presentation--make-presentation-cell
+                        :search-text "Heading"
+                        :display-text "Heading"
+                        :role 'heading)))))
+                (dolist (result '(((kind . "heading") (level . 1))
+                                  ((kind . "heading") (level . 7))
+                                  ((kind . "link") (heading_level . 4))))
+                  (let* ((presentation
+                          (org-files-db-presentation--make-presentation
+                           :version 2
+                           :database-id "db"
+                           :generation 1
+                           :config "main"
+                           :results (vector result)
+                           :schemas nil
+                           :rows (vector row)))
+                         (candidate
+                          (car (org-files-db-presentation--candidates presentation)))
+                         (visible (get-text-property 0 'display candidate)))
+                    (expect (get-text-property 0 'face visible)
+                            :to-equal 'org-files-db-heading)))))
 
           (it "keeps row result context and configuration metadata on candidates"
               (let* ((result '((kind . "heading") (level . 1) (title . "Task")))

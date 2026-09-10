@@ -1,0 +1,34 @@
+* REVIEW Simplify heading completion faces
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Use one face for all heading cells in org-files-db completion.
+
+** Implemented
+
+Replaced the eight level-specific heading faces with ~org-files-db-heading~.
+
+All Rust ~heading~ roles now use this face. Heading ~level~ and ~heading_level~ data remain unchanged but do not affect face selection.
+
+Removed the level-specific face table and heading-level resolver from the presentation module.
+
+Updated tests for the single heading face and for heading, deeper heading, and link result metadata.
+
+** Validation
+
+Run:
+
+#+begin_src sh
+make fmt
+make ci
+#+end_src
+
+** Acceptance criteria
+
+- Only ~org-files-db-heading~ remains as the public heading face.
+- All heading cells use ~org-files-db-heading~.
+- Heading level does not affect face selection.
+- Rust presentation data remains unchanged.
+- ~make fmt~ completes successfully.
+- ~make ci~ is green.

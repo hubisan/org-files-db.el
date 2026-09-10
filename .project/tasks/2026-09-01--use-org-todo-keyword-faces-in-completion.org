@@ -1,4 +1,4 @@
-* REVIEW Use Org TODO keyword faces in completion
+* DONE Use Org TODO keyword faces in completion
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
