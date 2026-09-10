@@ -852,10 +852,12 @@ Acceptance criteria:
 - Unexpected watcher exits do not start a hidden restart loop.
 - Normal Emacs exit cleans up owned processes.
 
-** TODO Step 7 - Implement predefined views and Rust cache integration
+** DONE Step 7 - Implement predefined views and Rust cache integration
 :PROPERTIES:
 :VISIBILITY: folded
 :END:
+
+[[./2026-09-10--implement-predefined-views-and-rust-cache.org][Task file]]
 
 Goal: Make a view a named query with presentation configuration and optional Rust caching.
 

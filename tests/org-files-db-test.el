@@ -57,6 +57,18 @@
   "Return the first candidate from completion TABLE."
   (car (org-files-db-presentation--completion-candidates table)))
 
+(defun org-files-db-test--empty-presentation-json ()
+  "Return a valid empty presentation-json version 2 payload."
+  (concat
+   "{\"presentation_version\":2,\"database_id\":\"db\",\"generation\":1,"
+   "\"results\":[],\"schemas\":{"
+   "\"row_fields\":[\"result_index\",\"row_context\",\"cells\"],"
+   "\"cell_fields\":[\"search_text\",\"display_text\",\"role\"],"
+   "\"row_context_shapes\":{},"
+   "\"display_text_null\":\"same-as-search_text\","
+   "\"role_encoding\":\"null-or-index-into-role_values\","
+   "\"role_values\":[]},\"rows\":[]}"))
+
 (describe "clean package foundation"
           (before-each
            (setq org-files-db-test--directory
@@ -76,14 +88,14 @@
               (expect (featurep 'org-files-db-actions) :to-equal t)
               (expect (featurep 'org-files-db-watch) :to-equal t)
               (expect (featurep 'org-files-db-search) :to-equal nil)
-              (expect (featurep 'org-files-db-cache) :to-equal nil))
+              (expect (featurep 'org-files-db-cache) :to-equal t))
 
           (it "loads Core without specialized org-files-db modules"
               (let* ((emacs (expand-file-name invocation-name invocation-directory))
                      (library-directory
                       (file-name-directory (locate-library "org-files-db-core")))
                      (form
-                      "(progn (require 'org-files-db-core) (when (or (featurep 'org-files-db-process) (featurep 'org-files-db-presentation) (featurep 'org-files-db-query) (featurep 'org-files-db-views) (featurep 'org-files-db-actions) (featurep 'org-files-db)) (kill-emacs 7)))"))
+                      "(progn (require 'org-files-db-core) (when (or (featurep 'org-files-db-process) (featurep 'org-files-db-presentation) (featurep 'org-files-db-query) (featurep 'org-files-db-views) (featurep 'org-files-db-actions) (featurep 'org-files-db-cache) (featurep 'org-files-db)) (kill-emacs 7)))"))
                 (expect
                  (call-process emacs nil nil nil
                                "--batch" "-Q" "-L" library-directory
@@ -124,12 +136,16 @@
           (it "keeps current public entry points unchanged"
               (dolist (function '(org-files-db-query
                                   org-files-db-query-results
+                                  org-files-db-view
                                   org-files-db-check-setup
                                   org-files-db-current-config
                                   org-files-db-actions-open-result
                                   org-files-db-watch-mode
                                   org-files-db-watch-start
-                                  org-files-db-watch-stop))
+                                  org-files-db-watch-stop
+                                  org-files-db-cache-mode
+                                  org-files-db-cache-start
+                                  org-files-db-cache-stop))
                 (expect (not (null (fboundp function))) :to-equal t)))
 
           (it "does not define old configuration or search options"
@@ -1500,6 +1516,460 @@
                   (kill-buffer stdout-buffer))
                 (when (buffer-live-p stderr-buffer)
                   (kill-buffer stderr-buffer)))))
+
+
+
+(describe "predefined views and Rust cache integration"
+          (before-each
+           (setq org-files-db-test--directory
+                 (make-temp-file "org-files-db-views-test-" t)
+                 org-files-db-cache-mode nil
+                 org-files-db-cache--activation nil
+                 org-files-db-watch-mode nil
+                 org-files-db-watch--activation nil))
+
+          (after-each
+           (setq org-files-db-cache-mode nil
+                 org-files-db-cache--activation nil
+                 org-files-db-watch-mode nil
+                 org-files-db-watch--activation nil)
+           (when (file-directory-p org-files-db-test--directory)
+             (delete-directory org-files-db-test--directory t)))
+
+          (it "resolves flat views with inherited defaults and cache disabled by default"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-columns '((title)))
+                     (org-files-db-heading-sort '((title :direction asc)))
+                     (org-files-db-heading-action #'ignore)
+                     (view '("tasks" :query (headings)))
+                     (resolved (org-files-db-views--resolve view)))
+                (expect (org-files-db-views--resolved-name resolved)
+                        :to-equal "tasks")
+                (expect (org-files-db-views--resolved-config resolved)
+                        :to-equal "main")
+                (expect (org-files-db-views--resolved-config-file resolved)
+                        :to-equal (expand-file-name main))
+                (expect (org-files-db-views--resolved-query resolved)
+                        :to-equal '(headings))
+                (expect (org-files-db-views--resolved-columns resolved)
+                        :to-equal '((title)))
+                (expect (org-files-db-views--resolved-sort resolved)
+                        :to-equal '((title :direction asc)))
+                (expect (org-files-db-views--resolved-cache resolved)
+                        :to-equal nil)
+                (expect (org-files-db-views--resolved-action resolved)
+                        :to-equal #'ignore)
+                (expect (org-files-db-views--resolved-action-includes resolved)
+                        :to-equal nil)))
+
+          (it "rejects missing queries, unsupported keys, duplicate keys, and invalid cache values"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main"))
+                (dolist (views
+                         '((("missing-query" :cache t))
+                           (("unknown-key" :query (headings) :future t))
+                           (("duplicate-key" :query (headings) :cache t :cache nil))
+                           (("bad-cache" :query (headings) :cache yes))))
+                  (let ((org-files-db-views views))
+                    (expect (org-files-db-views--validate-views)
+                            :to-throw 'user-error)))))
+
+          (it "runs cache-enabled views through the normal query path when cache mode is disabled"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-columns '((title)))
+                     (org-files-db-heading-sort nil)
+                     (org-files-db-views
+                      '(("tasks" :query (headings) :cache t :action ignore)))
+                     seen)
+                (cl-letf (((symbol-function 'org-files-db-query)
+                           (lambda (query &rest arguments)
+                             (setq seen (cons query arguments))
+                             'selected)))
+                  (expect (org-files-db-view "tasks") :to-equal 'selected))
+                (expect (car seen) :to-equal '(headings))
+                (expect (plist-get (cdr seen) :config) :to-equal "main")
+                (expect (plist-get (cdr seen) :columns) :to-equal '((title)))
+                (expect (plist-get (cdr seen) :sort) :to-equal nil)
+                (expect (plist-get (cdr seen) :action) :to-equal #'ignore)))
+
+          (it "keeps non-cached views on the one-shot path while cache mode is active"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-action #'ignore)
+                     (org-files-db-views
+                      '(("fresh" :query (headings) :cache nil :action ignore)))
+                     (org-files-db-cache-mode t)
+                     (org-files-db-cache--activation
+                      (org-files-db-cache--activation-create :entries nil))
+                     seen)
+                (cl-letf (((symbol-function 'org-files-db-query)
+                           (lambda (query &rest arguments)
+                             (setq seen (cons query arguments))
+                             'selected))
+                          ((symbol-function 'org-files-db-cache--read-entry)
+                           (lambda (&rest _args)
+                             (error "Cached read must not run"))))
+                  (expect (org-files-db-view "fresh") :to-equal 'selected))
+                (expect (car seen) :to-equal '(headings))
+                (expect (plist-get (cdr seen) :config) :to-equal "main")))
+
+          (it "asks for a view name during interactive use"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-action #'ignore)
+                     (org-files-db-views '(("tasks" :query (headings))))
+                     prompt
+                     collection
+                     selected)
+                (cl-letf (((symbol-function 'completing-read)
+                           (lambda (value choices &rest _args)
+                             (setq prompt value
+                                   collection choices)
+                             "tasks"))
+                          ((symbol-function 'org-files-db-query)
+                           (lambda (&rest _args)
+                             (setq selected t)
+                             'result)))
+                  (expect (call-interactively #'org-files-db-view)
+                          :to-equal 'result))
+                (expect prompt :to-equal "org-files-db view: ")
+                (expect collection :to-equal '("tasks"))
+                (expect selected :to-equal t)))
+
+          (it "creates stable private Rust names inside one Emacs session"
+              (let ((org-files-db-cache--session-id "session-a"))
+                (expect (org-files-db-cache--rust-name "open tasks")
+                        :to-equal
+                        (org-files-db-cache--rust-name "open tasks"))
+                (expect (org-files-db-cache--rust-name "open tasks")
+                        :to-match "\\`__org-files-db-emacs-session-a-")
+                (expect
+                 (equal (org-files-db-cache--rust-name "open tasks")
+                        (org-files-db-cache--rust-name "closed tasks"))
+                 :to-equal nil)))
+
+          (it "registers only cache-enabled views and stores resolved action requirements"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-columns '((title)))
+                     (org-files-db-heading-sort '((title :direction asc)))
+                     (org-files-db-heading-action #'ignore)
+                     (org-files-db-views
+                      '(("cached" :query (headings) :cache t)
+                        ("fresh" :query (headings))))
+                     (org-files-db-cache--session-id "test-session")
+                     registered)
+                (cl-letf (((symbol-function 'org-files-db-watch-start)
+                           (lambda () (setq org-files-db-watch-mode t)))
+                          ((symbol-function 'org-files-db-watch--probe-active-p)
+                           (lambda (_file) t))
+                          ((symbol-function 'org-files-db-actions--required-includes)
+                           (lambda (_action) '(target path target)))
+                          ((symbol-function 'org-files-db-process--call-json)
+                           (lambda (arguments)
+                             (push arguments registered)
+                             '((status . "registered")))))
+                  (org-files-db-cache-mode 1))
+                (let* ((activation org-files-db-cache--activation)
+                       (entries
+                        (org-files-db-cache--activation-entries activation))
+                       (entry (car entries))
+                       (resolved (org-files-db-cache--entry-resolved entry))
+                       (arguments (car registered)))
+                  (expect org-files-db-cache-mode :to-equal t)
+                  (expect org-files-db-watch-mode :to-equal t)
+                  (expect (length entries) :to-equal 1)
+                  (expect (org-files-db-views--resolved-name resolved)
+                          :to-equal "cached")
+                  (expect (org-files-db-views--resolved-columns resolved)
+                          :to-equal '((title)))
+                  (expect (org-files-db-views--resolved-sort resolved)
+                          :to-equal '((title :direction asc)))
+                  (expect (org-files-db-views--resolved-action-includes resolved)
+                          :to-equal '("path" "target"))
+                  (expect (org-files-db-cache--entry-rust-name entry)
+                          :to-match "test-session")
+                  (expect arguments :to-contain "view")
+                  (expect arguments :to-contain "register")
+                  (expect arguments :to-contain "--include")
+                  (expect arguments :to-contain "path,target"))))
+
+          (it "rolls back registrations and watch mode after cache activation failure"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (work (org-files-db-test--config-file "work.toml"))
+                     (org-files-db-configs `(("main" . ,main) ("work" . ,work)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-action #'ignore)
+                     (org-files-db-views
+                      '(("one" :query (headings) :cache t)
+                        ("two" :config "work" :query (headings) :cache t)))
+                     registered
+                     removed
+                     stopped
+                     caught)
+                (cl-letf (((symbol-function 'org-files-db-watch-start)
+                           (lambda () (setq org-files-db-watch-mode t)))
+                          ((symbol-function 'org-files-db-watch-stop)
+                           (lambda ()
+                             (setq stopped t
+                                   org-files-db-watch-mode nil)))
+                          ((symbol-function 'org-files-db-watch--probe-active-p)
+                           (lambda (_file) t))
+                          ((symbol-function 'org-files-db-cache--register-entry)
+                           (lambda (entry)
+                             (let ((name
+                                    (org-files-db-views--resolved-name
+                                     (org-files-db-cache--entry-resolved entry))))
+                               (if registered
+                                   (signal 'org-files-db-error '("Registration failed"))
+                                 (push name registered)))))
+                          ((symbol-function 'org-files-db-cache--remove-entry)
+                           (lambda (entry)
+                             (push
+                              (org-files-db-views--resolved-name
+                               (org-files-db-cache--entry-resolved entry))
+                              removed))))
+                  (condition-case err
+                      (org-files-db-cache-mode 1)
+                    (org-files-db-error (setq caught err))))
+                (expect (car caught) :to-equal 'org-files-db-error)
+                (expect registered :to-equal '("one"))
+                (expect removed :to-equal '("one" "two"))
+                (expect stopped :to-equal t)
+                (expect org-files-db-cache-mode :to-equal nil)
+                (expect org-files-db-watch-mode :to-equal nil)
+                (expect org-files-db-cache--activation :to-equal nil)))
+
+          (it "does not stop a pre-existing watch mode after cache activation failure"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-action #'ignore)
+                     (org-files-db-views
+                      '(("cached" :query (headings) :cache t)))
+                     (org-files-db-watch-mode t)
+                     stopped
+                     caught)
+                (cl-letf (((symbol-function 'org-files-db-watch--probe-active-p)
+                           (lambda (_file) t))
+                          ((symbol-function 'org-files-db-watch-stop)
+                           (lambda () (setq stopped t)))
+                          ((symbol-function 'org-files-db-cache--register-entry)
+                           (lambda (_entry)
+                             (signal 'org-files-db-error '("Registration failed"))))
+                          ((symbol-function 'org-files-db-cache--remove-entry)
+                           #'ignore))
+                  (condition-case err
+                      (org-files-db-cache-mode 1)
+                    (org-files-db-error (setq caught err))))
+                (expect (car caught) :to-equal 'org-files-db-error)
+                (expect stopped :to-equal nil)
+                (expect org-files-db-watch-mode :to-equal t)))
+
+          (it "removes registrations from the activation snapshot instead of current views"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-action #'ignore)
+                     (org-files-db-views
+                      '(("cached" :query (headings) :cache t)))
+                     (resolved (org-files-db-views--resolve (car org-files-db-views)))
+                     (entry
+                      (org-files-db-cache--entry-create
+                       :resolved resolved :rust-name "private-old"))
+                     (org-files-db-cache-mode t)
+                     (org-files-db-cache--activation
+                      (org-files-db-cache--activation-create
+                       :entries (list entry)))
+                     removed)
+                (setq org-files-db-views
+                      '(("cached" :query (files) :cache t)))
+                (cl-letf (((symbol-function 'org-files-db-cache--remove-entry)
+                           (lambda (value)
+                             (push (org-files-db-cache--entry-rust-name value)
+                                   removed))))
+                  (org-files-db-cache-mode -1))
+                (expect removed :to-equal '("private-old"))
+                (expect org-files-db-cache--activation :to-equal nil)))
+
+          (it "uses the cached presentation path for an active cached view"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-action #'ignore)
+                     (org-files-db-views
+                      '(("cached" :query (headings) :cache t :action ignore)))
+                     (resolved (org-files-db-views--resolve (car org-files-db-views)))
+                     (entry
+                      (org-files-db-cache--entry-create
+                       :resolved resolved :rust-name "private"))
+                     (org-files-db-cache-mode t)
+                     (org-files-db-cache--activation
+                      (org-files-db-cache--activation-create
+                       :entries (list entry)))
+                     (result '((kind . "heading") (title . "Task")))
+                     (presentation
+                      (org-files-db-test--single-result-presentation result "main")))
+                (cl-letf (((symbol-function 'org-files-db-cache--read-entry)
+                           (lambda (_entry) presentation))
+                          ((symbol-function 'org-files-db-query)
+                           (lambda (&rest _args)
+                             (error "One-shot fallback must not run")))
+                          ((symbol-function 'completing-read)
+                           #'org-files-db-test--select-first-candidate))
+                  (expect (org-files-db-view "cached") :to-equal result))))
+
+          (it "requires a cache-mode restart after a cached definition changes"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-columns '((title)))
+                     (org-files-db-heading-action #'ignore)
+                     (org-files-db-views
+                      '(("cached" :query (headings) :cache t :action ignore)))
+                     (resolved (org-files-db-views--resolve (car org-files-db-views)))
+                     (entry
+                      (org-files-db-cache--entry-create
+                       :resolved resolved :rust-name "private"))
+                     (org-files-db-cache-mode t)
+                     (org-files-db-cache--activation
+                      (org-files-db-cache--activation-create
+                       :entries (list entry)))
+                     caught)
+                (setq org-files-db-heading-columns '((outline-path)))
+                (condition-case err
+                    (org-files-db-view "cached")
+                  (user-error (setq caught err)))
+                (expect (error-message-string caught)
+                        :to-match "restart org-files-db-cache-mode")))
+
+          (it "re-registers the stored snapshot once after view_not_found"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-action #'ignore)
+                     (org-files-db-views
+                      '(("cached" :query (headings) :cache t)))
+                     (resolved (org-files-db-views--resolve (car org-files-db-views)))
+                     (entry
+                      (org-files-db-cache--entry-create
+                       :resolved resolved :rust-name "private"))
+                     (reads 0)
+                     (registrations 0))
+                (cl-letf (((symbol-function 'org-files-db-cache--view-read-result)
+                           (lambda (_entry)
+                             (setq reads (1+ reads))
+                             (if (= reads 1)
+                                 '(:status 1 :stdout ""
+                                           :stderr "presentation view request failed (view_not_found): presentation view `private' is not registered")
+                               (list :status 0
+                                     :stdout (org-files-db-test--empty-presentation-json)
+                                     :stderr ""))))
+                          ((symbol-function 'org-files-db-cache--register-entry)
+                           (lambda (value)
+                             (expect value :to-be entry)
+                             (setq registrations (1+ registrations)))))
+                  (let ((presentation
+                         (org-files-db-cache--read-entry entry)))
+                    (expect (org-files-db-presentation-config presentation)
+                            :to-equal "main")))
+                (expect reads :to-equal 2)
+                (expect registrations :to-equal 1)))
+
+          (it "does not fall back to a one-shot query on cached read errors"
+              (let* ((main (org-files-db-test--config-file "main.toml"))
+                     (org-files-db-configs `(("main" . ,main)))
+                     (org-files-db-default-config "main")
+                     (org-files-db-heading-action #'ignore)
+                     (org-files-db-views
+                      '(("cached" :query (headings) :cache t :action ignore)))
+                     (resolved (org-files-db-views--resolve (car org-files-db-views)))
+                     (entry
+                      (org-files-db-cache--entry-create
+                       :resolved resolved :rust-name "private"))
+                     (org-files-db-cache-mode t)
+                     (org-files-db-cache--activation
+                      (org-files-db-cache--activation-create
+                       :entries (list entry)))
+                     fallback
+                     caught)
+                (cl-letf (((symbol-function 'org-files-db-cache--view-read-result)
+                           (lambda (_entry)
+                             '(:status 1 :stdout "" :stderr "cache rebuild failed")))
+                          ((symbol-function 'org-files-db-query)
+                           (lambda (&rest _args) (setq fallback t))))
+                  (condition-case err
+                      (org-files-db-view "cached")
+                    (org-files-db-cli-error (setq caught err))))
+                (expect (car caught) :to-equal 'org-files-db-cli-error)
+                (expect fallback :to-equal nil)))
+
+          (it "prevents watch-mode shutdown while cache mode is active"
+              (let ((org-files-db-watch-mode t)
+                    (org-files-db-cache-mode t)
+                    (org-files-db-watch--activation '(snapshot))
+                    caught)
+                (condition-case err
+                    (org-files-db-watch-mode -1)
+                  (user-error (setq caught err)))
+                (expect (error-message-string caught)
+                        :to-match "Disable org-files-db-cache-mode")
+                (expect org-files-db-watch-mode :to-equal t)))
+
+          (it "cache-stop with an argument disables cache before watch mode"
+              (let ((org-files-db-cache-mode t)
+                    order)
+                (cl-letf (((symbol-function 'org-files-db-cache-mode)
+                           (lambda (value)
+                             (push (list 'cache value) order)
+                             (setq org-files-db-cache-mode nil)))
+                          ((symbol-function 'org-files-db-watch-stop)
+                           (lambda () (push 'watch order))))
+                  (org-files-db-cache-stop t))
+                (expect (nreverse order)
+                        :to-equal '((cache -1) watch))))
+
+          (it "removes cached registrations before watcher shutdown at normal exit"
+              (let* ((resolved
+                      (org-files-db-views--resolved-create
+                       :name "cached"
+                       :config "main"
+                       :config-file "/tmp/main.toml"
+                       :query '(headings)
+                       :query-string "(headings)"
+                       :target 'headings
+                       :columns '((title))
+                       :sort nil
+                       :row-source nil
+                       :cache t
+                       :action #'ignore
+                       :action-includes nil))
+                     (entry
+                      (org-files-db-cache--entry-create
+                       :resolved resolved :rust-name "private"))
+                     (org-files-db-cache-mode t)
+                     (org-files-db-cache--activation
+                      (org-files-db-cache--activation-create
+                       :entries (list entry)))
+                     (org-files-db-watch--activation '(watcher))
+                     order)
+                (cl-letf (((symbol-function 'org-files-db-cache--remove-entry)
+                           (lambda (_entry) (push 'view order)))
+                          ((symbol-function 'org-files-db-watch--deactivate)
+                           (lambda () (push 'watcher order))))
+                  (org-files-db-watch--cleanup-at-exit))
+                (expect (nreverse order) :to-equal '(view watcher))
+                (expect org-files-db-cache-mode :to-equal nil)
+                (expect org-files-db-cache--activation :to-equal nil)))
+          )
 
 (provide 'org-files-db-test)
 

@@ -2,7 +2,7 @@
 #+STARTUP: showall
 #+TEMPLATE_VERSION: 0.8.0
 #+TASK_STARTED: [2026-09-10 Thu 19:33]
-#+TASK_COMPLETED:
+#+TASK_COMPLETED: [2026-09-10 Thu 22:10]
 
 * Original Task (User only)
 :PROPERTIES:
@@ -151,7 +151,7 @@ Static Lisp balance, naming, sentence-spacing, obsolete-macro, and diff-whitespa
 
 Buttercup coverage was added for external detection, owned startup, rollback, snapshots, owned-only shutdown, unexpected exits, exit ordering, failed activation, idempotent activation, stderr readiness handling, and startup timeout.
 
-Run ~make fmt~ and ~make ci~ locally before approval.
+The user confirmed that ~make fmt~ and ~make ci~ are green after the watcher fixes.
 
 ** Bug fix after manual review
 

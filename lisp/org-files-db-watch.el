@@ -79,16 +79,19 @@
          (stderr (or (plist-get result :stderr) "")))
     (cond
      ((zerop status) t)
-     ((string-match-p
-       (regexp-quote org-files-db-watch--view-not-found-marker)
-       stderr)
-      t)
+     ((org-files-db-watch--view-not-found-p stderr) t)
      ((string-match-p
        (regexp-quote org-files-db-watch--connection-error-marker)
        stderr)
       nil)
      (t
       (org-files-db-process--signal-cli-error status stderr)))))
+
+(defun org-files-db-watch--view-not-found-p (stderr)
+  "Return non-nil when STDERR reports a missing registered view."
+  (string-match-p
+   (regexp-quote org-files-db-watch--view-not-found-marker)
+   (or stderr "")))
 
 (defun org-files-db-watch--buffer-string (buffer)
   "Return BUFFER contents without text properties."
@@ -350,7 +353,12 @@ Wait until orgfdb reports its readiness marker."
                 (setq success t))
             (unless success
               (setq org-files-db-watch-mode nil)))))
-    (org-files-db-watch--deactivate)))
+    (if (bound-and-true-p org-files-db-cache-mode)
+        (progn
+          (setq org-files-db-watch-mode t)
+          (user-error
+           "Disable org-files-db-cache-mode before stopping org-files-db-watch-mode"))
+      (org-files-db-watch--deactivate))))
 
 ;;;###autoload
 (defun org-files-db-watch-start ()

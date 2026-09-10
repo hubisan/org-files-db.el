@@ -11,11 +11,11 @@
 
 ;; This program is distributed in the hope that it will be useful,
 ;; but WITHOUT ANY WARRANTY; without even the implied warranty of
-;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+;; along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 
@@ -41,7 +41,7 @@
 
 (defcustom org-files-db-configs nil
   "Named orgfdb configuration files.
-Each entry has the form (NAME . FILE).  NAME is a unique non-empty string.
+Each entry has the form (NAME . FILE). NAME is a unique non-empty string.
 FILE is the configuration file for that name."
   :type '(alist :key-type string :value-type file)
   :group 'org-files-db)
@@ -108,9 +108,10 @@ FILE is the configuration file for that name."
 
 (defcustom org-files-db-views nil
   "Named org-files-db query views.
-Each entry starts with a unique view name.  A :config value selects one
-entry from `org-files-db-configs'.  A view without :config uses
-`org-files-db-default-config'."
+Each entry starts with a unique view name and a flat property list.
+Supported keys are :config, :query, :columns, :sort, :row-source, :cache,
+and :action. A view without :config uses `org-files-db-default-config'.
+Caching is disabled for a view unless :cache is t."
   :type '(repeat sexp)
   :group 'org-files-db)
 

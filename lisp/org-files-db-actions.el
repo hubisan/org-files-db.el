@@ -11,11 +11,11 @@
 
 ;; This program is distributed in the hope that it will be useful,
 ;; but WITHOUT ANY WARRANTY; without even the implied warranty of
-;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+;; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 ;; GNU General Public License for more details.
 
 ;; You should have received a copy of the GNU General Public License
-;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+;; along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 ;;; Commentary:
 
@@ -39,6 +39,12 @@ Return nil outside an org-files-db result action."
 The rebuilt navigation implementation is added in a later rebuild step."
   (ignore result)
   (user-error "Org-files-db result navigation is not available yet"))
+
+(defun org-files-db-actions--required-includes (action)
+  "Return explicit orgfdb query includes required by ACTION.
+Current rebuilt actions require no extra query data."
+  (ignore action)
+  nil)
 
 (defun org-files-db-actions--default-action (target)
   "Return the configured default action for TARGET."
