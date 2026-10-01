@@ -2,6 +2,9 @@
 
 * Unreleased
 
+- =ADDED= Added optional Embark actions for results.
+  - Completion candidates use the ~org-files-db-result~ category; ~org-files-db-embark-result-map~ binds ~o~ open, ~t~ open link target, ~f~ insert file link, ~h~ insert heading link, ~l~ follow heading link and ~r~ rename file.
+  - Embark is never required; the keymap is registered once Embark is loaded.
 - =ADDED= Added an on-demand end-to-end benchmark, run with ~make bench~ (needs ~orgfdb~, not part of ~make ci~).
   - ~bench/org-files-db-bench.el~ generates corpora of 100 to 50,000 headings and measures the one-shot query and the cached ~view read~ path: ~orgfdb~ time, payload size, transfer, JSON parsing, presentation decode, candidate construction and time until completion is usable.
   - The results and the identified bottleneck are in ~docs/benchmark.org~.

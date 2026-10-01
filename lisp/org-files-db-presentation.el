@@ -759,6 +759,7 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
                 (org-files-db-presentation-row-row-context row)
                 'org-files-db-config
                 (org-files-db-presentation-config presentation)
+                'org-files-db-presentation presentation
                 'rear-nonsticky t)))
     (add-text-properties 0 (length candidate) metadata candidate)
     (add-text-properties 0 body-length (list 'display visible) candidate)
@@ -783,6 +784,7 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
     (cond
      ((eq action 'metadata)
       '(metadata
+        (category . org-files-db-result)
         (display-sort-function . identity)
         (cycle-sort-function . identity)))
      ((eq action 'org-files-db-presentation--candidates) candidates)
@@ -803,16 +805,23 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
             (org-files-db-presentation--row-result
              presentation (aref rows index)))))))
 
+(defvar org-files-db-presentation--current-read-presentation nil
+  "Presentation being read by `completing-read', or nil.
+Used by integrations that act on a candidate whose text properties were
+stripped.")
+
 (defun org-files-db-presentation--read (presentation &optional prompt)
   "Read one action record from PRESENTATION with standard completion and PROMPT."
   (let ((candidates (org-files-db-presentation--candidates presentation)))
     (unless candidates
       (user-error "The query returned no results"))
     (let ((selected
-           (completing-read
-            (or prompt "Result: ")
-            (org-files-db-presentation--completion-table candidates)
-            nil t)))
+           (let ((org-files-db-presentation--current-read-presentation
+                  presentation))
+             (completing-read
+              (or prompt "Result: ")
+              (org-files-db-presentation--completion-table candidates)
+              nil t))))
       (or (org-files-db-presentation--candidate-result selected presentation)
           (user-error "Selected result is no longer available")))))
 

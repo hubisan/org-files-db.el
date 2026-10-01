@@ -2597,6 +2597,76 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                                       :to-throw 'user-error '("Result is not a file"))
                               (expect (file-exists-p target) :to-be t)))))))
 
+(describe "Embark integration"
+          (let ((cases
+                 '((org-files-db-embark-open-result org-files-db-actions-open-result "o")
+                   (org-files-db-embark-open-link-target org-files-db-actions-open-link-target "t")
+                   (org-files-db-embark-insert-file-link org-files-db-actions-insert-file-link "f")
+                   (org-files-db-embark-insert-heading-link org-files-db-actions-insert-heading-link "h")
+                   (org-files-db-embark-follow-heading-link org-files-db-actions-follow-heading-link "l")
+                   (org-files-db-embark-rename-file org-files-db-actions-rename-file "r"))))
+
+            (it "loads the package without loading embark"
+                (let ((emacs (expand-file-name invocation-name invocation-directory))
+                      (lisp (file-name-directory (locate-library "org-files-db"))))
+                  (unless (file-executable-p emacs)
+                    (buttercup-skip "No Emacs executable available"))
+                  (expect (call-process
+                           emacs nil nil nil "-Q" "--batch" "-L" lisp
+                           "-l" "org-files-db"
+                           "--eval" "(when (featurep 'embark) (kill-emacs 1))")
+                          :to-equal 0)))
+
+            (it "registers the keymap in embark-keymap-alist"
+                (unless (require 'embark nil t)
+                  (buttercup-skip "Embark is not available"))
+                (expect (cdr (assq 'org-files-db-result embark-keymap-alist))
+                        :to-be 'org-files-db-embark-result-map))
+
+            (it "binds each key to its Embark command"
+                (dolist (case cases)
+                  (expect (lookup-key org-files-db-embark-result-map (nth 2 case))
+                          :to-be (nth 0 case))))
+
+            (it "dispatches the candidate record with the presentation bound"
+                (dolist (case cases)
+                  (let* ((result (list (cons 'kind "heading") (cons 'id (nth 2 case))))
+                         (presentation
+                          (org-files-db-test--single-result-presentation result "work"))
+                         (candidate
+                          (car (org-files-db-presentation--candidates presentation)))
+                         seen)
+                    (spy-on (nth 1 case) :and-call-fake
+                            (lambda (record &rest _)
+                              (setq seen (list record
+                                               org-files-db-actions--current-presentation
+                                               org-files-db-actions--current-action-config))))
+                    (funcall (nth 0 case) candidate)
+                    (expect seen :to-equal (list result presentation "work")))))
+
+            (it "resolves a candidate without properties by identity"
+                (let* ((result '((kind . "heading") (id . 1)))
+                       (presentation
+                        (org-files-db-test--single-result-presentation result "work"))
+                       (candidate (substring-no-properties
+                                   (car (org-files-db-presentation--candidates presentation))))
+                       seen)
+                  (spy-on 'org-files-db-actions-open-result :and-call-fake
+                          (lambda (record) (setq seen (list record
+                                                            org-files-db-actions--current-presentation))))
+                  (let ((org-files-db-presentation--current-read-presentation presentation))
+                    (org-files-db-embark-open-result candidate))
+                  (expect seen :to-equal (list result presentation))))
+
+            (it "signals a user error without any presentation"
+                (expect (org-files-db-embark-open-result "plain") :to-throw 'user-error))
+
+            (it "sets the result category in completion metadata"
+                (let* ((table (org-files-db-presentation--completion-table nil))
+                       (metadata (funcall table "" nil 'metadata)))
+                  (expect (cdr (assq 'category (cdr metadata)))
+                          :to-be 'org-files-db-result)))))
+
 (provide 'org-files-db-test)
 
 ;;; org-files-db-test.el ends here
