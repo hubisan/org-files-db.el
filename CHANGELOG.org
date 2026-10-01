@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =CHANGED= Rewrote the README for the rebuilt client.
 - =ADDED= Added Embark export of the filtered rows.
   - ~embark-export~ lists the rows matching the minibuffer filter in a read-only ~org-files-db-export-mode~ buffer; ~RET~ runs the default action and ~embark-act~ works on each row.
 - =ADDED= Added optional Embark actions for results.

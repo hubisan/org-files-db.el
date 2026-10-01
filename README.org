@@ -4,376 +4,205 @@
 [[https://www.gnu.org/licenses/gpl-3.0][https://img.shields.io/badge/License-GPL%20v3-blue.svg]]
 [[https://github.com/hubisan/org-files-db.el/actions/workflows/ci.yml][https://github.com/hubisan/org-files-db.el/actions/workflows/ci.yml/badge.svg]]
 
-Emacs interface for [[https://github.com/hubisan/org-files-db][org-files-db]].  The package keeps indexing and SQLite access in the ~orgfdb~ executable and uses its JSON interfaces for queries and search.
+Emacs client for [[https://github.com/hubisan/org-files-db][org-files-db]]. The ~orgfdb~ command line tool indexes your Org files into a database and answers structural queries over them. This package lets you run those queries from Emacs, pick a result with standard completion, and act on it: open it, insert a link to it, follow its link, or rename its file.
 
 * Requirements
 
 - Emacs 29.4 or newer
-- ~orgfdb~ installed or available through an explicit path
-- [[https://github.com/jwiegley/emacs-async][async.el]] for background predefined-view cache refreshes
-- [[https://github.com/minad/consult][Consult]] for live FTS5 search
-- [[https://github.com/oantolin/embark][Embark]] for exporting the currently filtered completion candidates
-- [[https://emacs-eask.github.io/][Eask]] for development
+- The ~orgfdb~ executable, installed or available through an explicit path
+- Optional: [[https://github.com/oantolin/embark][Embark]] for result actions and exporting the filtered results
 
-Consult and Embark are optional at runtime.  Ordinary queries, one-shot search, views, actions, and dynamic blocks work without them.  Pre-caching is disabled unless a predefined view opts in with ~:pre-cache t~.
+* Quick start
+
+Tell Emacs where ~orgfdb~ and your configuration file are. A configuration has a name and points to an ~orgfdb~ configuration file. The default configuration is used whenever you do not select one.
+
+#+begin_src emacs-lisp
+(require 'org-files-db)
+
+(setq org-files-db-configs '(("main" . "~/org/org-files-db.toml")))
+(setq org-files-db-default-config "main")
+#+end_src
+
+Run ~M-x org-files-db-check-setup~ to verify the executable, the configuration file, the version and read access to the database.
+
+Run a query with ~M-x org-files-db-query~ and enter a structural query at the prompt, for example:
+
+#+begin_example
+(headings (not (done)))
+#+end_example
+
+This lists all headings that are not done. Pick one with the usual completion interface (default UI, Vertico, Icomplete, Fido, ...) and press ~RET~ to open it. The same query from Lisp:
+
+#+begin_src emacs-lisp
+(org-files-db-query '(headings (not (done))))
+#+end_src
 
 * Configuration
 
-#+begin_src emacs-lisp
-(setq org-files-db-executable "orgfdb")
-(setq org-files-db-config-file "~/org/org-files-db.toml")
-#+end_src
+~org-files-db-executable~ is the command name or path of ~orgfdb~ (default ~"orgfdb"~).
 
-Run ~M-x org-files-db-check-setup~ to inspect the resolved executable, configuration file, version, and read-only database access.
+~org-files-db-configs~ is an alist of named configurations. Each entry is ~(NAME . FILE)~ with a unique non-empty name and the path of an ~orgfdb~ configuration file. Use several entries when you keep separate indexes, for example for work and private notes.
 
-The global file is the default for every operation.  Query, search, live-search, action, setup-diagnostic, view, and dynamic-block entry points may override it for one invocation.  Omitting ~:config-file~ inherits the global value, a path selects another configuration, and an explicit ~nil~ invokes ~orgfdb~ without ~--config~.
+~org-files-db-default-config~ is the name of the entry that is used when none is selected. It is required as soon as ~org-files-db-configs~ is not empty.
 
 #+begin_src emacs-lisp
-(org-files-db-query
- '(headings (not (done)))
- nil
- nil
- :config-file "~/org/private/org-files-db.toml")
-
-(org-files-db-query
- '(headings (tags "public"))
- nil
- nil
- :config-file nil)
+(setq org-files-db-configs
+      '(("main" . "~/org/org-files-db.toml")
+        ("work" . "~/work/org-files-db.toml")))
+(setq org-files-db-default-config "main")
 #+end_src
 
-Configuration paths are expanded and must identify readable files.  Relative paths are resolved against ~default-directory~ at invocation time.
+Select a configuration for one call in one of these ways:
 
-* Query
+- Interactively, call ~org-files-db-query~ or ~org-files-db-check-setup~ with a prefix argument (~C-u~) to choose from ~org-files-db-configs~.
+- From Lisp, pass ~:config "work"~ to ~org-files-db-query~.
+- In a predefined view, set ~:config "work"~.
 
-~org-files-db-query~ accepts an ~orgfdb~ query expression as Emacs Lisp data:
+The configuration files must exist and be readable. Invalid entries, duplicate names and an unknown default configuration are reported as errors.
+
+* Queries
+
+~M-x org-files-db-query~ reads a structural query as an Emacs Lisp form, runs it and lets you select one result. The query language is described in the [[https://github.com/hubisan/org-files-db/blob/main/docs/reference/query-language.org][query language reference]]. A query starts with a target, one of ~headings~, ~files~ or ~links~, followed by conditions.
 
 #+begin_src emacs-lisp
-(org-files-db-query
- '(headings (not (done)))
- '((todo-keyword :width (fixed 8))
-   (priority :width auto)
-   (outline-path :width (max 80))
-   (file-name :width (max 30))))
+(org-files-db-query '(headings (tags "public")))
+(org-files-db-query '(links (status "resolved")))
+(org-files-db-query '(files))
 #+end_src
 
-The result list uses standard Emacs completion and therefore works with the default UI, Vertico, Icomplete, and Fido.  The selected result is opened at its stored UTF-8 byte location by default.
+The query can be a quoted form or a string. The command returns the selected result to Lisp callers. Keyword arguments:
 
-Supported column widths are:
+- ~:config~: name from ~org-files-db-configs~ (default: ~org-files-db-default-config~)
+- ~:columns~: columns to display
+- ~:sort~: sort order
+- ~:row-source~: row source
+- ~:action~: function to call with the selected result instead of the default action
 
-- ~auto~: use the widest value in the current result set
-- ~(max N)~: calculate automatically, capped at ~N~ columns
-- ~(fixed N)~: always use ~N~ columns
+** Columns
 
-Default columns can be customized separately for headings, files, links, and search results.
-
-** Outline paths and truncation
-
-Heading and search results use the ~outline-path~ column.  Link results use two explicit columns: ~source-outline-path~ is the hierarchy containing the link, while ~target-outline-path~ is the hierarchy of its resolved target.  Unresolved, ambiguous, external, unsupported, and structurally incomplete targets produce an empty target path rather than displaying the authored link target.
-
-#+begin_src emacs-lisp
-(setq org-files-db-outline-path-separator " » ")
-(setq org-files-db-outline-path-include-root nil)
-(setq org-files-db-outline-path-include-match t)
-
-(org-files-db-query
- '(links (status "resolved"))
- '((source-outline-path
-    :separator " » "
-    :include-root nil
-    :include-match t
-    :width (max 50)
-    :truncate (:position right :marker "…"))
-   (link-description :width (max 40))
-   (target-outline-path
-    :separator " » "
-    :include-root t
-    :include-match t
-    :width (max 50)
-    :truncate (:position middle :marker "…"))
-   (resolution-status :width (fixed 10))))
-#+end_src
-
-~:separator~ controls the text between components.  ~:include-root~ includes the corresponding source or target file title.  ~:include-match nil~ omits the final source heading or resolved target heading.  For a target that resolves directly to a file, ~target-outline-path~ is empty unless ~:include-root t~ is used.
-
-Rust infers the data needed for the configured columns.  ~source-outline-path~ requests source path context and ~target-outline-path~ requests structured target context; both are retrieved in the same flat query invocation.  Users do not need to add ~--include~ or switch to outline output; the package passes no ~--include~ to presentation queries.  For compatibility, ~outline-path~ on link results currently behaves like ~source-outline-path~, but new configurations should use the explicit link column name.
-
-Truncation is available for every displayed column.  Customize the defaults with ~org-files-db-truncate-position~ and ~org-files-db-truncate-marker~, or override them per column with ~:truncate (:position left|middle|right :marker STRING)~.  The marker counts toward the final column width, and an empty marker performs hard truncation.  Truncation is visual only: standard Emacs completion and Consult continue to search the complete untruncated column value, including text that is not currently visible.
-
-** Result sorting
-
-Query and search results can be sorted by one or more public columns before completion, export, or dynamic-block rendering.  A sort column does not need to be displayed:
+Rust formats the result table, so the available column names are those of the [[https://github.com/hubisan/org-files-db/blob/main/docs/reference/presentation.org][presentation reference]]. A column is a list with the column name followed by options:
 
 #+begin_src emacs-lisp
 (org-files-db-query
  '(headings (not (done)))
- '((todo-keyword)
-   (outline-path :width (max 80))
-   (file-name :width (max 30)))
- nil
- :sort
- '((priority :direction asc :missing last)
-   (deadline-raw :direction asc :missing last)
-   (outline-path :direction asc)))
+ :columns '((todo-keyword :width (fixed 8))
+            (outline-path :width (max 80))
+            (file-name :width (max 30))))
 #+end_src
 
-Each sort key accepts ~:direction asc|desc~, ~:missing first|last~, and ~:case-fold t|nil~.  Defaults are ascending order, missing values last, and case-insensitive text comparison.  Equal rows retain their original ~orgfdb~ order.
+- ~:width~ is ~auto~ (widest value), ~(max N)~ (automatic, capped at N) or ~(fixed N)~.
+- ~:truncate~ is ~(:position left|middle|right :marker STRING)~ and controls how too long values are shortened.
+- ~:separator~, ~:include-root~ and ~:include-match~ tune outline path columns such as ~outline-path~, ~source-outline-path~ and ~target-outline-path~.
 
-Text is compared using complete untruncated values.  ~line-number~ and search ~rank~ are numeric, Org priorities use their natural ~A~, ~B~, ~C~ order, planning timestamps are chronological, outline paths are compared by path components rather than their display separator, and ~tags~ compares the complete tag collection.
+Without ~:columns~, the defaults for the query target are used. Customize them with ~org-files-db-heading-columns~, ~org-files-db-file-columns~ and ~org-files-db-link-columns~.
 
-Default sorting can be configured separately:
+** Sorting
+
+~:sort~ is a list of columns, each optionally followed by ~:direction asc~ or ~:direction desc~. A sort column does not have to be displayed.
 
 #+begin_src emacs-lisp
-(setq org-files-db-heading-sort nil)
-(setq org-files-db-file-sort nil)
-(setq org-files-db-link-sort nil)
-(setq org-files-db-search-sort nil)
+(org-files-db-query
+ '(headings (not (done)))
+ :sort '((priority :direction asc)
+         (outline-path :direction asc)))
 #+end_src
 
-Nil defaults preserve the order returned by ~orgfdb~.  This is especially important for search, where the normal order represents relevance.  Omitting ~:sort~ inherits the corresponding default; an explicit ~:sort nil~ preserves the CLI order for that invocation even when a default is configured.
+Without ~:sort~, the defaults ~org-files-db-heading-sort~, ~org-files-db-file-sort~ and ~org-files-db-link-sort~ apply (all ~nil~ by default, which keeps the order returned by ~orgfdb~). An explicit ~:sort nil~ keeps the ~orgfdb~ order even if a default is configured.
 
-Supported heading sort columns include ~title~, ~todo-keyword~, ~todo-type~, ~priority~, ~outline-path~, ~tags~, ~file-title~, ~file-name~, ~file-path~, ~line-number~, ~scheduled-raw~, ~deadline-raw~, and ~closed-raw~.  File results support ~file-title~, ~file-name~, ~file-path~, ~tags~, and ~line-number~.  Link results support ~link-type~, ~link-target~, ~link-description~, ~resolution-status~, ~source-outline-path~, ~target-outline-path~, ~file-name~, ~file-path~, and ~line-number~.  Search supports ~title~, ~outline-path~, ~file-name~, ~file-path~, ~line-number~, and ~rank~.
+** Row sources
 
-** Large result sets
+A row source selects how ~orgfdb~ expands each matching object into table rows. Pass its name as ~:row-source~ (a symbol or a string). The available row sources are listed in the presentation reference linked above.
 
-Query and search presentation is eager and synchronous.  The package normalizes column definitions once, extracts each displayed value once per row, calculates shared widths from cached cell widths, sanitizes each distinct face once, and formats every completion candidate once.  Completion filtering and redisplay operate only on the prepared candidate strings; selected actions and Embark receive the selected presentation-json version 3 action record (kind, id, file path, line, byte offset, and for links the resolved target position).
+** Faces
 
-Duplicate visible candidates retain separate invisible identities and direct result metadata.  Prepared CLI order is preserved, selection does not scan the complete candidate list, and visually shortened values remain complete in the underlying completion candidate.  Truncated column regions use presentation-only ~display~ properties instead of appended hidden search copies.
-
-For a real invocation, profile Emacs with ~M-x profiler-start~, run the query, and inspect ~M-x profiler-report~. End-to-end measurements of the Emacs path are in ~docs/benchmark.org~; run them with ~make bench~.
-
-* Search
-
-Perform one FTS5 search:
-
-#+begin_src emacs-lisp
-(org-files-db-search
- "title:sqlite AND body:index*"
- nil
- nil
- :scope 'all
- :sort nil
- :config-file "~/work/org-files-db.toml")
-#+end_src
-
-Start Consult-powered live search with ~M-x org-files-db-search-live~.  Search starts after ~org-files-db-search-min-input~ characters, debounces changing input, and discards obsolete processes.
-
-#+begin_src emacs-lisp
-(org-files-db-search-live
- nil
- nil
- :scope 'title
- :config-file "~/work/org-files-db.toml")
-#+end_src
-
-The former leading positional search scope remains accepted for compatibility, including before ~:config-file~, but keyword arguments are preferred.
-
-Search accepts the same ~:sort~ syntax as queries.  With no configured search sort, results remain in ~orgfdb~ relevance order.  For example, ~:sort '((title :direction asc))~ alphabetizes one invocation, while ~:sort nil~ explicitly keeps relevance order.
+Cells are shown with the faces of the ~org-files-db~ customization group (for example ~org-files-db-todo~, ~org-files-db-tag~ or ~org-files-db-file-name~). They inherit from the matching Org faces.
 
 * Predefined views
+
+A view is a named query with its own presentation and behaviour. Define views in ~org-files-db-views~ and run one with ~M-x org-files-db-view~, or ~(org-files-db-view "open-tasks")~ from Lisp.
 
 #+begin_src emacs-lisp
 (setq org-files-db-views
       '(("open-tasks"
-         :command query
-         :config-file "~/org/private/org-files-db.toml"
          :query (headings (not (done)))
-         :sort ((priority :direction asc :missing last)
-                (outline-path :direction asc))
          :columns ((todo-keyword :width (fixed 8))
-                   (outline-path :width (max 80))))
-        ("project-search"
-         :command search
-         :expression "org-files-db"
-         :scope title)
-        ("resolved-links"
-         :command query
+                   (outline-path :width (max 80)))
+         :sort ((priority :direction asc)
+                (outline-path :direction asc)))
+        ("work-links"
+         :config "work"
          :query (links (status "resolved"))
-         :columns ((source-outline-path :width (max 50))
-                   (link-description :width (max 30))
-                   (target-outline-path :width (max 50))))
-        ("public-tasks"
-         :command query
-         :config-file nil
-         :query (headings (tags "public")))))
-#+end_src
-
-Use ~M-x org-files-db-views-query~ or ~M-x org-files-db-views-search~.  From Lisp, pass the view name directly.
-
-A view without ~:config-file~ inherits ~org-files-db-config-file~.  A path selects that configuration for the delegated query or search, while an explicit ~nil~ disables ~--config~ for the view.
-
-A view without ~:sort~ inherits the configured default for its result type.  A view-specific sort overrides that default, while an explicit ~:sort nil~ preserves ~orgfdb~ order.
-
-** Generation-aware pre-caching
-
-Pre-caching is an advanced opt-in feature for predefined views.  Add ~:pre-cache t~ to mark a view as eligible, then enable the global cache mode:
-
-#+begin_src emacs-lisp
-(setq org-files-db-views
-      '(("all-headings"
-         :command query
-         :pre-cache t
+         :action org-files-db-actions-open-link-target)
+        ("all-headings"
          :query (headings)
-         :columns
-         ((todo-keyword :width (max 10))
-          (title :width (max 70))
-          (file-name :width (max 30))))
-        ("project-search"
-         :command search
-         :pre-cache t
-         :expression "org-files-db"
-         :scope title
-         :columns
-         ((title :width (max 70))
-          (file-name :width (max 30))))))
+         :cache t)))
 #+end_src
 
-#+begin_src emacs-lisp
-(org-files-db-cache-mode 1)
-#+end_src
+A view is a name followed by these keys, each at most once:
 
-Enabling ~org-files-db-cache-mode~ resolves ~database_path~, ~database_id~, and committed ~generation~ through ~orgfdb status~, installs the required file notification watcher, and queues every configured ~:pre-cache t~ view.  Rebuilds are asynchronous and use one child Emacs at a time.  The child performs the query or search, JSON parsing and normalization, sorting, shared-width calculation, visual formatting and truncation, searchable candidate construction, and candidate metadata preparation.
+- ~:query~ (required): the structural query
+- ~:config~: configuration name (default: ~org-files-db-default-config~)
+- ~:columns~, ~:sort~, ~:row-source~: same as for ~org-files-db-query~, with the same defaults
+- ~:action~: action for this view, see [[*Result actions][Result actions]]
+- ~:cache~: ~t~ to use the cache described below
 
-Each worker writes the complete ready-to-publish cache entry to a unique temporary readable-Lisp dump.  Only small job metadata and timings return through ~async.el~.  The parent reads the dump once, validates the job, database identity, and generation, atomically replaces the in-memory entry, and deletes the dump.  The dump is transport only: a warm view never reads it again.  Normal warm use is therefore only an in-memory cache lookup followed by completion.  Direct calls to ~org-files-db-query~ and ~org-files-db-search~ always remain fresh and bypass the predefined-view cache.
+View names must be unique. Invalid views are reported when they are validated.
 
-SQLite ~file-notify~ events are the only database-change wake-up mechanism.  The watcher observes the canonical database location returned by Rust and the related SQLite database, ~-wal~, and ~-shm~ activity.  A short debounce coalesces filesystem bursts around actual notifications; there is no polling fallback and no periodic cache timer.  Filesystem activity only triggers a new ~orgfdb status~ check.  If ~database_id~ and committed ~generation~ are unchanged, the current cache is kept and no rebuild runs.
+** Cache
 
-In Phase 1 every committed generation change causes a complete asynchronous rebuild of every affected pre-cached view.  The cache does not use ~orgfdb changes~, restricted-file queries, incremental candidate patching, or incremental width updates.  If a newer generation is detected while an older worker is still running, the older worker is terminated immediately, its transport dump is removed, and only the newest required generation is allowed to publish.  A callback whose job ID, database identity, or generation is obsolete performs cleanup only.
+A view with ~:cache t~ is prepared by ~orgfdb~ and kept up to date, so large result sets open faster. This only takes effect while ~org-files-db-cache-mode~ is active. Without the mode every view simply runs as an ordinary query.
 
-If a view is opened while its required generation is already rebuilding, Emacs waits for that existing asynchronous job while continuing to process child output.  If the job is superseded, the wait follows its replacement.  Initial pre-cache behaves the same way when no published entry exists yet.  Waiting is bounded by ~org-files-db-cache-wait-timeout~; failures never overwrite a previously valid published entry.
+- ~M-x org-files-db-cache-start~ (or ~(org-files-db-cache-mode 1)~) prepares all views with ~:cache t~. Cache mode starts watch mode if it is not already active.
+- ~M-x org-files-db-cache-stop~ (or ~(org-files-db-cache-mode -1)~) removes the prepared views. With a prefix argument it also stops watch mode.
 
-Cache management commands are:
+Cache mode snapshots the view definitions when it starts. Restart it after changing ~org-files-db-views~, ~org-files-db-configs~ or the default configuration. Views prepared by Emacs are private to the running Emacs session and are removed when you stop cache mode or exit Emacs.
 
-- ~org-files-db-views-refresh-cache~
-- ~org-files-db-views-refresh-all-caches~
-- ~org-files-db-views-clear-cache~
-- ~org-files-db-views-clear-all-caches~
+** Watch mode
 
-Refresh commands start complete asynchronous rebuilds.  With a prefix argument they still use the asynchronous worker but wait until the replacement is published.  Clearing a cache does not modify the Rust database or the view definition.
+~orgfdb~ keeps the index current while a watcher process runs. ~org-files-db-watch-mode~ makes sure there is one for every configuration in ~org-files-db-configs~. A watcher that is already running outside Emacs is reused and left alone; watchers started by Emacs are stopped when you stop the mode or exit Emacs.
 
-All user-facing package options, including cache options, are defined in ~org-files-db-core.el~.  Cache lifecycle options are:
+- ~M-x org-files-db-watch-start~ (or ~(org-files-db-watch-mode 1)~) starts the watchers.
+- ~M-x org-files-db-watch-stop~ (or ~(org-files-db-watch-mode -1)~) stops those started by Emacs. It is refused while cache mode is active; stop cache mode first.
 
-#+begin_src emacs-lisp
-org-files-db-cache-file-notify-debounce
-org-files-db-cache-wait-timeout
-org-files-db-cache-debug
-#+end_src
-
-Set ~org-files-db-cache-debug~ non-nil for concise lifecycle diagnostics.  ~M-x org-files-db-cache-benchmark-report~ displays the newest structured cache lifecycle record.  Rebuild records include worker startup, query/search, JSON normalization, presentation phases, dump write/read/delete, final status validation, publication, main-Emacs blocking and GC measurements; warm lookups and interactive waits report their own latency.  For file-notify refreshes the lifecycle data also records the raw event count and event-to-generation/worker/dump/publication timing chain.  ~M-x org-files-db-cache-file-notify-trace~ lists every raw notification separately, so SQLite event bursts are not confused with logical generation rebuilds.
-
-Disabling ~org-files-db-cache-mode~ terminates running work, clears queued rebuilds, removes all file notification watches and debounce timers, deletes owned transport dumps, and clears published cache entries.  After initial pre-cache completes and the database is unchanged, cache mode has no workers, no polling, no periodic timer, no CLI activity, and no candidate preparation.  Caches are in memory only and are rebuilt after Emacs restarts.
-
-* Embark export
-
-Query and search candidates use the ~org-files-db-result~ completion category.  With Embark installed, ~embark-export~ opens an ~*org-files-db export*~ buffer in ~org-files-db-export-mode~ (read-only) with one line per row that matches the current minibuffer filter, in the displayed order.  Rows of one result that is shown on several rows stay separate lines.
-
-- ~RET~ runs the default action for the result kind (~org-files-db-heading-action~, ~org-files-db-file-action~ or ~org-files-db-link-action~)
-- ~n~ and ~p~ move between lines
-- ~embark-act~ on a line offers the same actions as in the minibuffer (~org-files-db-embark-result-map~)
+~org-files-db-watch-startup-timeout~ (default 60) is the number of seconds to wait for a watcher to become ready, or ~nil~ to wait without limit.
 
 * Result actions
 
-The optional action argument of ~org-files-db-query~ and ~org-files-db-search~ receives the selected result object.  Package-owned execution metadata may be attached for follow-up operations.
+Selecting a result runs an action with that result. The default action depends on the query target:
 
-Built-in actions and wrappers include:
+- ~org-files-db-heading-action~ for ~headings~
+- ~org-files-db-file-action~ for ~files~
+- ~org-files-db-link-action~ for ~links~
 
-- ~org-files-db-actions-open-result~ (default) opens a heading, file, or link source at its stored location
-- ~org-files-db-actions-open-link-target~ opens the resolved target of a link result, either the target heading or the target file
-- ~org-files-db-actions-follow-heading-link~ opens the first link in a heading (headline first, then its section) without starting a process
-- ~org-files-db-actions-insert-file-link~ inserts a ~file:~ link to a file result at point, relative to the current buffer when it visits a file
-- ~org-files-db-actions-insert-heading-link~ inserts an ~id:~ link, a file link with ~CUSTOM_ID~, or a file link with the heading title, in that order of preference
-- ~org-files-db-actions-rename-file~ renames a file result and rewrites the indexed incoming ~file:~ links, relative or absolute as before; links whose text changed since indexing are skipped
-- ~org-files-db-actions-query-insert-file-link~
-- ~org-files-db-actions-query-insert-heading-link~
-- ~org-files-db-actions-rename-file-result~
+All three default to ~org-files-db-actions-open-result~. A view overrides them with ~:action~, a single call with ~:action~ in ~org-files-db-query~. An action is any function that takes the selected result as its only argument.
 
-File links support normal ~file:~, ~id:~, and file-plus-~CUSTOM_ID~ styles.  Heading links support ~id:~, file-plus-~CUSTOM_ID~, and title-based file search links.  Missing IDs are created with Org APIs and saved before the link is inserted.
+Built-in actions:
 
-~org-files-db-actions-rename-file~ updates resolved path-based links before renaming the target.  It preserves descriptions and heading or custom-ID search options, but the multi-file operation is not globally atomic.  Version control is strongly recommended.
+- ~org-files-db-actions-open-result~ opens a heading, a file or the source of a link at its position.
+- ~org-files-db-actions-open-link-target~ opens the resolved target of a link result, either the target heading or the target file.
+- ~org-files-db-actions-follow-heading-link~ opens the first link found in a heading, in its headline first and then in its section.
+- ~org-files-db-actions-insert-file-link~ inserts a ~file:~ link to a file result at point, relative to the current buffer when it visits a file.
+- ~org-files-db-actions-insert-heading-link~ inserts a link to a heading result at point: an ~id:~ link if the heading has an ~ID~, else a file link with the ~CUSTOM_ID~, else a file link with the heading title.
+- ~org-files-db-actions-rename-file~ renames a file result and updates the ~file:~ links that point to it in other files. Links whose text no longer matches the index are skipped and counted in the message. The change spans several files and is not atomic, so use version control.
 
-** Embark actions
+Actions that need more data than the list shows, such as the link and rename actions, ask ~orgfdb~ for it when you run them. If the files were indexed again since the result list was built, they stop with the message "Index changed, run the query again" and change nothing. Run the query again and select the result once more.
 
-Result candidates complete in the ~org-files-db-result~ category.  When Embark is installed, ~org-files-db-embark-result-map~ is registered for that category with these keys: ~o~ open, ~t~ open link target, ~f~ insert file link, ~h~ insert heading link, ~l~ follow heading link and ~r~ rename file.  Embark is optional and never required by the package.
+* Embark integration
 
-Query and search results retain the effective configuration that produced them.  Follow-up CLI operations, such as indexed ID resolution or link discovery during rename, continue to use that configuration even if the global option changes later.
+Embark is optional and never required. Results complete in the ~org-files-db-result~ category. Once Embark is loaded, ~embark-act~ on a result offers ~org-files-db-embark-result-map~:
 
-* Backlinks
+- ~o~ opens the result
+- ~t~ opens the link target
+- ~f~ inserts a file link
+- ~h~ inserts a heading link
+- ~l~ follows the first link in the heading
+- ~r~ renames the file
 
-~M-x org-files-db-actions-backlinks~ is a convenience wrapper around a normal link query for the current file or heading.  The returned objects are the source links, so selecting one jumps to the original link location.
+~embark-export~ lists the rows that match the current minibuffer filter, in the displayed order, in an ~*org-files-db export*~ buffer using ~org-files-db-export-mode~. In that buffer:
 
-* Org dynamic blocks
-
-The package registers these block types:
-
-#+begin_src org
-,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :layout flat
-,#+END:
-
-,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :sort "((priority :direction asc) (outline-path :direction asc))" :layout flat
-,#+END:
-
-,#+BEGIN: org-files-db-query :view "open-tasks" :layout outline
-,#+END:
-
-,#+BEGIN: org-files-db-search :expression "sqlite AND index*" :scope all :layout flat
-,#+END:
-
-,#+BEGIN: org-files-db-query :query "(headings (tags \"private\"))" :config-file "~/org/private/org-files-db.toml" :layout flat
-,#+END:
-
-,#+BEGIN: org-files-db-search :expression "public report" :config-file none :layout flat
-,#+END:
-
-,#+BEGIN: org-files-db-backlinks :scope heading :layout flat
-,#+END:
-#+end_src
-
-Update a block with ~org-update-dblock~ or all blocks with ~org-update-all-dblocks~.  Generated entries link back to their indexed source locations.
-
-Direct blocks inherit the global configuration when ~:config-file~ is absent.  A path overrides it, and the dedicated value ~none~ disables ~--config~.  Blocks using ~:view~ inherit the selected view's configuration and must not also specify ~:config-file~.
-
-Direct query and search blocks accept ~:sort~ as a safely read Lisp expression.  Blocks using ~:view~ inherit that view's sorting unless the block supplies its own ~:sort~.  An explicit ~:sort "nil"~ preserves the CLI order even when a global sort default is configured.
-
-* API naming
-
-Public names identify their owning module, while the two central operations stay concise:
-
-#+begin_example
-org-files-db-query             central query operation
-org-files-db-search            central search operation
-org-files-db-search-live       live search operation
-org-files-db-actions-*         public result action
-org-files-db-actions--*        private action helper
-org-files-db-cache-*           cache module operation
-org-files-db-cache--*          private cache helper
-org-files-db-views-*           public view operation
-org-files-db-views--*          private view helper
-org-files-db-dblock-*          public dynamic-block insertion command
-org-files-db-dblock--*         private dynamic-block helper
-org-files-db-query--*          private query helper
-org-files-db-search--*         private search helper
-org-files-db-export-*          public export operation
-org-files-db-export--*         private export helper
-org-files-db-benchmark-*       public benchmark command
-org-files-db-benchmark--*      private benchmark helper
-org-files-db--*                shared core helper
-#+end_example
-
-Names containing a double hyphen are internal implementation details and are not supported as public API.
-
-* Repository structure
-
-#+begin_src text
-lisp/org-files-db.el          Package entry point
-lisp/org-files-db-core.el     Configuration, CLI, results, columns, completion
-lisp/org-files-db-query.el    Query command
-lisp/org-files-db-search.el   One-shot and live FTS5 search
-lisp/org-files-db-actions.el  Link, follow, rename, and backlink actions
-lisp/org-files-db-cache.el    Generation-aware prepared predefined-view caches
-lisp/org-files-db-views.el    Named query and search views
-lisp/org-files-db-dblock.el   Org dynamic blocks
-tests/                        Buttercup tests
-#+end_src
+- ~RET~ runs the default action for the result on the current line
+- ~n~ and ~p~ move to the next and previous line
+- ~embark-act~ on a line offers the same actions as in the minibuffer
 
 * Development
 
@@ -382,7 +211,29 @@ make setup
 make ci
 #+end_src
 
-The checks include byte-compilation, package linting, source linting, and Buttercup tests.  ~make bench~ runs the on-demand end-to-end benchmark against a real ~orgfdb~ (results in [[file:docs/benchmark.org][docs/benchmark.org]]).
+- ~make setup~ installs the development dependencies with [[https://emacs-eask.github.io/][Eask]].
+- ~make ci~ runs the full check: package, install, byte-compilation, linting and Buttercup tests.
+- ~make test~ runs only the Buttercup tests.
+- ~make fmt~ formats the Emacs Lisp files.
+- ~make bench~ runs the on-demand end-to-end benchmark against a real ~orgfdb~. The results are in [[file:docs/benchmark.org][docs/benchmark.org]].
+
+* Repository structure
+
+#+begin_src text
+lisp/org-files-db.el               Package entry point
+lisp/org-files-db-core.el          Customization options and faces
+lisp/org-files-db-process.el       Running orgfdb, configurations, setup check
+lisp/org-files-db-presentation.el  Result tables, columns, completion
+lisp/org-files-db-query.el         Query command
+lisp/org-files-db-actions.el       Result actions
+lisp/org-files-db-views.el         Predefined views
+lisp/org-files-db-watch.el         Watch mode
+lisp/org-files-db-cache.el         Cache mode
+lisp/org-files-db-embark.el        Optional Embark integration
+tests/                             Buttercup tests
+bench/                             Benchmark script
+docs/                              Benchmark results and agent workflow
+#+end_src
 
 * Contributing
 
@@ -390,4 +241,4 @@ See [[file:CONTRIBUTING.org][CONTRIBUTING.org]].
 
 * Licence
 
-This project is licensed under the GNU General Public License version 3 only.  See [[file:LICENSE][LICENSE]].
+This project is licensed under the GNU General Public License version 3 only. See [[file:LICENSE][LICENSE]].
