@@ -2227,10 +2227,21 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                 "body\n** Zweiter Üß\n")))
     file))
 
+(defun org-files-db-test--actions-configs ()
+  "Return `org-files-db-configs' with a main configuration file."
+  (let ((config (expand-file-name "main.toml" org-files-db-test--actions-directory)))
+    (with-temp-file config (insert "[database]\n"))
+    `(("main" . ,config))))
+
 (defun org-files-db-test--actions-record (kind file &rest slots)
   "Return a record of KIND for FILE with SLOTS as keyword arguments."
   (apply #'org-files-db-presentation--make-record
          :kind kind :id 1 :file file slots))
+
+(defun org-files-db-test--corpus-fixture (name corpus)
+  "Return fixture NAME with @CORPUS@ replaced by directory CORPUS."
+  (string-replace "@CORPUS@" (directory-file-name corpus)
+                  (org-files-db-test--fixture-text name)))
 
 (describe "result actions"
           (let (file other messages)
@@ -2311,6 +2322,140 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                   (expect (org-files-db-actions-open-link-target (car case))
                           :to-throw 'user-error (list (cdr case))))
                 (expect messages :to-equal nil))
+
+            (it "inserts file and heading links built from a reloaded result"
+                (let* ((org-files-db-configs (org-files-db-test--actions-configs))
+                       (org-files-db-default-config "main")
+                       (corpus (file-name-as-directory
+                                org-files-db-test--actions-directory)))
+                  (dolist (case `((org-files-db-actions-insert-file-link file
+                                                                         "query-json-file-by-id.json" 2 "target.org"
+                                                                         "[[file:target.org][Target]]" "File link inserted")
+                                  (org-files-db-actions-insert-heading-link heading
+                                                                            "query-json-headings-by-ids.json" 2 "notes.org"
+                                                                            "[[id:a1b2c3d4-0000-4000-8000-000000000001][Grüße aus Zürich]]"
+                                                                            "Heading link inserted")
+                                  (org-files-db-actions-insert-heading-link heading
+                                                                            "query-json-headings-by-ids.json" 3 "notes.org"
+                                                                            "[[file:notes.org::#plain][Plain heading]]"
+                                                                            "Heading link inserted")
+                                  (org-files-db-actions-insert-heading-link heading
+                                                                            "query-json-headings-by-ids.json" 4 "notes.org"
+                                                                            "[[file:notes.org::*No ids][No ids]]"
+                                                                            "Heading link inserted")))
+                    (pcase-let* ((`(,action ,kind ,fixture ,id ,name ,expected ,text) case)
+                                 (stdout (org-files-db-test--corpus-fixture fixture corpus))
+                                 (record (org-files-db-presentation--make-record
+                                          :kind kind :id id
+                                          :file (expand-file-name name corpus)))
+                                 (presentation (org-files-db-test--single-result-presentation
+                                                record "main"))
+                                 (org-files-db-actions--current-presentation presentation))
+                      (setq messages nil)
+                      (spy-on 'org-files-db-process--run-process :and-return-value
+                              (list :status 0 :stdout stdout))
+                      (with-temp-buffer
+                        (setq default-directory corpus)
+                        (set-visited-file-name (expand-file-name "here.org" corpus) t)
+                        (expect (funcall action record) :to-be nil)
+                        (expect (buffer-string) :to-equal expected)
+                        (set-buffer-modified-p nil))
+                      (expect messages :to-equal (list text))
+                      (expect (member "--expect-generation"
+                                      (car (spy-calls-args-for
+                                            'org-files-db-process--run-process 0)))
+                              :to-be-truthy)))))
+
+            (it "inserts an absolute file link outside a file buffer"
+                (spy-on 'org-files-db-process--run-process :and-return-value
+                        (list :status 0
+                              :stdout (org-files-db-test--corpus-fixture
+                                       "query-json-file-by-id.json"
+                                       (file-name-as-directory
+                                        org-files-db-test--actions-directory))))
+                (let* ((org-files-db-configs (org-files-db-test--actions-configs))
+                       (org-files-db-default-config "main")
+                       (record (org-files-db-presentation--make-record
+                                :kind 'file :id 2 :file file))
+                       (org-files-db-actions--current-presentation
+                        (org-files-db-test--single-result-presentation record "main")))
+                  (with-temp-buffer
+                    (org-files-db-actions-insert-file-link record)
+                    (expect (buffer-string) :to-equal
+                            (format "[[file:%s][Target]]" (abbreviate-file-name file))))))
+
+            (it "rejects link insertion for the wrong kind, without context and on stale index"
+                (let* ((org-files-db-configs (org-files-db-test--actions-configs))
+                       (org-files-db-default-config "main")
+                       (heading (org-files-db-test--actions-record 'heading file))
+                       (file-record (org-files-db-test--actions-record 'file file))
+                       (org-files-db-actions--current-presentation nil))
+                  (expect (org-files-db-actions-insert-file-link heading)
+                          :to-throw 'user-error '("Result is not a file"))
+                  (expect (org-files-db-actions-insert-heading-link file-record)
+                          :to-throw 'user-error '("Result is not a heading"))
+                  (expect (org-files-db-actions-insert-file-link file-record)
+                          :to-throw 'user-error '("No query context for this action"))
+                  (let ((org-files-db-actions--current-presentation
+                         (org-files-db-test--single-result-presentation heading "main")))
+                    (spy-on 'org-files-db-process--run-process :and-return-value
+                            (list :status 1 :stdout ""
+                                  :stderr (org-files-db-test--fixture-text
+                                           "error-stale-index.stderr")))
+                    (with-temp-buffer
+                      (insert "x")
+                      (dolist (case (list (cons #'org-files-db-actions-insert-file-link
+                                                file-record)
+                                          (cons #'org-files-db-actions-insert-heading-link
+                                                heading)))
+                        (expect (funcall (car case) (cdr case))
+                                :to-throw 'user-error '("Index changed, run the query again")))
+                      (expect (buffer-string) :to-equal "x")))))
+
+            (it "binds the presentation around the query action"
+                (let* ((record (org-files-db-test--actions-record 'heading file :line 3))
+                       (presentation
+                        (org-files-db-test--single-result-presentation record "main"))
+                       seen)
+                  (expect (org-files-db-current-presentation) :to-be nil)
+                  (cl-letf (((symbol-function 'completing-read)
+                             #'org-files-db-test--select-first-candidate))
+                    (org-files-db-query--run-presentation-action
+                     presentation 'headings
+                     (lambda (_record) (setq seen (org-files-db-current-presentation)))))
+                  (expect seen :to-be presentation)))
+
+            (it "follows the first link of a heading without starting a process"
+                (with-temp-file (expand-file-name "target.org"
+                                                  org-files-db-test--actions-directory)
+                  (insert "* Target\n"))
+                (dolist (case '(("one.org" . "* [[file:target.org][Target]]\n")
+                                ("two.org" . "* Plain\nsome text [[file:target.org][T]]\n** Next [[file:other.org]]\n")))
+                  (let ((source (expand-file-name (car case)
+                                                  org-files-db-test--actions-directory))
+                        (body (cdr case))
+                        (org-link-frame-setup '((file . find-file)))
+                        (record nil))
+                    (with-temp-file source (insert "intro\n" body))
+                    (setq record (org-files-db-test--actions-record
+                                  'heading source :line 2)
+                          messages nil)
+                    (expect (org-files-db-actions-follow-heading-link record) :to-be nil)
+                    (expect (file-name-nondirectory (buffer-file-name))
+                            :to-equal "target.org")
+                    (expect 'org-files-db-process--run-process :not :to-have-been-called))))
+
+            (it "signals when the heading has no link or is not a heading"
+                (let ((source (expand-file-name "source.org"
+                                                org-files-db-test--actions-directory)))
+                  (with-temp-file source
+                    (insert "* Plain\ntext\n** Next [[file:other.org]]\n"))
+                  (expect (org-files-db-actions-follow-heading-link
+                           (org-files-db-test--actions-record 'heading source :line 1))
+                          :to-throw 'user-error '("Heading has no link"))
+                  (expect (org-files-db-actions-follow-heading-link
+                           (org-files-db-test--actions-record 'file source))
+                          :to-throw 'user-error '("Result is not a heading"))))
 
             (it "runs the default open action from a query"
                 (let* ((record (org-files-db-test--actions-record

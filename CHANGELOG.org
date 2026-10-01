@@ -2,6 +2,10 @@
 
 * Unreleased
 
+- =ADDED= Added link actions for query results.
+  - ~org-files-db-actions-insert-file-link~ and ~org-files-db-actions-insert-heading-link~ reload the result by id and insert an Org link at point; heading links prefer ~id:~, then file plus ~CUSTOM_ID~, then file plus heading title. A changed index signals a user error and leaves the buffer unchanged.
+  - ~org-files-db-actions-follow-heading-link~ opens the first link in a heading without starting an ~orgfdb~ process.
+  - Actions can read the presentation of the running query through ~org-files-db-current-presentation~.
 - =ADDED= Added open actions for headings, files, link sources, and link targets.
   - ~org-files-db-actions-open-result~ is the default action and opens the source file at the stored byte position, falling back to the stored line.
   - ~org-files-db-actions-open-link-target~ opens the resolved target of a link result and signals a user error for non-link results or unresolved targets.

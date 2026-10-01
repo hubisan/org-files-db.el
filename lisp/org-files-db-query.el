@@ -110,6 +110,7 @@ Use the configured default action when ACTION is nil.  Return the selected
 action record."
   (let* ((effective-action (org-files-db-query--effective-action target action))
          (result (org-files-db-presentation--read presentation))
+         (org-files-db-actions--current-presentation presentation)
          (org-files-db-actions--current-action-config
           (org-files-db-presentation-config presentation)))
     (funcall effective-action result)

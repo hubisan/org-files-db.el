@@ -26,11 +26,24 @@
 
 (require 'org-files-db-core)
 (require 'org-files-db-presentation)
+(require 'org-files-db-process)
+(require 'ol)
+(require 'seq)
 
 (declare-function org-fold-show-context "org-fold" (&optional key))
+(declare-function org-files-db-reload-results "org-files-db-query"
+                  (records presentation &rest args))
 
 (defvar org-files-db-actions--current-action-config nil
   "Effective configuration name while an org-files-db action runs.")
+
+(defvar org-files-db-actions--current-presentation nil
+  "Presentation whose row is selected while an org-files-db action runs.")
+
+(defun org-files-db-current-presentation ()
+  "Return the presentation of the current result action.
+Return nil outside an org-files-db result action."
+  org-files-db-actions--current-presentation)
 
 (defun org-files-db-current-config ()
   "Return the effective configuration name for the current result action.
@@ -86,6 +99,100 @@ orgfdb process is started."
                               (org-files-db-record-target-byte-start record))
   (message "Link target opened")
   nil)
+
+;; The query module requires this one, so reloading is declared, not required.
+(defun org-files-db-actions--reload-record (record includes)
+  "Reload RECORD with INCLUDES and return its result alist.
+Signal a user error outside a result action or when the index changed."
+  (unless org-files-db-actions--current-presentation
+    (user-error "No query context for this action"))
+  (condition-case nil
+      (let ((id (org-files-db-record-id record)))
+        (or (seq-find (lambda (result) (equal (alist-get 'id result) id))
+                      (org-files-db-reload-results
+                       (list record) org-files-db-actions--current-presentation
+                       :includes includes))
+            (user-error "Result no longer exists")))
+    (org-files-db-stale-index
+     (user-error "Index changed, run the query again"))))
+
+(defun org-files-db-actions--link-path (file)
+  "Return FILE relative to the current buffer or abbreviated absolute."
+  (if buffer-file-name
+      (file-relative-name file (file-name-directory buffer-file-name))
+    (abbreviate-file-name file)))
+
+(defun org-files-db-actions-insert-file-link (record)
+  "Insert an Org file link to the file of RECORD at point and return nil.
+RECORD must be a file or root record. The description is the file title,
+or the file name when there is no title."
+  (unless (memq (org-files-db-record-kind record) '(file root))
+    (user-error "Result is not a file"))
+  (let* ((result (org-files-db-actions--reload-record record nil))
+         (title (alist-get 'title result))
+         (description (if (and (stringp title) (not (string-empty-p title)))
+                          title
+                        (alist-get 'name result)))
+         (path (org-files-db-actions--link-path
+                (org-files-db-record-file record))))
+    (insert (org-link-make-string (concat "file:" path) description))
+    (message "File link inserted")
+    nil))
+
+(defun org-files-db-actions--property (result key)
+  "Return the non-empty value of property KEY in RESULT, or nil."
+  (when-let* ((entry (seq-find (lambda (property)
+                                 (equal (alist-get 'key property) key))
+                               (alist-get 'properties result)))
+              (value (alist-get 'value entry)))
+    (and (stringp value) (not (string-empty-p value)) value)))
+
+(defun org-files-db-actions-insert-heading-link (record)
+  "Insert an Org link to the heading of RECORD at point and return nil.
+Prefer an `id:' link, then a file link with the custom ID, and otherwise a
+file link with the heading title as search option."
+  (unless (eq (org-files-db-record-kind record) 'heading)
+    (user-error "Result is not a heading"))
+  (let* ((result (org-files-db-actions--reload-record record '("properties")))
+         (title (alist-get 'title result))
+         (id (org-files-db-actions--property result "ID"))
+         (custom-id (org-files-db-actions--property result "CUSTOM_ID"))
+         (path (org-files-db-actions--link-path
+                (org-files-db-record-file record)))
+         (target (cond
+                  (id (concat "id:" id))
+                  (custom-id (concat "file:" path "::#" custom-id))
+                  (t (concat "file:" path "::*" title)))))
+    (insert (org-link-make-string target title))
+    (message "Heading link inserted")
+    nil))
+
+(defun org-files-db-actions-follow-heading-link (record)
+  "Open the first link in the heading of RECORD and return nil.
+Search the headline first, then the section body. No orgfdb process is
+started. Signal a user error when the heading has no link."
+  (unless (eq (org-files-db-record-kind record) 'heading)
+    (user-error "Result is not a heading"))
+  (org-files-db-actions--goto (org-files-db-record-file record)
+                              (org-files-db-record-line record)
+                              (org-files-db-record-byte-start record))
+  (goto-char (line-beginning-position))
+  (let ((start (point))
+        (headline-end (line-end-position))
+        (section-end (save-excursion
+                       (forward-line 1)
+                       (if (re-search-forward org-heading-regexp nil t)
+                           (match-beginning 0)
+                         (point-max)))))
+    (unless (or (re-search-forward org-link-any-re headline-end t)
+                (progn (goto-char start)
+                       (re-search-forward org-link-any-re section-end t)))
+      (goto-char start)
+      (user-error "Heading has no link"))
+    (goto-char (match-beginning 0))
+    (org-open-at-point)
+    (message "Heading link followed")
+    nil))
 
 (defun org-files-db-actions--default-action (target)
   "Return the configured default action for TARGET."
