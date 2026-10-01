@@ -120,6 +120,27 @@ action record."
   '((heading . "headings") (link . "links") (file . "files") (root . "files"))
   "Query target names for reloading records by kind.")
 
+(cl-defun org-files-db-query--guarded-json
+    (query-string presentation &key includes config)
+  "Run QUERY-STRING guarded by the index state of PRESENTATION.
+Return the parsed JSON `results' vector. INCLUDES is a list of include
+names. CONFIG defaults to the configuration of PRESENTATION. Signal
+`org-files-db-stale-index' when the index changed since PRESENTATION."
+  (let* ((config-name (org-files-db-process--config-name
+                       (or config (org-files-db-presentation-config presentation))))
+         (arguments
+          (append
+           (list "query" "--format" "json")
+           (apply #'append
+                  (mapcar (lambda (include) (list "--include" include)) includes))
+           (list "--expect-database-id"
+                 (format "%s" (org-files-db-presentation-database-id presentation))
+                 "--expect-generation"
+                 (format "%s" (org-files-db-presentation-generation presentation)))
+           (org-files-db-process--config-arguments config-name)
+           (list query-string))))
+    (alist-get 'results (org-files-db-process--call-json arguments))))
+
 (cl-defun org-files-db-reload-results (records presentation &key includes config)
   "Reload RECORDS by id from the index state of PRESENTATION.
 RECORDS is a non-empty list of `org-files-db-record' of one kind group:
@@ -141,22 +162,10 @@ CONFIG defaults to the configuration of PRESENTATION. Signal
                      (user-error "Cannot reload records of mixed kinds: %s"
                                  (string-join targets ", ")))
                    (car targets)))
-         (config-name (org-files-db-process--config-name
-                       (or config (org-files-db-presentation-config presentation))))
-         (ids (mapcar #'org-files-db-record-id records))
-         (arguments
-          (append
-           (list "query" "--format" "json")
-           (apply #'append
-                  (mapcar (lambda (include) (list "--include" include)) includes))
-           (list "--expect-database-id"
-                 (format "%s" (org-files-db-presentation-database-id presentation))
-                 "--expect-generation"
-                 (format "%s" (org-files-db-presentation-generation presentation)))
-           (org-files-db-process--config-arguments config-name)
-           (list (format "(%s (id %s))" target
-                         (mapconcat #'number-to-string ids " "))))))
-    (alist-get 'results (org-files-db-process--call-json arguments))))
+         (ids (mapcar #'org-files-db-record-id records)))
+    (org-files-db-query--guarded-json
+     (format "(%s (id %s))" target (mapconcat #'number-to-string ids " "))
+     presentation :includes includes :config config)))
 
 ;;;###autoload
 (cl-defun org-files-db-query
