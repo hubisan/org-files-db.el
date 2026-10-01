@@ -16,7 +16,7 @@ Provide an Emacs interface for querying ~org-files-db~ through the ~orgfdb~ CLI.
 
 * Rebuild decisions
 
-The current package is reference material only. The rebuild does not preserve the old internal architecture or compatibility aliases.
+The rebuild does not preserve the old internal architecture or compatibility aliases. The legacy package was removed in #28.
 
 - Use the public ~orgfdb~ CLI as the only Rust seam.
 - Use ~presentation-json~ version 3 as the internal Emacs presentation model. Changed from version 2 after hubisan/org-files-db#116 and #117. The client decodes version 3 only (done in #1).
@@ -27,9 +27,9 @@ The current package is reference material only. The rebuild does not preserve th
 - Do not add asynchronous query completion that can appear after the user starts other work.
 - The watcher is the only long-running child process that Emacs can start.
 - Do not use Child Emacs, ~async.el~, presentation dumps, or an Emacs presentation cache.
-- Keep Search outside this rebuild. Do not port ~org-files-db-search.el~.
+- Search, backlinks and Org dynamic blocks are not part of the rebuilt client. Dynamic blocks are dropped without replacement (#4).
 - Use standard Emacs completion through ~completing-read~.
-- Keep Embark optional.
+- Keep Embark optional. Result actions and export of the filtered rows are implemented in ~org-files-db-embark.el~ and registered only once Embark is loaded.
 - Do not require ~embark-consult~.
 - A view is a named query with presentation configuration and optional behaviour.
 - A view does not imply caching.
