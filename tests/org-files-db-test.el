@@ -2995,6 +2995,75 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                                 (expect (buffer-file-name buffer)
                                         :to-equal (file "projekte/alt/notiz.org")))))))))
 
+(describe "directory entry points"
+          (let (root)
+            (before-each
+             (setq root (file-name-as-directory (make-temp-file "org-files-db-dired-" t)))
+             (make-directory (expand-file-name "sub" root))
+             (write-region "" nil (expand-file-name "note.org" root)))
+
+            (after-each
+             (dolist (buffer (buffer-list))
+               (when (with-current-buffer buffer (derived-mode-p 'dired-mode))
+                 (kill-buffer buffer)))
+             (delete-directory root t))
+
+            (it "defaults to nothing outside Dired"
+                (with-temp-buffer
+                  (expect (org-files-db-directory--default-source) :to-be nil)))
+
+            (it "defaults to the directory at point in Dired"
+                (with-current-buffer (dired root)
+                  (goto-char (point-min))
+                  (re-search-forward " sub$")
+                  (expect (org-files-db-directory--default-source)
+                          :to-equal (expand-file-name "sub" root))))
+
+            (it "defaults to the Dired directory on a file line"
+                (with-current-buffer (dired root)
+                  (goto-char (point-min))
+                  (re-search-forward " note.org$")
+                  (expect (org-files-db-directory--default-source)
+                          :to-equal root)))
+
+            (it "offers the default as the source prompt"
+                (spy-on 'read-directory-name :and-return-value root)
+                (spy-on 'org-files-db-process--interactive-config-name)
+                (with-current-buffer (dired root)
+                  (org-files-db-directory--read-arguments))
+                (expect 'read-directory-name :to-have-been-called-with
+                        "Rename or move directory: " root nil t))
+
+            (it "reverts the Dired buffer showing the parent"
+                (let ((buffer (dired root))
+                      (old (expand-file-name "sub" root)))
+                  (rename-file old (expand-file-name "other" root))
+                  (org-files-db-directory--revert-dired
+                   old (expand-file-name "other" root))
+                  (with-current-buffer buffer
+                    (expect (buffer-string) :to-match " other$"))))
+
+            (it "binds M in the Embark file map"
+                (unless (require 'embark nil t)
+                  (buttercup-skip "Embark is not available"))
+                (expect (lookup-key embark-file-map "M")
+                        :to-be 'org-files-db-embark-rename-directory))
+
+            (it "renames the directory chosen in Embark, asking for the destination"
+                (spy-on 'read-directory-name :and-return-value "neu")
+                (spy-on 'org-files-db-process--interactive-config-name)
+                (spy-on 'org-files-db-rename-directory)
+                (let ((source (expand-file-name "sub" root)))
+                  (org-files-db-embark-rename-directory source)
+                  (expect 'read-directory-name :to-have-been-called-times 1)
+                  (expect 'org-files-db-rename-directory
+                          :to-have-been-called-with source "neu" nil)))
+
+            (it "refuses a file in Embark"
+                (expect (org-files-db-embark-rename-directory
+                         (expand-file-name "note.org" root))
+                        :to-throw 'user-error))))
+
 (describe "Embark integration"
           (let ((cases
                  '((org-files-db-embark-open-result org-files-db-actions-open-result "o")
