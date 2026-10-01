@@ -34,6 +34,12 @@
 
 (define-error 'org-files-db-error "org-files-db error")
 
+(defconst org-files-db-core--decode-gc-cons-threshold (* 64 1024 1024)
+  "Value of `gc-cons-threshold' while decoding a large orgfdb response.
+It is let-bound around the synchronous JSON parse, presentation decode
+and candidate construction, which allocate many short-lived and
+long-lived objects. The previous value is restored afterwards.")
+
 (defcustom org-files-db-executable "orgfdb"
   "Path or command name of the orgfdb executable."
   :type 'string

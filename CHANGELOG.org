@@ -2,6 +2,10 @@
 
 * Unreleased
 
+- =CHANGED= Reduced allocations in presentation decode and candidate construction.
+  - Rows and cells are decoded without intermediate lists, role symbols are interned once, candidate strings are built with one concatenation and two property passes, and ~gc-cons-threshold~ is raised to 64 MB while a response is parsed, decoded and turned into candidates. Candidates, errors and results are unchanged.
+  - At 10,000 rows decode plus candidates falls from 0.47 s to 0.16 s and the time until completion is usable from 0.95 s to 0.55 s (one-shot); at 50,000 rows from 4.5 s to 2.7 s.
+  - ~make bench~ now byte-compiles the package first; the numbers are in ~docs/benchmark.org~.
 - =CHANGED= Rewrote the README for the rebuilt client.
 - =ADDED= Added Embark export of the filtered rows.
   - ~embark-export~ lists the rows matching the minibuffer filter in a read-only ~org-files-db-export-mode~ buffer; ~RET~ runs the default action and ~embark-act~ works on each row.
