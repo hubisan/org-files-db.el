@@ -2,6 +2,9 @@
 
 * Unreleased
 
+- =ADDED= Added ~org-files-db-actions-rename-file~, which renames a file result and updates incoming indexed ~file:~ links.
+  - Incoming links are reloaded with the stale-index guard before anything changes; an existing target or a changed index leaves everything untouched.
+  - Links keep their relative or absolute form, search option and description; links whose text no longer matches the index are skipped and counted.
 - =ADDED= Added link actions for query results.
   - ~org-files-db-actions-insert-file-link~ and ~org-files-db-actions-insert-heading-link~ reload the result by id and insert an Org link at point; heading links prefer ~id:~, then file plus ~CUSTOM_ID~, then file plus heading title. A changed index signals a user error and leaves the buffer unchanged.
   - ~org-files-db-actions-follow-heading-link~ opens the first link in a heading without starting an ~orgfdb~ process.

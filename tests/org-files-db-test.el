@@ -2471,7 +2471,131 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                     (expect (org-files-db-query '(headings)) :to-be record)
                     (expect (buffer-file-name) :to-equal file)
                     (expect (line-number-at-pos) :to-equal 3)
-                    (expect messages :to-equal '("Heading opened")))))))
+                    (expect messages :to-equal '("Heading opened")))))
+
+            (describe "renaming a file"
+                      (let (corpus notes target renamed json record)
+                        (before-each
+                         (setq corpus (expand-file-name
+                                       "corpus" org-files-db-test--actions-directory)
+                               notes (expand-file-name "notes.org" corpus)
+                               target (expand-file-name "target.org" corpus)
+                               renamed (expand-file-name "renamed.org" corpus)
+                               json (org-files-db-test--corpus-fixture
+                                     "query-json-incoming-links.json" corpus)
+                               record (org-files-db-presentation--make-record
+                                       :kind 'file :id 2 :file target))
+                         (copy-directory (expand-file-name "corpus"
+                                                           org-files-db-test--fixture-directory)
+                                         corpus)
+                         (spy-on 'org-files-db-process--run-process :and-return-value
+                                 (list :status 0 :stdout json)))
+
+                        (cl-flet ((rename (&optional (rec record))
+                                    (let* ((org-files-db-configs
+                                            (org-files-db-test--actions-configs))
+                                           (org-files-db-default-config "main")
+                                           (org-files-db-actions--current-presentation
+                                            (org-files-db-test--single-result-presentation
+                                             rec "main")))
+                                      (org-files-db-actions-rename-file rec renamed)))
+                                  (text (file)
+                                    (with-temp-buffer
+                                      (insert-file-contents file)
+                                      (buffer-string))))
+
+                          (it "renames the file and rewrites relative incoming links"
+                              (expect (rename) :to-be nil)
+                              (expect (file-exists-p target) :to-be nil)
+                              (expect (file-exists-p renamed) :to-be t)
+                              (expect (text notes) :to-match
+                                      (regexp-quote "[[file:renamed.org][the target file]]"))
+                              (expect (text notes) :to-match
+                                      (regexp-quote "[[file:renamed.org::*Target heading][target heading]]"))
+                              (expect (text notes) :not :to-match "target\\.org")
+                              (expect messages :to-equal
+                                      '("File renamed, 2 links updated"))
+                              (let ((call (car (spy-calls-args-for
+                                                'org-files-db-process--run-process 0))))
+                                (expect (member "(links (target (files (id 2))))" call)
+                                        :to-be-truthy)
+                                (expect (member "--expect-generation" call)
+                                        :to-be-truthy)))
+
+                          (it "retargets a visiting buffer without marking it modified"
+                              (let ((buffer (find-file-noselect target)))
+                                (rename)
+                                (expect (buffer-file-name buffer) :to-equal renamed)
+                                (expect (buffer-modified-p buffer) :to-be nil)))
+
+                          (it "keeps absolute links absolute"
+                              (let* ((relative "[[file:target.org][the target file]]")
+                                     (absolute (format "[[file:%s][the target file]]" target)))
+                                (with-temp-file notes
+                                  (insert (string-replace relative absolute
+                                                          (text notes))))
+                                (spy-on 'org-files-db-process--run-process
+                                        :and-return-value
+                                        (list :status 0
+                                              :stdout
+                                              (string-replace
+                                               "\"[[file:target.org][the target file]]\",\n      \"raw_target\": \"file:target.org\",\n      \"raw_description\": \"the target file\",\n      \"link_path\": \"target.org\""
+                                               (format "\"%s\",\n      \"raw_target\": \"file:target.org\",\n      \"raw_description\": \"the target file\",\n      \"link_path\": \"%s\""
+                                                       (substring (json-serialize absolute) 1 -1)
+                                                       (substring (json-serialize target) 1 -1))
+                                               (let ((delta (- (string-bytes absolute)
+                                                               (string-bytes relative))))
+                                                 (dolist (offset '(165 225 277) json)
+                                                   (setq json
+                                                         (string-replace
+                                                          (format ": %d" offset)
+                                                          (format ": %d" (+ offset delta))
+                                                          json)))))))
+                                (rename)
+                                (expect (text notes) :to-match
+                                        (regexp-quote
+                                         (format "[[file:%s][the target file]]" renamed)))
+                                (expect (text notes) :to-match
+                                        (regexp-quote "[[file:renamed.org::*Target heading]"))))
+
+                          (it "skips links whose text no longer matches the index"
+                              (let ((edited (string-replace "the target file" "the TARGET file"
+                                                            (text notes))))
+                                (with-temp-file notes (insert edited))
+                                (rename)
+                                (expect (text notes) :to-match
+                                        (regexp-quote "[[file:target.org][the TARGET file]]"))
+                                (expect (text notes) :to-match
+                                        (regexp-quote "[[file:renamed.org::*Target heading]"))
+                                (expect messages :to-equal
+                                        '("File renamed, 1 links updated, 1 skipped"))))
+
+                          (it "refuses an existing target and changes nothing"
+                              (with-temp-file renamed (insert "x"))
+                              (let ((before (text notes)))
+                                (expect (rename) :to-throw 'user-error)
+                                (expect (file-exists-p target) :to-be t)
+                                (expect (text renamed) :to-equal "x")
+                                (expect (text notes) :to-equal before)))
+
+                          (it "changes nothing when the index is stale"
+                              (spy-on 'org-files-db-process--run-process
+                                      :and-return-value
+                                      (list :status 1 :stdout ""
+                                            :stderr (org-files-db-test--fixture-text
+                                                     "error-stale-index.stderr")))
+                              (let ((before (text notes)))
+                                (expect (rename) :to-throw 'user-error
+                                        '("Index changed, run the query again"))
+                                (expect (file-exists-p target) :to-be t)
+                                (expect (file-exists-p renamed) :to-be nil)
+                                (expect (text notes) :to-equal before)))
+
+                          (it "rejects records that are not files"
+                              (expect (rename (org-files-db-presentation--make-record
+                                               :kind 'heading :id 2 :file target))
+                                      :to-throw 'user-error '("Result is not a file"))
+                              (expect (file-exists-p target) :to-be t)))))))
 
 (provide 'org-files-db-test)
 

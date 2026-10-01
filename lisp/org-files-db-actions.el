@@ -33,6 +33,8 @@
 (declare-function org-fold-show-context "org-fold" (&optional key))
 (declare-function org-files-db-reload-results "org-files-db-query"
                   (records presentation &rest args))
+(declare-function org-files-db-query--guarded-json "org-files-db-query"
+                  (query-string presentation &rest args))
 
 (defvar org-files-db-actions--current-action-config nil
   "Effective configuration name while an org-files-db action runs.")
@@ -192,6 +194,118 @@ started. Signal a user error when the heading has no link."
     (goto-char (match-beginning 0))
     (org-open-at-point)
     (message "Heading link followed")
+    nil))
+
+;; Renaming a file rewrites the indexed incoming links, so the index is
+;; queried and guarded before anything on disk changes.
+(defun org-files-db-actions--rename-link-path (link-path new-file source)
+  "Return the path for NEW-FILE to use in a link of LINK-PATH in SOURCE.
+Keep the link relative to the directory of SOURCE when LINK-PATH is relative."
+  (cond
+   ((string-prefix-p "~" link-path) (abbreviate-file-name new-file))
+   ((file-name-absolute-p link-path) new-file)
+   (t (file-relative-name new-file (file-name-directory source)))))
+
+(defun org-files-db-actions--rename-link-string (target description format)
+  "Return a link to TARGET, a path with optional search option.
+DESCRIPTION is the link description or nil. FORMAT is the link format."
+  (let ((target (concat "file:" target)))
+    (pcase format
+      ("angle" (concat "<" target ">"))
+      ("plain" target)
+      (_ (org-link-make-string target description)))))
+
+(defun org-files-db-actions--rewrite-link (link source new-file)
+  "Rewrite incoming LINK in the current buffer for NEW-FILE and return non-nil.
+SOURCE is the current path of the file being edited. Return nil without
+changes when the buffer text does not match the indexed link."
+  (let* ((location (alist-get 'location link))
+         (start (byte-to-position (1+ (alist-get 'byte_start location))))
+         (end (byte-to-position (1+ (alist-get 'byte_end location))))
+         (search-option (alist-get 'search_option link))
+         (description (alist-get 'raw_description link)))
+    (when (and start end
+               (equal (buffer-substring-no-properties start end)
+                      (alist-get 'raw link)))
+      (let ((path (org-files-db-actions--rename-link-path
+                   (alist-get 'link_path link) new-file source)))
+        (goto-char start)
+        (delete-region start end)
+        (insert (org-files-db-actions--rename-link-string
+                 (concat path (when search-option (concat "::" search-option)))
+                 (and (stringp description)
+                      (not (string-empty-p description))
+                      description)
+                 (alist-get 'format link)))
+        t))))
+
+(defun org-files-db-actions--rename-visiting-buffer (old-file new-file)
+  "Make a buffer visiting OLD-FILE visit NEW-FILE, keeping its modified state."
+  (when-let* ((buffer (find-buffer-visiting old-file)))
+    (with-current-buffer buffer
+      (let ((modified (buffer-modified-p)))
+        (set-visited-file-name new-file t)
+        (set-buffer-modified-p modified)
+        (unless modified
+          (set-visited-file-modtime))))))
+
+(defun org-files-db-actions-rename-file (record &optional new-name)
+  "Rename the file of RECORD to NEW-NAME and update incoming file links.
+RECORD must be a file or root record. Read NEW-NAME with `read-file-name'
+when nil. Reload the indexed incoming links first so a changed index leaves
+everything untouched. Links whose text no longer matches the index are
+skipped. Return nil."
+  (unless (memq (org-files-db-record-kind record) '(file root))
+    (user-error "Result is not a file"))
+  (unless org-files-db-actions--current-presentation
+    (user-error "No query context for this action"))
+  (let* ((old-file (expand-file-name (org-files-db-record-file record)))
+         (links (condition-case nil
+                    (org-files-db-query--guarded-json
+                     (format "(links (target (files (id %d))))"
+                             (org-files-db-record-id record))
+                     org-files-db-actions--current-presentation)
+                  (org-files-db-stale-index
+                   (user-error "Index changed, run the query again"))))
+         (new-file (expand-file-name
+                    (or new-name
+                        (read-file-name "Rename file to: "
+                                        (file-name-directory old-file)
+                                        old-file nil
+                                        (file-name-nondirectory old-file)))))
+         (updated 0)
+         (skipped 0)
+         (by-source nil))
+    (when (directory-name-p new-file)
+      (setq new-file (expand-file-name (file-name-nondirectory old-file)
+                                       new-file)))
+    (when (file-exists-p new-file)
+      (user-error "File already exists: %s" new-file))
+    (rename-file old-file new-file)
+    (org-files-db-actions--rename-visiting-buffer old-file new-file)
+    (seq-doseq (link links)
+      (when (equal (alist-get 'link_type link) "file")
+        (let* ((path (alist-get 'file_path (alist-get 'location link)))
+               (source (if (string= (expand-file-name path) old-file) new-file path)))
+          (push link (alist-get source by-source nil nil #'equal)))))
+    (dolist (entry by-source)
+      (let ((source (car entry))
+            (buffer (find-file-noselect (car entry))))
+        (with-current-buffer buffer
+          (save-excursion
+            (save-restriction
+              (widen)
+              (dolist (link (sort (cdr entry)
+                                  (lambda (a b)
+                                    (> (alist-get 'byte_start (alist-get 'location a))
+                                       (alist-get 'byte_start (alist-get 'location b))))))
+                (if (org-files-db-actions--rewrite-link link source new-file)
+                    (setq updated (1+ updated))
+                  (setq skipped (1+ skipped))))))
+          (when (buffer-modified-p)
+            (save-buffer)))))
+    (message "File renamed, %d links updated%s" updated
+             (if (> skipped 0) (format ", %d skipped" skipped) ""))
     nil))
 
 (defun org-files-db-actions--default-action (target)
