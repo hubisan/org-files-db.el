@@ -312,6 +312,52 @@ Restore the previous state and signal a user error when a step fails."
                      (if (cdr result) (string-join (cdr result) ", ")
                        "nothing")))))))
 
+;; Declared here to avoid requiring Dired at load time.
+(declare-function dired-get-filename "dired"
+                  (&optional localp no-error-if-not-filep))
+(declare-function dired-current-directory "dired" (&optional localp))
+
+(defun org-files-db-directory--default-source ()
+  "Return the default directory to rename, or nil outside Dired.
+In a Dired buffer this is the directory at point, else the current Dired
+directory."
+  (when (derived-mode-p 'dired-mode)
+    (let ((file (dired-get-filename nil t)))
+      (if (and file (file-directory-p file))
+          file
+        (dired-current-directory)))))
+
+(defun org-files-db-directory--read-arguments (&optional source)
+  "Read the arguments for `org-files-db-rename-directory'.
+Ask for the directory to rename unless SOURCE is given, defaulting to
+`org-files-db-directory--default-source'. Then ask for the destination and,
+with a prefix argument, the configuration."
+  (let* ((directory (or source
+                        (read-directory-name "Rename or move directory: "
+                                             (org-files-db-directory--default-source)
+                                             nil t)))
+         (parent (file-name-directory (directory-file-name
+                                       (expand-file-name directory)))))
+    (list directory
+          (read-directory-name "Rename or move to: " parent nil nil
+                               (file-name-nondirectory
+                                (directory-file-name directory)))
+          (org-files-db-process--interactive-config-name current-prefix-arg))))
+
+(defun org-files-db-directory--revert-dired (old new)
+  "Revert the Dired buffers showing the parent of directory OLD or of NEW."
+  (let ((parents (mapcar (lambda (dir)
+                           (file-name-as-directory
+                            (expand-file-name (file-name-directory dir))))
+                         (list old new))))
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (and (derived-mode-p 'dired-mode)
+                   (member (file-name-as-directory
+                            (expand-file-name default-directory))
+                           parents))
+          (revert-buffer))))))
+
 ;;;###autoload
 (defun org-files-db-rename-directory (directory new-name &optional config)
   "Rename or move DIRECTORY to NEW-NAME and update file links.
@@ -323,16 +369,7 @@ planned changes and ask for confirmation before anything changes. When a step
 fails, restore the previous state. Return nil.
 
 With an interactive prefix argument, select the configuration."
-  (interactive
-   (let* ((directory (read-directory-name "Rename or move directory: "
-                                          nil nil t))
-          (parent (file-name-directory (directory-file-name
-                                        (expand-file-name directory)))))
-     (list directory
-           (read-directory-name "Rename or move to: " parent nil nil
-                                (file-name-nondirectory
-                                 (directory-file-name directory)))
-           (org-files-db-process--interactive-config-name current-prefix-arg))))
+  (interactive (org-files-db-directory--read-arguments))
   (let* ((old (directory-file-name (expand-file-name directory)))
          (new (directory-file-name
                (expand-file-name new-name (file-name-directory old))))
@@ -363,6 +400,7 @@ With an interactive prefix argument, select the configuration."
                         (length changes) (length files))))
           (message (if moving "Directory not moved" "Directory not renamed"))
         (org-files-db-directory--apply old new plan)
+        (org-files-db-directory--revert-dired old new)
         (message "Directory %s, %d links updated%s"
                  (if moving "moved" "renamed") (length changes)
                  (if (> skipped 0) (format ", %d skipped" skipped) "")))

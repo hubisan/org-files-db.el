@@ -32,11 +32,13 @@
 ;;; Code:
 
 (require 'org-files-db-actions)
+(require 'org-files-db-directory)
 (require 'org-files-db-results)
 
 (defvar embark-keymap-alist)
 (defvar embark-exporters-alist)
 (defvar embark-target-finders)
+(defvar embark-file-map)
 
 (defun org-files-db-embark--call (action candidate)
   "Call ACTION with the record of completion CANDIDATE.
@@ -87,6 +89,18 @@ DOC is the docstring."
   "l" #'org-files-db-embark-follow-heading-link
   "r" #'org-files-db-embark-rename-file)
 
+;;; Directory
+
+(defun org-files-db-embark-rename-directory (file)
+  "Rename or move the directory FILE and update file links.
+Ask only for the destination. Signal a user error when FILE is not a
+directory."
+  (interactive "f")
+  (unless (file-directory-p file)
+    (user-error "Not a directory: %s" file))
+  (apply #'org-files-db-rename-directory
+         (org-files-db-directory--read-arguments file)))
+
 ;;; Export
 
 (defun org-files-db-embark--export-target ()
@@ -108,6 +122,8 @@ Insert one line per candidate in the given order in a new buffer in
     (pop-to-buffer-same-window buffer)))
 
 (with-eval-after-load 'embark
+  (unless (lookup-key embark-file-map "M")
+    (define-key embark-file-map "M" #'org-files-db-embark-rename-directory))
   (add-to-list 'embark-keymap-alist
                '(org-files-db-result . org-files-db-embark-result-map))
   (add-to-list 'embark-exporters-alist
