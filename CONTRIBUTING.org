@@ -4,7 +4,7 @@ Thank you for contributing to ~org-files-db.el~.
 
 ** Before making changes
 
-Read the repository instructions in [[file:.project/agents/AGENTS.md][.project/agents/AGENTS.md]].
+Read the repository instructions in [[file:AGENTS.md][AGENTS.md]]. Work is tracked as GitHub issues in [[https://github.com/hubisan/org-files-db.el/issues][hubisan/org-files-db.el]].
 
 Install Eask and the development dependencies:
 
