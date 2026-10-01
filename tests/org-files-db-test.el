@@ -2692,7 +2692,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
     (json-serialize data)))
 
 (describe "renaming a directory"
-          (let (corpus old new json messages)
+          (let (corpus old new json outgoing-json messages)
             (before-each
              (setq org-files-db-test--actions-directory
                    (make-temp-file "org-files-db-dir-" t)
@@ -2704,7 +2704,9 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                                                org-files-db-test--fixture-directory)
                              corpus)
              (setq json (org-files-db-test--corpus-fixture
-                         "dir-incoming-links.json" corpus))
+                         "dir-incoming-links.json" corpus)
+                   outgoing-json (org-files-db-test--corpus-fixture
+                                  "dir-outgoing-links.json" corpus))
              (spy-on 'message :and-call-fake
                      (lambda (format &rest args)
                        (push (apply #'format format args) messages)))
@@ -2735,13 +2737,20 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                                                       "dir-status.json" corpus))
                                      (expect (cadr (member "--expect-generation" arguments))
                                              :to-equal "1")
-                                     (expect (car (last arguments))
-                                             :to-equal
-                                             (format "(links (target (files (file-path \"^%s/\" :regexp t))))"
-                                                     (regexp-quote old)))
-                                     (if query-stderr
-                                         (list :status 1 :stdout "" :stderr query-stderr)
-                                       (list :status 0 :stdout query-json))))))
+                                     (let ((query (car (last arguments))))
+                                       (cond
+                                        (query-stderr
+                                         (list :status 1 :stdout "" :stderr query-stderr))
+                                        ((string-prefix-p "(links (target" query)
+                                         (expect query :to-equal
+                                                 (format "(links (target (files (file-path \"^%s/\" :regexp t))))"
+                                                         (regexp-quote old)))
+                                         (list :status 0 :stdout query-json))
+                                        (t
+                                         (expect query :to-equal
+                                                 (format "(links (source (files (file-path \"^%s/\" :regexp t))))"
+                                                         (regexp-quote old)))
+                                         (list :status 0 :stdout outgoing-json))))))))
                        (rename (&optional (destination new) (source old))
                          (let ((org-files-db-configs (org-files-db-test--actions-configs))
                                (org-files-db-default-config "main"))
@@ -2762,6 +2771,11 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                            (serve))))
 
               (before-each (serve))
+
+              (it "builds an escaped regexp query for the outgoing links"
+                  (expect (org-files-db-directory--outgoing-query "/x/a.b")
+                          :to-equal
+                          "(links (source (files (file-path \"^/x/a\\\\.b/\" :regexp t))))"))
 
               (it "builds an escaped regexp query for the directory"
                   (expect (org-files-db-directory--incoming-query "/x/a.b")
@@ -2832,11 +2846,95 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                     (expect (rename) :to-throw 'user-error)
                     (expect (snapshot) :to-equal before)))
 
-              (it "refuses a destination in another directory"
+              (it "leaves the outgoing relative link untouched on a same-parent rename"
+                  (let ((inside (text "projekte/alt/notiz.org")))
+                    (rename)
+                    (expect (text "projekte/neu/notiz.org") :to-equal inside)
+                    (expect (text "projekte/neu/notiz.org") :to-match
+                            (regexp-quote "[[file:../../index.org][index]]"))
+                    (expect (text "projekte/neu/notiz2.org") :to-match
+                            (regexp-quote "[[file:notiz.org::*Teil][Teil]]"))))
+
+              (it "refuses a destination whose parent does not exist"
                   (let ((before (snapshot)))
-                    (expect (rename (file "archiv/alt")) :to-throw 'user-error
-                            '("Moving to another directory is not supported yet"))
+                    (expect (rename (file "archiv/2026/alt")) :to-throw 'user-error)
+                    (expect (condition-case err (rename (file "archiv/2026/alt"))
+                              (user-error (cadr err)))
+                            :to-match "\\`Destination parent does not exist: ")
+                    (expect 'yes-or-no-p :not :to-have-been-called)
                     (expect (snapshot) :to-equal before)))
+
+              (describe "moving to another parent"
+                        (before-each
+                         (setq new (file "archiv/2026/alt"))
+                         (make-directory (file "archiv/2026")))
+
+                        (it "updates incoming and outgoing links"
+                            (let ((same (text "projekte/alt/notiz2.org")))
+                              (expect (rename) :to-be nil)
+                              (expect (file-directory-p old) :to-be nil)
+                              (expect (text "index.org") :to-match
+                                      (regexp-quote "[[file:archiv/2026/alt/notiz.org][Notiz]]"))
+                              (expect (text "index.org") :to-match
+                                      (regexp-quote "[[file:archiv/2026/alt/notiz.org::*Teil][Teil]]"))
+                              (expect (text "index.org") :to-match
+                                      (regexp-quote "[[file:archiv/old.org][Old]]"))
+                              (expect (text "archiv/2026/alt/notiz.org") :to-match
+                                      (regexp-quote "[[file:../../../index.org][index]]"))
+                              (expect (text "archiv/2026/alt/notiz.org") :to-match
+                                      (regexp-quote "[[file:notiz2.org][notiz2]]"))
+                              (expect (text "archiv/2026/alt/notiz2.org") :to-equal same)
+                              (expect messages :to-equal '("Directory moved, 3 links updated"))
+                              (expect 'yes-or-no-p :to-have-been-called-with
+                                      "Move directory and update 3 links in 2 files? ")))
+
+                        (it "lists the outgoing link in the plan"
+                            (rename)
+                            (with-current-buffer "*org-files-db rename directory*"
+                              (expect (buffer-string) :to-match "\\`Move .*alt → .*2026/alt\n")
+                              (expect (buffer-string) :to-match
+                                      (concat "notiz\\.org:4  "
+                                              (regexp-quote "[[file:../../index.org][index]] → ")
+                                              (regexp-quote "[[file:../../../index.org][index]]")))))
+
+                        (it "keeps absolute outgoing links unchanged"
+                            (let ((absolute (file "index.org")))
+                              (with-temp-file (file "projekte/alt/notiz.org")
+                                (insert (string-replace "../../index.org" absolute
+                                                        (text "projekte/alt/notiz.org"))))
+                              (setq outgoing-json
+                                    (string-replace "../../index.org" absolute
+                                                    outgoing-json))
+                              (serve)
+                              (rename)
+                              (expect (text "archiv/2026/alt/notiz.org") :to-match
+                                      (regexp-quote (format "[[file:%s][index]]" absolute)))
+                              (expect messages :to-equal '("Directory moved, 2 links updated"))))
+
+                        (dolist (step '(("editing a file inside" write-region "projekte/alt/notiz.org")
+                                        ("editing a file outside" write-region "index.org")
+                                        ("moving the directory" rename-file nil)))
+                          (it (format "restores the original state when %s fails" (car step))
+                              (let* ((function (nth 1 step))
+                                     (target (and (nth 2 step) (file (nth 2 step))))
+                                     (failed nil)
+                                     (original (symbol-function function))
+                                     (buffer (find-file-noselect (file "projekte/alt/notiz.org")))
+                                     (before (snapshot)))
+                                (cl-letf (((symbol-function function)
+                                           (lambda (&rest args)
+                                             (if (and (not failed)
+                                                      (or (null target)
+                                                          (equal (expand-file-name (nth 2 args))
+                                                                 target)))
+                                                 (progn (setq failed t)
+                                                        (error "Injected failure"))
+                                               (apply original args)))))
+                                  (expect (rename) :to-throw 'user-error))
+                                (expect failed :to-be t)
+                                (expect (snapshot) :to-equal before)
+                                (expect (buffer-file-name buffer)
+                                        :to-equal (file "projekte/alt/notiz.org"))))))
 
               (it "refuses a destination inside the source"
                   (expect (rename (expand-file-name "sub" old)) :to-throw 'user-error))
