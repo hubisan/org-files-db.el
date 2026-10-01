@@ -3126,10 +3126,152 @@ SCHEDULED: <2026-10-02 Fri>
 
             (it "rejects other buffers and empty candidates"
                 (with-temp-buffer
-                  (expect (org-files-db-embark--outline-candidates)
+                  (expect (org-files-db-results--outline-candidates)
                           :to-throw 'user-error))
                 (expect (org-files-db-embark-export-outline nil)
                         :to-throw 'user-error))))
+
+(describe "result buffer"
+          (let (output calls)
+            (cl-flet ((presentation (name &optional keep)
+                        (let ((value (org-files-db-presentation--decode
+                                      (org-files-db-test--fixture name))))
+                          (when keep
+                            (setf (org-files-db-presentation-rows value)
+                                  (cl-subseq (org-files-db-presentation-rows value)
+                                             0 keep)))
+                          (setf (org-files-db-presentation-config value) "main")
+                          value)))
+              (before-each
+               (setq org-files-db-test--directory
+                     (make-temp-file "org-files-db-results-test-" t)
+                     org-files-db-cache-mode nil
+                     calls nil
+                     output (presentation "headings"))
+               (spy-on 'org-files-db-query-results
+                       :and-call-fake
+                       (lambda (&rest args) (push args calls) output))
+               (spy-on 'pop-to-buffer-same-window :and-call-fake #'identity))
+
+              (after-each
+               (dolist (name '("*org-files-db: query*" "*org-files-db: tasks*"))
+                 (when (get-buffer name) (kill-buffer name)))
+               (when (file-directory-p org-files-db-test--directory)
+                 (delete-directory org-files-db-test--directory t)))
+
+              (it "shows all rows of a query with their records"
+                  (with-current-buffer (org-files-db-show-query '(headings))
+                    (let ((results (org-files-db-presentation-results output)))
+                      (expect (buffer-name) :to-equal "*org-files-db: query*")
+                      (expect major-mode :to-be 'org-files-db-export-mode)
+                      (expect (count-lines (point-min) (point-max))
+                              :to-be (length (org-files-db-presentation-rows output)))
+                      (dotimes (index (length (org-files-db-presentation-rows output)))
+                        (goto-char (point-min))
+                        (forward-line index)
+                        (let ((record (get-text-property (point) 'org-files-db-result)))
+                          (expect record :to-be
+                                  (aref results (org-files-db-presentation-row-result-index
+                                                 (aref (org-files-db-presentation-rows output)
+                                                       index))))
+                          (expect (get-text-property (point) 'org-files-db-presentation)
+                                  :to-be output))))))
+
+              (it "passes the query keywords on, except the action, and again on refresh"
+                  (with-current-buffer
+                      (org-files-db-show-query '(headings) :config "main" :columns '((title))
+                                               :sort nil :action #'ignore)
+                    (expect (car calls) :to-equal
+                            '((headings) :config "main" :columns ((title)) :sort nil))
+                    (org-files-db-results-refresh)
+                    (expect (length calls) :to-be 2)
+                    (expect (car calls) :to-equal (cadr calls))))
+
+              (it "shows a view by name and refreshes it through the view path"
+                  (let* ((main (org-files-db-test--config-file "main.toml"))
+                         (org-files-db-configs `(("main" . ,main)))
+                         (org-files-db-default-config "main")
+                         (org-files-db-views '(("tasks" :query (headings (todo "NEXT"))))))
+                    (setq output (presentation "headings" 2))
+                    (with-current-buffer (org-files-db-show-view "tasks")
+                      (expect (buffer-name) :to-equal "*org-files-db: tasks*")
+                      (expect (count-lines (point-min) (point-max)) :to-be 2)
+                      (expect (caar calls) :to-equal '(headings (todo "NEXT")))
+                      (setq output (presentation "headings" 4))
+                      (call-interactively (key-binding (kbd "g")))
+                      (expect (length calls) :to-be 2)
+                      (expect (count-lines (point-min) (point-max)) :to-be 4))))
+
+              (it "reads the view name with completion when none is given"
+                  (let* ((main (org-files-db-test--config-file "main.toml"))
+                         (org-files-db-configs `(("main" . ,main)))
+                         (org-files-db-default-config "main")
+                         (org-files-db-views '(("tasks" :query (headings)))))
+                    (spy-on 'completing-read :and-return-value "tasks")
+                    (expect (buffer-name (org-files-db-show-view)) :to-equal "*org-files-db: tasks*")))
+
+              (it "shows a view with :display buffer from org-files-db-view"
+                  (let* ((main (org-files-db-test--config-file "main.toml"))
+                         (org-files-db-configs `(("main" . ,main)))
+                         (org-files-db-default-config "main")
+                         (org-files-db-views '(("tasks" :query (headings) :display buffer))))
+                    (spy-on 'completing-read)
+                    (let ((buffer (org-files-db-view "tasks")))
+                      (expect (buffer-name buffer) :to-equal "*org-files-db: tasks*")
+                      (expect 'completing-read :not :to-have-been-called))))
+
+              (it "validates the :display value"
+                  (let* ((main (org-files-db-test--config-file "main.toml"))
+                         (org-files-db-configs `(("main" . ,main)))
+                         (org-files-db-default-config "main"))
+                    (dolist (case '((nil . t) (buffer . t) (window . nil) ("buffer" . nil)))
+                      (let ((org-files-db-views
+                             `(("v" :query (headings) :display ,(car case)))))
+                        (if (cdr case)
+                            (expect (org-files-db-views--validate-views) :to-equal org-files-db-views)
+                          (expect (org-files-db-views--validate-views) :to-throw 'user-error))))))
+
+              (it "keeps the point line on refresh"
+                  (with-current-buffer (org-files-db-show-query '(headings))
+                    (forward-line 3)
+                    (org-files-db-results-refresh)
+                    (expect (line-number-at-pos) :to-be 4)
+                    (setq output (presentation "headings" 2))
+                    (org-files-db-results-refresh)
+                    (expect (line-number-at-pos) :to-be 2)))
+
+              (it "runs the view action on RET and the kind default otherwise"
+                  (let* ((main (org-files-db-test--config-file "main.toml"))
+                         (org-files-db-configs `(("main" . ,main)))
+                         (org-files-db-default-config "main")
+                         (view-seen nil)
+                         (default-seen nil)
+                         (org-files-db-heading-action (lambda (record) (setq default-seen record)))
+                         (org-files-db-views
+                          `(("tasks" :query (headings)
+                             :action ,(lambda (record) (setq view-seen record))))))
+                    (with-current-buffer (org-files-db-show-view "tasks")
+                      (call-interactively (key-binding (kbd "RET"))))
+                    (expect (org-files-db-record-p view-seen) :to-be t)
+                    (expect default-seen :to-be nil)
+                    (with-current-buffer (org-files-db-show-query '(headings))
+                      (call-interactively (key-binding (kbd "RET"))))
+                    (expect (org-files-db-record-p default-seen) :to-be t)))
+
+              (it "shows one No results line for an empty result"
+                  (setq output (presentation "headings" 0))
+                  (with-current-buffer (org-files-db-show-query '(headings))
+                    (expect (buffer-string) :to-equal "No results\n")
+                    (expect (call-interactively (key-binding (kbd "RET"))) :to-throw 'user-error)))
+
+              (it "reuses the buffer for the same view or query"
+                  (let ((first (org-files-db-show-query '(headings))))
+                    (expect (org-files-db-show-query '(files)) :to-be first)
+                    (expect (length (cl-remove-if-not
+                                     (lambda (buffer)
+                                       (string-prefix-p "*org-files-db: query" (buffer-name buffer)))
+                                     (buffer-list)))
+                            :to-be 1))))))
 
 (provide 'org-files-db-test)
 
