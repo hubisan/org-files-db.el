@@ -305,6 +305,10 @@ File links support normal ~file:~, ~id:~, and file-plus-~CUSTOM_ID~ styles.  Hea
 
 ~org-files-db-actions-rename-file~ updates resolved path-based links before renaming the target.  It preserves descriptions and heading or custom-ID search options, but the multi-file operation is not globally atomic.  Version control is strongly recommended.
 
+** Embark actions
+
+Result candidates complete in the ~org-files-db-result~ category.  When Embark is installed, ~org-files-db-embark-result-map~ is registered for that category with these keys: ~o~ open, ~t~ open link target, ~f~ insert file link, ~h~ insert heading link, ~l~ follow heading link and ~r~ rename file.  Embark is optional and never required by the package.
+
 Query and search results retain the effective configuration that produced them.  Follow-up CLI operations, such as indexed ID resolution or link discovery during rename, continue to use that configuration even if the global option changes later.
 
 * Backlinks
