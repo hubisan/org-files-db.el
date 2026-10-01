@@ -2,6 +2,8 @@
 
 * Unreleased
 
+- =CHANGED= ~org-files-db-actions-follow-heading-link~ opens the link target directly.
+  - The heading file is no longer displayed; a buffer opened for it is killed afterwards when it is unmodified. File, heading, custom id and directory links (Dired) follow Org's normal behavior, with relative paths resolved against the heading file.
 - =ADDED= Added outline export of matched headings.
   - ~org-files-db-embark-export-outline~ (~o~ in the export buffer created by ~embark-export~) and ~org-files-db-outline-export~ list heading results as a read-only Org outline of links in ~*org-files-db outline*~, with the ancestors merged per file and matched headings highlighted with ~org-files-db-outline-match~. ~C-x C-s~ saves it.
   - Structure comes from ~orgfdb query --output outline~, content from the source files; a changed index or file stops with "Index changed, run the query again".
