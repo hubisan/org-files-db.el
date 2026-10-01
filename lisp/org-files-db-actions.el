@@ -28,6 +28,7 @@
 (require 'org-files-db-presentation)
 (require 'org-files-db-process)
 (require 'ol)
+(require 'org-element)
 (require 'seq)
 
 (declare-function org-fold-show-context "org-fold" (&optional key))
@@ -52,12 +53,11 @@ Return nil outside an org-files-db result action."
 Return nil outside an org-files-db result action."
   org-files-db-actions--current-action-config)
 
-(defun org-files-db-actions--goto (file line byte-start)
-  "Visit FILE and move point to BYTE-START or, failing that, LINE.
-BYTE-START is a 0-based byte offset in FILE. When the line at that position
-differs from LINE, move to LINE instead. Without either, stay at the start of
-the buffer. Reveal the location when the buffer is in Org mode."
-  (find-file file)
+(defun org-files-db-actions--move-to (line byte-start)
+  "Move point in the current buffer to BYTE-START or, failing that, LINE.
+BYTE-START is a 0-based byte offset. When the line at that position differs
+from LINE, move to LINE instead. Without either, move to the start of the
+buffer. Widen the buffer first."
   (widen)
   (goto-char (point-min))
   (let ((position (and byte-start (byte-to-position (1+ byte-start)))))
@@ -67,7 +67,15 @@ the buffer. Reveal the location when the buffer is in Org mode."
       (goto-char position))
      (line
       (goto-char (point-min))
-      (forward-line (1- line)))))
+      (forward-line (1- line))))))
+
+(defun org-files-db-actions--goto (file line byte-start)
+  "Visit FILE and move point to BYTE-START or, failing that, LINE.
+BYTE-START is a 0-based byte offset in FILE. When the line at that position
+differs from LINE, move to LINE instead. Without either, stay at the start of
+the buffer. Reveal the location when the buffer is in Org mode."
+  (find-file file)
+  (org-files-db-actions--move-to line byte-start)
   (when (derived-mode-p 'org-mode)
     (org-fold-show-context)))
 
@@ -169,32 +177,61 @@ file link with the heading title as search option."
     (message "Heading link inserted")
     nil))
 
+(defun org-files-db-actions--first-link (line byte-start)
+  "Return the first link of the heading at BYTE-START or LINE.
+Search the headline first, then the section body, in the current buffer. Point
+and restriction are preserved. Return nil when the heading has no link."
+  (save-excursion
+    (save-restriction
+      (org-files-db-actions--move-to line byte-start)
+      (goto-char (line-beginning-position))
+      (let ((start (point))
+            (headline-end (line-end-position))
+            (section-end (save-excursion
+                           (forward-line 1)
+                           (if (re-search-forward org-heading-regexp nil t)
+                               (match-beginning 0)
+                             (point-max)))))
+        (when (or (re-search-forward org-link-any-re headline-end t)
+                  (progn (goto-char start)
+                         (re-search-forward org-link-any-re section-end t)))
+          (goto-char (match-beginning 0))
+          (org-element-link-parser))))))
+
 (defun org-files-db-actions-follow-heading-link (record)
   "Open the first link in the heading of RECORD and return nil.
-Search the headline first, then the section body. No orgfdb process is
-started. Signal a user error when the heading has no link."
+Search the headline first, then the section body. The heading buffer is not
+displayed and is killed afterwards when it was not open before and is
+unmodified. Relative file links resolve against the directory of the heading
+file. No orgfdb process is started. Signal a user error when the heading has
+no link."
   (unless (eq (org-files-db-record-kind record) 'heading)
     (user-error "Result is not a heading"))
-  (org-files-db-actions--goto (org-files-db-record-file record)
-                              (org-files-db-record-line record)
-                              (org-files-db-record-byte-start record))
-  (goto-char (line-beginning-position))
-  (let ((start (point))
-        (headline-end (line-end-position))
-        (section-end (save-excursion
-                       (forward-line 1)
-                       (if (re-search-forward org-heading-regexp nil t)
-                           (match-beginning 0)
-                         (point-max)))))
-    (unless (or (re-search-forward org-link-any-re headline-end t)
-                (progn (goto-char start)
-                       (re-search-forward org-link-any-re section-end t)))
-      (goto-char start)
-      (user-error "Heading has no link"))
-    (goto-char (match-beginning 0))
-    (org-open-at-point)
-    (message "Heading link followed")
-    nil))
+  (let* ((file (org-files-db-record-file record))
+         (existing (find-buffer-visiting file))
+         (buffer (or existing (find-file-noselect file))))
+    (unwind-protect
+        (let ((link (with-current-buffer buffer
+                      (org-files-db-actions--first-link
+                       (org-files-db-record-line record)
+                       (org-files-db-record-byte-start record)))))
+          (unless link
+            (user-error "Heading has no link"))
+          (let ((default-directory (file-name-directory
+                                    (expand-file-name file))))
+            ;; Links without a file resolve in the current buffer.
+            (when (member (org-element-property :type link)
+                          '("fuzzy" "custom-id" "coderef"))
+              (pop-to-buffer-same-window buffer))
+            (org-link-open link))
+          (message "Heading link followed")
+          nil)
+      (when (and (not existing)
+                 (buffer-live-p buffer)
+                 (not (eq buffer (current-buffer)))
+                 (not (get-buffer-window buffer t))
+                 (not (buffer-modified-p buffer)))
+        (kill-buffer buffer)))))
 
 ;; Renaming a file rewrites the indexed incoming links, so the index is
 ;; queried and guarded before anything on disk changes.

@@ -2455,24 +2455,59 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                   (expect seen :to-be presentation)))
 
             (it "follows the first link of a heading without starting a process"
-                (with-temp-file (expand-file-name "target.org"
-                                                  org-files-db-test--actions-directory)
-                  (insert "* Target\n"))
-                (dolist (case '(("one.org" . "* [[file:target.org][Target]]\n")
-                                ("two.org" . "* Plain\nsome text [[file:target.org][T]]\n** Next [[file:other.org]]\n")))
-                  (let ((source (expand-file-name (car case)
-                                                  org-files-db-test--actions-directory))
-                        (body (cdr case))
-                        (org-link-frame-setup '((file . find-file)))
-                        (record nil))
-                    (with-temp-file source (insert "intro\n" body))
-                    (setq record (org-files-db-test--actions-record
-                                  'heading source :line 2)
-                          messages nil)
-                    (expect (org-files-db-actions-follow-heading-link record) :to-be nil)
-                    (expect (file-name-nondirectory (buffer-file-name))
-                            :to-equal "target.org")
-                    (expect 'org-files-db-process--run-process :not :to-have-been-called))))
+                (let ((dir org-files-db-test--actions-directory))
+                  (with-temp-file (expand-file-name "target.org" dir)
+                    (insert "* Other\n* Target\n:PROPERTIES:\n:CUSTOM_ID: tid\n:END:\n"))
+                  (make-directory (expand-file-name "somedir" dir) t)
+                  (dolist (case '(("[[file:target.org][T]]" file "target.org" nil)
+                                  ("[[file:target.org::*Target][T]]" file "target.org" "* Target")
+                                  ("[[file:target.org::#tid][T]]" file "target.org" "* Target")
+                                  ("[[file:somedir/][D]]" dir "somedir" nil)))
+                    (let* ((source (expand-file-name "one.org" dir))
+                           (org-link-frame-setup '((file . find-file)))
+                           (default-directory "/")
+                           (record nil))
+                      (with-temp-file source
+                        (insert "intro\n* Heading " (nth 0 case) "\n"))
+                      (setq record (org-files-db-test--actions-record
+                                    'heading source :line 2))
+                      (expect (find-buffer-visiting source) :to-be nil)
+                      (save-window-excursion
+                        (expect (org-files-db-actions-follow-heading-link record)
+                                :to-be nil)
+                        (if (eq (nth 1 case) 'dir)
+                            (expect major-mode :to-be 'dired-mode)
+                          (expect (file-name-nondirectory (buffer-file-name))
+                                  :to-equal (nth 2 case)))
+                        (when (nth 3 case)
+                          (expect (buffer-substring (line-beginning-position)
+                                                    (line-end-position))
+                                  :to-equal (nth 3 case)))
+                        (expect (find-buffer-visiting source) :to-be nil)
+                        (expect 'org-files-db-process--run-process
+                                :not :to-have-been-called))
+                      (kill-matching-buffers "\\`\\(target\\.org\\|somedir\\)" nil t)))))
+
+            (it "keeps a heading buffer that was open before and does not display it"
+                (let* ((source (expand-file-name "one.org"
+                                                 org-files-db-test--actions-directory))
+                       (org-link-frame-setup '((file . find-file)))
+                       (record nil))
+                  (with-temp-file source (insert "* Heading [[file:target.org]]\n"))
+                  (with-temp-file (expand-file-name "target.org"
+                                                    org-files-db-test--actions-directory)
+                    (insert "* T\n"))
+                  (setq record (org-files-db-test--actions-record 'heading source :line 1))
+                  (let ((buffer (find-file-noselect source)))
+                    (save-window-excursion
+                      (org-files-db-actions-follow-heading-link record)
+                      (expect (current-buffer) :not :to-be buffer)
+                      (expect (buffer-live-p buffer) :to-be t)
+                      (expect (buffer-modified-p buffer) :to-be nil)
+                      (expect (get-buffer-window buffer t) :to-be nil)
+                      (expect (with-current-buffer buffer (point)) :to-equal 1))
+                    (kill-buffer buffer)
+                    (kill-matching-buffers "\\`target\\.org" nil t))))
 
             (it "signals when the heading has no link or is not a heading"
                 (let ((source (expand-file-name "source.org"
@@ -2482,6 +2517,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                   (expect (org-files-db-actions-follow-heading-link
                            (org-files-db-test--actions-record 'heading source :line 1))
                           :to-throw 'user-error '("Heading has no link"))
+                  (expect (find-buffer-visiting source) :to-be nil)
                   (expect (org-files-db-actions-follow-heading-link
                            (org-files-db-test--actions-record 'file source))
                           :to-throw 'user-error '("Result is not a heading"))))

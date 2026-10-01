@@ -180,7 +180,7 @@ Built-in actions:
 
 - ~org-files-db-actions-open-result~ opens a heading, a file or the source of a link at its position.
 - ~org-files-db-actions-open-link-target~ opens the resolved target of a link result, either the target heading or the target file.
-- ~org-files-db-actions-follow-heading-link~ opens the first link found in a heading, in its headline first and then in its section.
+- ~org-files-db-actions-follow-heading-link~ opens the first link found in a heading, in its headline first and then in its section, directly at its target (a file, a heading, or Dired for a directory). The heading's own buffer is not displayed and is closed again when it was not open before.
 - ~org-files-db-actions-insert-file-link~ inserts a ~file:~ link to a file result at point, relative to the current buffer when it visits a file.
 - ~org-files-db-actions-insert-heading-link~ inserts a link to a heading result at point: an ~id:~ link if the heading has an ~ID~, else a file link with the ~CUSTOM_ID~, else a file link with the heading title.
 - ~org-files-db-actions-rename-file~ renames a file result and updates the ~file:~ links that point to it in other files. Links whose text no longer matches the index are skipped and counted in the message. The change spans several files and is not atomic, so use version control.
