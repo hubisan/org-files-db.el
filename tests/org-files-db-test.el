@@ -72,6 +72,13 @@
                         org-files-db-test--fixture-directory))
      (buffer-string))))
 
+(defun org-files-db-test--fixture-text (file-name)
+  "Return the raw text of the recorded fixture FILE-NAME."
+  (with-temp-buffer
+    (insert-file-contents
+     (expand-file-name file-name org-files-db-test--fixture-directory))
+    (buffer-string)))
+
 (defun org-files-db-test--schemas (&optional role-values)
   "Return a version 3 schemas alist with ROLE-VALUES."
   `((result_kinds . ["root" "heading" "file" "link"])
@@ -406,6 +413,51 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                   (expect message :to-match "status 1")
                   (expect message :to-match "database is stale"))))
 
+          (it "requests structured JSON errors for every call"
+              (let (called)
+                (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                           (lambda (arguments &optional _input)
+                             (setq called arguments)
+                             '(:status 0 :stdout "{}" :stderr ""))))
+                  (org-files-db-process--call-json '("status" "--format" "json"))
+                  (expect called
+                          :to-equal
+                          '("--error-format" "json" "status" "--format" "json")))))
+
+          (it "decodes structured stderr into error data"
+              (dolist (case '(("{\"error\":{\"kind\":\"usage\",\"message\":\"bad option\"}}" 2
+                               org-files-db-cli-usage-error "bad option" "usage")
+                              ("{\"error\":{\"kind\":\"io\",\"message\":\"cannot read\",\"path\":\"/x\"}}" 1
+                               org-files-db-cli-error "cannot read (/x)" "io")
+                              ("{\"error\":{\"kind\":\"stale-index\",\"message\":\"stale\"}}" 1
+                               org-files-db-stale-index "stale" "stale-index")
+                              ("{not json\n" 1 org-files-db-cli-error "{not json" nil)
+                              ("{\"other\":1}" 1 org-files-db-cli-error "{\"other\":1}" nil)))
+                (pcase-let ((`(,stderr ,status ,symbol ,text ,kind) case))
+                  (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                             (lambda (&rest _args)
+                               (list :status status :stdout "" :stderr stderr))))
+                    (condition-case err
+                        (org-files-db-process--call-raw '("query"))
+                      (error
+                       (expect (car err) :to-be symbol)
+                       (expect (cadr err) :to-match (regexp-quote text))
+                       (expect (cadr err) :to-match (format "status %d" status))
+                       (expect (nth 2 err) :to-equal status)
+                       (expect (nth 3 err) :to-equal (string-trim stderr))
+                       (expect (nth 4 err) :to-equal kind)))))))
+
+          (it "signals a stale index from the recorded CLI error"
+              (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                         (lambda (&rest _args)
+                           (list :status 1 :stdout ""
+                                 :stderr (org-files-db-test--fixture-text
+                                          "error-stale-index.stderr")))))
+                (expect (org-files-db-process--call-raw '("query"))
+                        :to-throw 'org-files-db-stale-index)
+                (expect (get 'org-files-db-stale-index 'error-conditions)
+                        :to-contain 'org-files-db-cli-error)))
+
           (it "uses a separate error type for CLI usage errors"
               (cl-letf (((symbol-function 'org-files-db-process--run-process)
                          (lambda (&rest _args)
@@ -505,6 +557,100 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                     (expect (alist-get 'read-check report)
                             :to-match "missing database"))))))
 
+
+(describe "reloading results by id"
+          (let (called)
+            (before-each
+             (setq called nil)
+             (setq org-files-db-test--directory
+                   (make-temp-file "org-files-db-reload-test-" t)))
+            (after-each
+             (when (file-directory-p org-files-db-test--directory)
+               (delete-directory org-files-db-test--directory t)))
+
+            (cl-flet ((record (kind id)
+                        (org-files-db-presentation--make-record
+                         :kind kind :id id :file "/f.org" :line 1))
+                      (presentation ()
+                        (org-files-db-presentation--make-presentation
+                         :database-id "db-1" :generation 4)))
+              (it "builds the id query for each record kind"
+                  (let* ((config (org-files-db-test--config-file "main.toml"))
+                         (org-files-db-configs `(("main" . ,config)))
+                         (org-files-db-default-config "main"))
+                    (dolist (case '((((heading . 2) (heading . 3)) "headings" "2 3")
+                                    (((link . 5)) "links" "5")
+                                    (((file . 1)) "files" "1")
+                                    (((root . 1)) "files" "1")
+                                    (((file . 1) (root . 2)) "files" "1 2")))
+                      (pcase-let ((`(,specs ,target ,ids) case))
+                        (cl-letf (((symbol-function 'org-files-db-process--call-json)
+                                   (lambda (arguments &optional _input)
+                                     (setq called arguments)
+                                     '((results . [a b])))))
+                          (expect (org-files-db-reload-results
+                                   (mapcar (lambda (spec) (record (car spec) (cdr spec)))
+                                           specs)
+                                   (presentation))
+                                  :to-equal [a b])
+                          (expect called
+                                  :to-equal
+                                  (list "query" "--format" "json"
+                                        "--expect-database-id" "db-1"
+                                        "--expect-generation" "4"
+                                        "--config" (expand-file-name config)
+                                        (format "(%s (id %s))" target ids))))))))
+
+              (it "passes includes and an explicit configuration"
+                  (let* ((main (org-files-db-test--config-file "main.toml"))
+                         (work (org-files-db-test--config-file "work.toml"))
+                         (org-files-db-configs `(("main" . ,main) ("work" . ,work)))
+                         (org-files-db-default-config "main"))
+                    (cl-letf (((symbol-function 'org-files-db-process--call-json)
+                               (lambda (arguments &optional _input)
+                                 (setq called arguments)
+                                 '((results . [])))))
+                      (org-files-db-reload-results
+                       (list (record 'heading 2)) (presentation)
+                       :includes '("properties" "path") :config "work")
+                      (expect called
+                              :to-equal
+                              (list "query" "--format" "json"
+                                    "--include" "properties" "--include" "path"
+                                    "--expect-database-id" "db-1"
+                                    "--expect-generation" "4"
+                                    "--config" (expand-file-name work)
+                                    "(headings (id 2))")))))
+
+              (it "rejects empty and mixed-kind record lists"
+                  (expect (org-files-db-reload-results nil (presentation))
+                          :to-throw 'user-error)
+                  (expect (org-files-db-reload-results
+                           (list (record 'heading 2) (record 'link 3))
+                           (presentation))
+                          :to-throw 'user-error))
+
+              (it "parses a recorded heading reload and propagates stale index"
+                  (let* ((config (org-files-db-test--config-file "main.toml"))
+                         (org-files-db-configs `(("main" . ,config)))
+                         (org-files-db-default-config "main"))
+                    (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                               (lambda (&rest _args)
+                                 (list :status 0
+                                       :stdout (org-files-db-test--fixture-text
+                                                "query-json-headings-by-ids.json")
+                                       :stderr ""))))
+                      (expect (length (org-files-db-reload-results
+                                       (list (record 'heading 2)) (presentation)))
+                              :to-be-greater-than 0))
+                    (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                               (lambda (&rest _args)
+                                 (list :status 1 :stdout ""
+                                       :stderr (org-files-db-test--fixture-text
+                                                "error-stale-index.stderr")))))
+                      (expect (org-files-db-reload-results
+                               (list (record 'heading 2)) (presentation))
+                              :to-throw 'org-files-db-stale-index)))))))
 
 (describe "presentation-json version 3"
           (before-each

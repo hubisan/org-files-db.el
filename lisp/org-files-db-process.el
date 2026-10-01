@@ -33,6 +33,9 @@
 (define-error 'org-files-db-cli-usage-error
               "Invalid orgfdb command usage" 'org-files-db-cli-error)
 
+(define-error 'org-files-db-stale-index
+              "Index changed, run the query again" 'org-files-db-cli-error)
+
 (defun org-files-db-process--resolve-executable ()
   "Return the absolute path to `org-files-db-executable'."
   (unless (and (stringp org-files-db-executable)
@@ -166,27 +169,59 @@ Return a plist with :status, :stdout, and :stderr."
       (when (buffer-live-p stderr)
         (kill-buffer stderr)))))
 
-(defun org-files-db-process--error-message (status stderr)
-  "Return an orgfdb error message for STATUS and STDERR."
+(defun org-files-db-process--decode-error (stderr)
+  "Return the structured error object decoded from STDERR, or nil.
+STDERR must be one JSON line like {\"error\":{\"kind\":...}}."
   (let ((text (string-trim (or stderr ""))))
-    (if (string-empty-p text)
-        (format "orgfdb exited with status %d" status)
-      (format "orgfdb exited with status %d: %s" status text))))
+    (when (string-prefix-p "{" text)
+      (condition-case nil
+          (let* ((object (org-files-db-process--parse-json text))
+                 (error-object (and (listp object)
+                                    (alist-get 'error object))))
+            (and (listp error-object)
+                 (stringp (alist-get 'kind error-object))
+                 (stringp (alist-get 'message error-object))
+                 error-object))
+        (error nil)))))
+
+(defun org-files-db-process--error-message (status stderr &optional decoded)
+  "Return an orgfdb error message for STATUS and STDERR.
+When DECODED is a structured error object, use its message and path."
+  (let ((text (string-trim (or stderr ""))))
+    (cond
+     (decoded
+      (let ((path (alist-get 'path decoded)))
+        (format "orgfdb exited with status %d: %s%s" status
+                (alist-get 'message decoded)
+                (if (stringp path) (format " (%s)" path) ""))))
+     ((string-empty-p text)
+      (format "orgfdb exited with status %d" status))
+     (t
+      (format "orgfdb exited with status %d: %s" status text)))))
 
 (defun org-files-db-process--signal-cli-error (status stderr)
-  "Signal an orgfdb error for STATUS and STDERR."
-  (let ((data (list (org-files-db-process--error-message status stderr)
-                    status
-                    (string-trim (or stderr "")))))
-    (signal (if (= status 2)
-                'org-files-db-cli-usage-error
-              'org-files-db-cli-error)
+  "Signal an orgfdb error for STATUS and STDERR.
+The error data is (MESSAGE STATUS STDERR KIND). KIND is the error kind
+string from structured JSON stderr, or nil for plain text stderr."
+  (let* ((decoded (org-files-db-process--decode-error stderr))
+         (kind (and decoded (alist-get 'kind decoded)))
+         (data (list (org-files-db-process--error-message
+                      status stderr decoded)
+                     status
+                     (string-trim (or stderr ""))
+                     kind)))
+    (signal (cond
+             ((equal kind "stale-index") 'org-files-db-stale-index)
+             ((= status 2) 'org-files-db-cli-usage-error)
+             (t 'org-files-db-cli-error))
             data)))
 
 (defun org-files-db-process--call-raw (arguments &optional input)
   "Run orgfdb with ARGUMENTS and optional standard INPUT.
-Return stdout as a string."
-  (let* ((result (org-files-db-process--run-process arguments input))
+Return stdout as a string. Request structured JSON errors."
+  (let* ((result (org-files-db-process--run-process
+                  (append '("--error-format" "json") arguments)
+                  input))
          (status (plist-get result :status))
          (stdout (plist-get result :stdout))
          (stderr (plist-get result :stderr)))

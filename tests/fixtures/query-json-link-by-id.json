@@ -1,0 +1,36 @@
+{
+  "target": "links",
+  "output": "flat",
+  "includes": [],
+  "results": [
+    {
+      "kind": "link",
+      "matched": true,
+      "id": 1,
+      "file_id": 1,
+      "heading_id": 2,
+      "heading_level": 1,
+      "source_context": "normal",
+      "format": "bracket",
+      "link_type": "file",
+      "raw": "[[file:target.org][the target file]]",
+      "raw_target": "file:target.org",
+      "raw_description": "the target file",
+      "link_path": "target.org",
+      "search_option": null,
+      "path_absolute": "@CORPUS@/target.org",
+      "target_file_id": 2,
+      "target_heading_id": 5,
+      "target_custom_id": null,
+      "target_id": null,
+      "resolution_status": "resolved",
+      "resolution_diagnostic": null,
+      "location": {
+        "file_path": "@CORPUS@/notes.org",
+        "line": 7,
+        "byte_start": 129,
+        "byte_end": 165
+      }
+    }
+  ]
+}
