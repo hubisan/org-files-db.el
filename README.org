@@ -145,6 +145,7 @@ A view is a name followed by these keys, each at most once:
 - ~:columns~, ~:sort~, ~:row-source~: same as for ~org-files-db-query~, with the same defaults
 - ~:action~: action for this view, see [[*Result actions][Result actions]]
 - ~:cache~: ~t~ to use the cache described below
+- ~:display~: ~buffer~ to show the view in a result buffer instead of completion, see [[*Result buffer][Result buffer]]
 
 View names must be unique. Invalid views are reported when they are validated.
 
@@ -186,6 +187,31 @@ Built-in actions:
 - ~org-files-db-actions-rename-file~ renames a file result and updates the ~file:~ links that point to it in other files. Links whose text no longer matches the index are skipped and counted in the message. The change spans several files and is not atomic, so use version control.
 
 Actions that need more data than the list shows, such as the link and rename actions, ask ~orgfdb~ for it when you run them. If the files were indexed again since the result list was built, they stop with the message "Index changed, run the query again" and change nothing. Run the query again and select the result once more.
+
+* Result buffer
+
+Instead of selecting one result in the minibuffer you can list every row in a read-only buffer.
+
+- ~M-x org-files-db-show-view~ asks for a view and shows it in ~*org-files-db: NAME*~.
+- ~M-x org-files-db-show-query~ reads a query like ~org-files-db-query~ and shows it in ~*org-files-db: query*~.
+- ~(org-files-db-show-query QUERY &rest KEYS)~ takes the same keywords as ~org-files-db-query~ (~:config~, ~:columns~, ~:sort~, ~:row-source~, ~:action~). ~(org-files-db-show-view NAME)~ does the same for a view. Both return the buffer.
+- A view with ~:display buffer~ is shown this way by ~org-files-db-view~ too. Only ~buffer~ and ~nil~ are valid.
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("Next" :query (headings (todo "NEXT")) :display buffer)))
+
+(org-files-db-show-query '(headings (todo "NEXT")))
+#+end_src
+
+The buffer uses ~org-files-db-export-mode~ and does not need Embark. Each line is one row as the table shows it. In the buffer:
+
+- ~RET~ runs the action of the view or call, else the default action for the result kind
+- ~o~ exports the rows as an outline, see [[*Outline export][Outline export]]
+- ~g~ runs the query again and keeps point on the same line number
+- ~n~ and ~p~ move to the next and previous line
+
+An empty result shows one line "No results". The buffer is reused when you show the same view or query again, and it is never refreshed automatically.
 
 * Embark integration
 
@@ -247,6 +273,7 @@ lisp/org-files-db-views.el         Predefined views
 lisp/org-files-db-watch.el         Watch mode
 lisp/org-files-db-cache.el         Cache mode
 lisp/org-files-db-outline.el       Outline export of matched headings
+lisp/org-files-db-results.el       Result buffers
 lisp/org-files-db-embark.el        Optional Embark integration
 tests/                             Buttercup tests
 bench/                             Benchmark script

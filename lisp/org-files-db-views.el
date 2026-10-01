@@ -30,14 +30,16 @@
 (require 'org-files-db-presentation)
 (require 'org-files-db-process)
 (require 'org-files-db-query)
+(require 'org-files-db-results)
 (require 'subr-x)
 
 (declare-function org-files-db-cache--run-view "org-files-db-cache" (name))
+(declare-function org-files-db-cache--view-presentation "org-files-db-cache" (name))
 
 (defvar org-files-db-cache-mode)
 
 (defconst org-files-db-views--allowed-keys
-  '(:config :query :columns :sort :row-source :cache :action)
+  '(:config :query :columns :sort :row-source :cache :action :display)
   "Keys accepted in one flat predefined view definition.")
 
 (cl-defstruct (org-files-db-views--resolved
@@ -53,7 +55,8 @@
   sort
   row-source
   cache
-  action)
+  action
+  display)
 
 (defun org-files-db-views--name (view)
   "Return the validated name of VIEW."
@@ -126,11 +129,14 @@
               (org-files-db-presentation--default-sort target)))
            (row-source (plist-get properties :row-source))
            (cache (plist-get properties :cache))
+           (display (plist-get properties :display))
            (action
             (org-files-db-query--effective-action
              target (plist-get properties :action))))
       (unless (memq cache '(nil t))
         (user-error "View `%s' has invalid :cache value: %S" name cache))
+      (unless (memq display '(nil buffer))
+        (user-error "View `%s' has invalid :display value: %S" name display))
       (org-files-db-presentation--spec-json columns sort row-source)
       (org-files-db-views--resolved-create
        :name (copy-sequence name)
@@ -143,7 +149,8 @@
        :sort (org-files-db-views--copy-data sort)
        :row-source (org-files-db-views--copy-data row-source)
        :cache cache
-       :action action))))
+       :action action
+       :display display))))
 
 (defun org-files-db-views--resolved-views ()
   "Validate and return all predefined views as resolved snapshots."
@@ -198,14 +205,51 @@
 ;;;###autoload
 (defun org-files-db-view (&optional name)
   "Run predefined view NAME and return the selected action record.
-When NAME is nil, read one configured view name interactively."
+When NAME is nil, read one configured view name interactively. A view with
+`:display buffer' is shown in a result buffer instead, and the buffer is
+returned."
   (interactive)
-  (let ((name (or name (org-files-db-views--read-name))))
-    (if (bound-and-true-p org-files-db-cache-mode)
-        (org-files-db-cache--run-view name)
-      (org-files-db-views--run-one-shot
-       (org-files-db-views--resolve
-        (org-files-db-views--get name))))))
+  (let* ((name (or name (org-files-db-views--read-name)))
+         (resolved (org-files-db-views--resolve
+                    (org-files-db-views--get name))))
+    (cond
+     ((eq (org-files-db-views--resolved-display resolved) 'buffer)
+      (org-files-db-show-view name))
+     ((bound-and-true-p org-files-db-cache-mode)
+      (org-files-db-cache--run-view name))
+     (t (org-files-db-views--run-one-shot resolved)))))
+
+(defun org-files-db-views--presentation (name)
+  "Return the presentation of predefined view NAME without completion.
+Use the Rust cache when `org-files-db-cache-mode' is active."
+  (if (bound-and-true-p org-files-db-cache-mode)
+      (org-files-db-cache--view-presentation name)
+    (org-files-db-views--one-shot-presentation
+     (org-files-db-views--resolve (org-files-db-views--get name)))))
+
+(defun org-files-db-views--one-shot-presentation (resolved)
+  "Return the presentation of RESOLVED from one orgfdb query."
+  (org-files-db-query-results
+   (org-files-db-views--resolved-query resolved)
+   :config (org-files-db-views--resolved-config resolved)
+   :columns (org-files-db-views--resolved-columns resolved)
+   :sort (org-files-db-views--resolved-sort resolved)
+   :row-source (org-files-db-views--resolved-row-source resolved)))
+
+;;;###autoload
+(defun org-files-db-show-view (&optional name)
+  "Show predefined view NAME in a result buffer and return it.
+When NAME is nil, read one configured view name interactively. In the
+buffer, RET runs the action of the view, o exports an outline and g runs the
+view again."
+  (interactive)
+  (let* ((name (or name (org-files-db-views--read-name)))
+         (resolved (org-files-db-views--resolve
+                    (org-files-db-views--get name))))
+    (org-files-db-results--show
+     (format "*org-files-db: %s*" name)
+     (lambda () (org-files-db-views--presentation name))
+     (org-files-db-views--resolved-action resolved))))
 
 (provide 'org-files-db-views)
 

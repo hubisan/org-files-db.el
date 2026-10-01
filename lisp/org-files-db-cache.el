@@ -298,6 +298,20 @@ When RETRIED is non-nil, do not attempt another missing-view recovery."
           (org-files-db-cache--definition-error name))
         (org-files-db-views--run-one-shot resolved)))))
 
+(defun org-files-db-cache--view-presentation (name)
+  "Return the presentation of predefined view NAME while cache mode is active."
+  (let ((entry (org-files-db-cache--entry name)))
+    (if entry
+        (progn
+          (org-files-db-cache--assert-definition-current entry)
+          (org-files-db-cache--read-entry entry))
+      (let ((resolved
+             (org-files-db-views--resolve
+              (org-files-db-views--get name))))
+        (when (org-files-db-views--resolved-cache resolved)
+          (org-files-db-cache--definition-error name))
+        (org-files-db-views--one-shot-presentation resolved)))))
+
 ;;;###autoload
 (define-minor-mode org-files-db-cache-mode
   "Use Rust materialized views for predefined views with :cache t."

@@ -2,6 +2,9 @@
 
 * Unreleased
 
+- =ADDED= Added result buffers for queries and views.
+  - ~org-files-db-show-view~ and ~org-files-db-show-query~ list every row in a read-only ~org-files-db-export-mode~ buffer (~RET~ action, ~o~ outline, ~g~ refresh); a view with ~:display buffer~ is shown this way by ~org-files-db-view~.
+  - The buffer code moved from ~org-files-db-embark.el~ to ~org-files-db-results.el~ and no longer depends on Embark.
 - =CHANGED= ~org-files-db-actions-follow-heading-link~ opens the link target directly.
   - The heading file is no longer displayed; a buffer opened for it is killed afterwards when it is unmodified. File, heading, custom id and directory links (Dired) follow Org's normal behavior, with relative paths resolved against the heading file.
 - =ADDED= Added outline export of matched headings.
