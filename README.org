@@ -188,6 +188,16 @@ Built-in actions:
 
 Actions that need more data than the list shows, such as the link and rename actions, ask ~orgfdb~ for it when you run them. If the files were indexed again since the result list was built, they stop with the message "Index changed, run the query again" and change nothing. Run the query again and select the result once more.
 
+* Renaming a directory
+
+~M-x org-files-db-rename-directory~ renames a directory in place and updates the indexed ~file:~ links that point to files inside it. It asks for the directory and the new name; the new name must have the same parent, moving to another directory is not supported yet. With a prefix argument it asks for the configuration.
+
+- Links from files outside the directory are rewritten, keeping their format, description, search option and relative or absolute form. Relative links between files inside the directory stay unchanged, absolute ones inside it are rewritten.
+- The links come from ~orgfdb~ and are guarded by the index state, so a changed index stops with "Index changed, run the query again" before anything changes.
+- The plan is shown in ~*org-files-db rename directory*~ (old and new text of each link, then skipped links) and nothing changes until you confirm. Links whose text no longer matches the index are skipped and counted in the message.
+- The command refuses an existing destination and modified buffers visiting an affected file or a file inside the directory. Buffers visiting files inside the directory follow the rename.
+- When a step fails, the edited files are restored, the directory is moved back, and the error lists anything that could not be undone. It does not check whether the directory is the root of a configured directory, so do not rename a root.
+
 * Result buffer
 
 Instead of selecting one result in the minibuffer you can list every row in a read-only buffer.
@@ -269,6 +279,7 @@ lisp/org-files-db-process.el       Running orgfdb, configurations, setup check
 lisp/org-files-db-presentation.el  Result tables, columns, completion
 lisp/org-files-db-query.el         Query command
 lisp/org-files-db-actions.el       Result actions
+lisp/org-files-db-directory.el     Directory rename
 lisp/org-files-db-views.el         Predefined views
 lisp/org-files-db-watch.el         Watch mode
 lisp/org-files-db-cache.el         Cache mode
