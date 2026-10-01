@@ -2,6 +2,10 @@
 
 * Unreleased
 
+- =CHANGED= Adopted ~presentation-json~ version 3 and dropped version 2.
+  - Decodes the top-level ~files~ table and positional action records for ~root~, ~heading~, ~file~, and ~link~ results; file indexes are resolved to absolute paths and malformed records or out-of-range indexes are rejected.
+  - Selected candidates now carry an ~org-files-db-record~ action record instead of a full result object; ~database_id~ and ~generation~ stay on the decoded presentation for the stale-index guard of later reloads by id.
+  - Presentation queries and view registration no longer pass action-related ~--include~ options.
 - =ADDED= Added rebuilt predefined query views with optional Rust materialized caching.
   - ~org-files-db-view~ runs named views through the normal one-shot presentation path unless active cache mode selects ~:cache t~.
   - ~org-files-db-cache-mode~ registers private per-Emacs-session Rust views, keeps an activation snapshot, and removes exactly those registrations on cleanup.

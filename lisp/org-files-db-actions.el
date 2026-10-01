@@ -40,12 +40,6 @@ The rebuilt navigation implementation is added in a later rebuild step."
   (ignore result)
   (user-error "Org-files-db result navigation is not available yet"))
 
-(defun org-files-db-actions--required-includes (action)
-  "Return explicit orgfdb query includes required by ACTION.
-Current rebuilt actions require no extra query data."
-  (ignore action)
-  nil)
-
 (defun org-files-db-actions--default-action (target)
   "Return the configured default action for TARGET."
   (pcase target

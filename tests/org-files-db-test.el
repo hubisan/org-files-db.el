@@ -35,7 +35,7 @@
 (defun org-files-db-test--single-result-presentation (result config)
   "Return a one-row presentation for RESULT and configuration CONFIG."
   (org-files-db-presentation--make-presentation
-   :version 2
+   :version 3
    :database-id "db"
    :generation 1
    :config config
@@ -57,17 +57,76 @@
   "Return the first candidate from completion TABLE."
   (car (org-files-db-presentation--completion-candidates table)))
 
+(defconst org-files-db-test--fixture-directory
+  (expand-file-name
+   "fixtures"
+   (file-name-directory (or load-file-name buffer-file-name default-directory)))
+  "Directory with recorded orgfdb payloads.")
+
+(defun org-files-db-test--fixture (name)
+  "Return the recorded presentation-json fixture NAME parsed like process output."
+  (org-files-db-process--parse-json
+   (with-temp-buffer
+     (insert-file-contents
+      (expand-file-name (format "presentation-v3-%s.json" name)
+                        org-files-db-test--fixture-directory))
+     (buffer-string))))
+
+(defun org-files-db-test--schemas (&optional role-values)
+  "Return a version 3 schemas alist with ROLE-VALUES."
+  `((result_kinds . ["root" "heading" "file" "link"])
+    (result_shapes
+     . ((root . ["kind" "id" "file" "line" "byte_start"])
+        (heading . ["kind" "id" "file" "line" "byte_start"])
+        (file . ["kind" "id" "file" "line" "byte_start"])
+        (link . ["kind" "id" "file" "line" "byte_start"
+                 "target_file" "target_line" "target_byte_start"])))
+    (result_file_encoding . "index-into-files")
+    (row_fields . ["result_index" "row_context" "cells"])
+    (cell_fields . ["search_text" "display_text" "role"])
+    (row_context_shapes
+     . ((tag . ["kind" "value"])
+        (effective-property . ["kind" "name" "value"])
+        (keyword . ["kind" "name" "value"])))
+    (display_text_null . "same-as-search_text")
+    (role_encoding . "null-or-index-into-role_values")
+    (role_values . ,(or role-values []))))
+
+(defun org-files-db-test--wire (&rest overrides)
+  "Return a minimal valid version 3 wire alist with OVERRIDES applied.
+OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
+  (let ((wire (copy-tree `((presentation_version . 3)
+                           (database_id . "db")
+                           (generation . 1)
+                           (files . ["/notes/a.org"])
+                           (results . [])
+                           (schemas . ,(org-files-db-test--schemas))
+                           (rows . [])) t)))
+    (while overrides
+      (setf (alist-get (intern (substring (symbol-name (pop overrides)) 1)) wire)
+            (pop overrides)))
+    wire))
+
+(defun org-files-db-test--empty-wire ()
+  "Return a valid empty version 3 wire alist."
+  (org-files-db-test--wire :files []))
+
 (defun org-files-db-test--empty-presentation-json ()
-  "Return a valid empty presentation-json version 2 payload."
-  (concat
-   "{\"presentation_version\":2,\"database_id\":\"db\",\"generation\":1,"
-   "\"results\":[],\"schemas\":{"
-   "\"row_fields\":[\"result_index\",\"row_context\",\"cells\"],"
-   "\"cell_fields\":[\"search_text\",\"display_text\",\"role\"],"
-   "\"row_context_shapes\":{},"
-   "\"display_text_null\":\"same-as-search_text\","
-   "\"role_encoding\":\"null-or-index-into-role_values\","
-   "\"role_values\":[]},\"rows\":[]}"))
+  "Return a valid empty presentation-json version 3 payload."
+  (json-serialize
+   (org-files-db-test--json-object (org-files-db-test--empty-wire))
+   :null-object nil))
+
+(defun org-files-db-test--json-object (value)
+  "Convert parsed-JSON style alist VALUE into a hash table for serialization."
+  (cond
+   ((and (consp value) (consp (car value)) (symbolp (caar value)))
+    (let ((object (make-hash-table :test #'equal)))
+      (dolist (entry value object)
+        (puthash (symbol-name (car entry))
+                 (org-files-db-test--json-object (cdr entry))
+                 object))))
+   (t value)))
 
 (describe "clean package foundation"
           (before-each
@@ -447,7 +506,7 @@
                             :to-match "missing database"))))))
 
 
-(describe "presentation-json version 2"
+(describe "presentation-json version 3"
           (before-each
            (setq org-files-db-test--directory
                  (make-temp-file "org-files-db-presentation-test-" t)))
@@ -500,33 +559,26 @@
                 (expect (alist-get 'sort spec) :to-equal [])
                 (expect (alist-get 'row_source spec) :to-equal nil)))
 
-          (it "decodes rows, cells, roles, and row context from version 2 schemas"
-              (let* ((result '((kind . "heading") (level . 2) (title . "Task")))
-                     (wire
-                      `((presentation_version . 2)
-                        (database_id . "db-1")
-                        (generation . 7)
-                        (results . [,result])
-                        (schemas
-                         . ((row_fields . ["result_index" "row_context" "cells"])
-                            (cell_fields . ["search_text" "display_text" "role"])
-                            (row_context_shapes
-                             . ((tag . ["kind" "value"])
-                                (effective-property . ["kind" "name" "value"])
-                                (keyword . ["kind" "name" "value"])))
-                            (display_text_null . "same-as-search_text")
-                            (role_encoding . "null-or-index-into-role_values")
-                            (role_values . ["heading" "title" "todo" "done" "priority" "tag"])))
-                        (rows
-                         . [[0 nil [["Task" nil 1]]]
-                            [0 ["tag" "project"] [["project" "project " 5]]]])))
+          (it "decodes rows, cells, roles, and row context from version 3 schemas"
+              (let* ((wire
+                      (org-files-db-test--wire
+                       :database_id "db-1"
+                       :generation 7
+                       :results [[1 12 0 6 126]]
+                       :schemas
+                       (org-files-db-test--schemas
+                        ["heading" "title" "todo" "done" "priority" "tag"])
+                       :rows
+                       [[0 nil [["Task" nil 1]]]
+                        [0 ["tag" "project"] [["project" "project " 5]]]]))
                      (presentation (org-files-db-presentation--decode wire))
                      (rows (org-files-db-presentation-rows presentation))
                      (first-row (aref rows 0))
                      (second-row (aref rows 1))
                      (first-cell (aref (org-files-db-presentation-row-cells first-row) 0))
-                     (second-cell (aref (org-files-db-presentation-row-cells second-row) 0)))
-                (expect (org-files-db-presentation-version presentation) :to-equal 2)
+                     (second-cell (aref (org-files-db-presentation-row-cells second-row) 0))
+                     (record (aref (org-files-db-presentation-results presentation) 0)))
+                (expect (org-files-db-presentation-version presentation) :to-equal 3)
                 (expect (org-files-db-presentation-database-id presentation) :to-equal "db-1")
                 (expect (org-files-db-presentation-generation presentation) :to-equal 7)
                 (expect (length rows) :to-equal 2)
@@ -541,27 +593,26 @@
                         :to-equal "project ")
                 (expect (org-files-db-presentation-cell-role second-cell) :to-equal 'tag)
                 (expect (eq (org-files-db-presentation--row-result presentation first-row)
-                            result)
+                            record)
                         :to-equal t)
                 (expect (eq (org-files-db-presentation--row-result presentation second-row)
-                            result)
+                            record)
                         :to-equal t)))
 
           (it "uses emitted schema field positions instead of fixed row positions"
-              (let* ((result '((kind . "file") (path . "/tmp/a.org")))
+              (let* ((schemas (copy-alist (org-files-db-test--schemas ["file-name"])))
                      (wire
-                      `((presentation_version . 2)
-                        (database_id . "db-2")
-                        (generation . 9)
-                        (results . [,result])
-                        (schemas
-                         . ((row_fields . ["cells" "result_index" "row_context"])
-                            (cell_fields . ["role" "display_text" "search_text"])
-                            (row_context_shapes . ((tag . ["value" "kind"])))
-                            (display_text_null . "same-as-search_text")
-                            (role_encoding . "null-or-index-into-role_values")
-                            (role_values . ["file-name"])))
-                        (rows . [[[[0 nil "a.org"]] 0 ["project" "tag"]]])))
+                      (progn
+                        (setf (alist-get 'row_fields schemas)
+                              ["cells" "result_index" "row_context"])
+                        (setf (alist-get 'cell_fields schemas)
+                              ["role" "display_text" "search_text"])
+                        (setf (alist-get 'row_context_shapes schemas)
+                              '((tag . ["value" "kind"])))
+                        (org-files-db-test--wire
+                         :results [[2 3 0 1 nil]]
+                         :schemas schemas
+                         :rows [[[[0 nil "a.org"]] 0 ["project" "tag"]]])))
                      (presentation (org-files-db-presentation--decode wire))
                      (row (aref (org-files-db-presentation-rows presentation) 0))
                      (cell (aref (org-files-db-presentation-row-cells row) 0)))
@@ -572,52 +623,133 @@
                 (expect (org-files-db-presentation-cell-display-text cell) :to-equal "a.org")
                 (expect (org-files-db-presentation-cell-role cell) :to-equal 'file-name)))
 
-          (it "rejects unsupported presentation versions"
-              (let (message)
-                (condition-case err
-                    (org-files-db-presentation--decode
-                     '((presentation_version . 3)
-                       (database_id . "db")
-                       (generation . 1)
-                       (results . [])
-                       (schemas . nil)
-                       (rows . [])))
-                  (org-files-db-error
-                   (setq message (error-message-string err))))
-                (expect message :to-match "Unsupported presentation version")
-                (expect message :to-match "expected 2")))
+          (it "indexes the files table and keeps the reload identity"
+              (let ((presentation
+                     (org-files-db-presentation--decode
+                      (org-files-db-test--fixture "links"))))
+                (expect (org-files-db-presentation-files presentation)
+                        :to-equal ["/notes/projects.org" "/notes/other.org"])
+                (expect (org-files-db-presentation-database-id presentation)
+                        :to-equal "e5410fc4-257f-49ab-84b1-e05803872aa0")
+                (expect (org-files-db-presentation-generation presentation) :to-equal 1)))
 
-          (it "rejects invalid result and role indexes"
-              (let ((base
-                     '((presentation_version . 2)
-                       (database_id . "db")
-                       (generation . 1)
-                       (results . [])
-                       (schemas
-                        . ((row_fields . ["result_index" "row_context" "cells"])
-                           (cell_fields . ["search_text" "display_text" "role"])
-                           (row_context_shapes . nil)
-                           (display_text_null . "same-as-search_text")
-                           (role_encoding . "null-or-index-into-role_values")
-                           (role_values . ["title"])))
-                       (rows . [[0 nil []]]))))
-                (expect (org-files-db-presentation--decode base)
-                        :to-throw 'org-files-db-error))
-              (let ((wire
-                     '((presentation_version . 2)
-                       (database_id . "db")
-                       (generation . 1)
-                       (results . [((kind . "heading"))])
-                       (schemas
-                        . ((row_fields . ["result_index" "row_context" "cells"])
-                           (cell_fields . ["search_text" "display_text" "role"])
-                           (row_context_shapes . nil)
-                           (display_text_null . "same-as-search_text")
-                           (role_encoding . "null-or-index-into-role_values")
-                           (role_values . ["title"])))
-                       (rows . [[0 nil [["Task" nil 5]]]]))))
-                (expect (org-files-db-presentation--decode wire)
-                        :to-throw 'org-files-db-error)))
+          (it "decodes root, heading, and file records from recorded payloads"
+              (let* ((headings
+                      (org-files-db-presentation-results
+                       (org-files-db-presentation--decode
+                        (org-files-db-test--fixture "headings"))))
+                     (files
+                      (org-files-db-presentation-results
+                       (org-files-db-presentation--decode
+                        (org-files-db-test--fixture "files"))))
+                     (root (aref headings 0))
+                     (heading (aref headings 1))
+                     (file (aref files 1)))
+                (expect (length headings) :to-equal 5)
+                (expect (org-files-db-record-kind root) :to-equal 'root)
+                (expect (org-files-db-record-id root) :to-equal 1)
+                (expect (org-files-db-record-file root) :to-equal "/notes/other.org")
+                (expect (org-files-db-record-line root) :to-equal 1)
+                (expect (org-files-db-record-byte-start root) :to-equal nil)
+                (expect (org-files-db-record-kind heading) :to-equal 'heading)
+                (expect (org-files-db-record-id heading) :to-equal 2)
+                (expect (org-files-db-record-file heading) :to-equal "/notes/other.org")
+                (expect (org-files-db-record-line heading) :to-equal 3)
+                (expect (org-files-db-record-byte-start heading) :to-equal 16)
+                (expect (org-files-db-record-target-file heading) :to-equal nil)
+                (expect (org-files-db-record-kind file) :to-equal 'file)
+                (expect (org-files-db-record-id file) :to-equal 2)
+                (expect (org-files-db-record-file file) :to-equal "/notes/projects.org")
+                (expect (org-files-db-record-byte-start file) :to-equal nil)))
+
+          (it "decodes link records with resolved and unresolved targets"
+              (let* ((results
+                      (org-files-db-presentation-results
+                       (org-files-db-presentation--decode
+                        (org-files-db-test--fixture "links"))))
+                     (file-target (aref results 0))
+                     (unresolved (aref results 1))
+                     (heading-target (aref results 2)))
+                (expect (org-files-db-record-kind file-target) :to-equal 'link)
+                (expect (org-files-db-record-id file-target) :to-equal 1)
+                (expect (org-files-db-record-file file-target) :to-equal "/notes/projects.org")
+                (expect (org-files-db-record-line file-target) :to-equal 5)
+                (expect (org-files-db-record-byte-start file-target) :to-equal 58)
+                (expect (org-files-db-record-target-file file-target) :to-equal "/notes/other.org")
+                (expect (org-files-db-record-target-line file-target) :to-equal 1)
+                (expect (org-files-db-record-target-byte-start file-target) :to-equal nil)
+                (expect (org-files-db-record-target-resolved-p file-target) :to-equal t)
+                (expect (org-files-db-record-target-file unresolved) :to-equal nil)
+                (expect (org-files-db-record-target-line unresolved) :to-equal nil)
+                (expect (org-files-db-record-target-byte-start unresolved) :to-equal nil)
+                (expect (org-files-db-record-target-resolved-p unresolved) :to-equal nil)
+                (expect (org-files-db-record-target-file heading-target) :to-equal "/notes/other.org")
+                (expect (org-files-db-record-target-line heading-target) :to-equal 3)
+                (expect (org-files-db-record-target-byte-start heading-target) :to-equal 16)))
+
+          (it "rejects other presentation versions with a clear error"
+              (dolist (version '(2 4))
+                (let (message)
+                  (condition-case err
+                      (org-files-db-presentation--decode
+                       (org-files-db-test--wire :presentation_version version))
+                    (org-files-db-error
+                     (setq message (error-message-string err))))
+                  (expect message :to-match "Unsupported presentation version")
+                  (expect message :to-match "expected 3"))))
+
+          (it "rejects invalid payloads"
+              (let ((schemas-with
+                     (lambda (key value)
+                       (let ((schemas (copy-alist (org-files-db-test--schemas))))
+                         (setf (alist-get key schemas) value)
+                         schemas))))
+                (dolist (case
+                         `(("missing files"
+                            ,(assq-delete-all 'files (org-files-db-test--wire)))
+                           ("files not array" ,(org-files-db-test--wire :files "/a.org"))
+                           ("files entry not string" ,(org-files-db-test--wire :files [1]))
+                           ("result_index out of range"
+                            ,(org-files-db-test--wire :rows [[0 nil []]]))
+                           ("role index out of range"
+                            ,(org-files-db-test--wire
+                              :results [[1 1 0 1 1]]
+                              :rows [[0 nil [["Task" nil 5]]]]))
+                           ("non-vector record"
+                            ,(org-files-db-test--wire :results [((kind . "heading"))]))
+                           ("empty record" ,(org-files-db-test--wire :results [[]]))
+                           ("kind index out of range"
+                            ,(org-files-db-test--wire :results [[4 1 0 1 1]]))
+                           ("heading record too long"
+                            ,(org-files-db-test--wire :results [[1 1 0 1 1 nil nil nil]]))
+                           ("link record too short"
+                            ,(org-files-db-test--wire :results [[3 1 0 1 1]]))
+                           ("file index out of range"
+                            ,(org-files-db-test--wire :results [[1 1 1 1 1]]))
+                           ("negative file index"
+                            ,(org-files-db-test--wire :results [[1 1 -1 1 1]]))
+                           ("file index not integer"
+                            ,(org-files-db-test--wire :results [[1 1 "a" 1 1]]))
+                           ("id not integer"
+                            ,(org-files-db-test--wire :results [[1 "x" 0 1 1]]))
+                           ("line not integer"
+                            ,(org-files-db-test--wire :results [[1 1 0 "x" 1]]))
+                           ("target file out of range"
+                            ,(org-files-db-test--wire :results [[3 1 0 1 1 5 1 nil]]))
+                           ("target line not integer"
+                            ,(org-files-db-test--wire :results [[3 1 0 1 1 0 "x" nil]]))
+                           ("unsupported kind in schema"
+                            ,(org-files-db-test--wire
+                              :schemas (funcall schemas-with 'result_kinds ["root" "bogus"])))
+                           ("changed shape"
+                            ,(org-files-db-test--wire
+                              :schemas (funcall schemas-with 'result_shapes
+                                                '((root . ["kind" "id"])))))
+                           ("unsupported file encoding"
+                            ,(org-files-db-test--wire
+                              :schemas (funcall schemas-with 'result_file_encoding "paths")))))
+                  (expect (org-files-db-presentation--decode (cadr case))
+                          :to-throw 'org-files-db-error))))
 
           (it "parses structural query strings without evaluation state"
               (expect (org-files-db-query--form "(headings (not (done)))")
@@ -633,18 +765,7 @@
                 (cl-letf (((symbol-function 'org-files-db-process--call-json)
                            (lambda (arguments &optional _input)
                              (setq called-arguments arguments)
-                             '((presentation_version . 2)
-                               (database_id . "db")
-                               (generation . 1)
-                               (results . [])
-                               (schemas
-                                . ((row_fields . ["result_index" "row_context" "cells"])
-                                   (cell_fields . ["search_text" "display_text" "role"])
-                                   (row_context_shapes . nil)
-                                   (display_text_null . "same-as-search_text")
-                                   (role_encoding . "null-or-index-into-role_values")
-                                   (role_values . [])))
-                               (rows . []))))
+                             (org-files-db-test--empty-wire)))
                           ((symbol-function 'completing-read)
                            (lambda (&rest _args)
                              (error "completion must not run")))
@@ -680,18 +801,7 @@
                 (cl-letf (((symbol-function 'org-files-db-process--call-json)
                            (lambda (arguments &optional _input)
                              (setq called-arguments arguments)
-                             '((presentation_version . 2)
-                               (database_id . "db")
-                               (generation . 1)
-                               (results . [])
-                               (schemas
-                                . ((row_fields . ["result_index" "row_context" "cells"])
-                                   (cell_fields . ["search_text" "display_text" "role"])
-                                   (row_context_shapes . nil)
-                                   (display_text_null . "same-as-search_text")
-                                   (role_encoding . "null-or-index-into-role_values")
-                                   (role_values . [])))
-                               (rows . [])))))
+                             (org-files-db-test--empty-wire))))
                   (org-files-db-query-results
                    "(headings)"
                    :config "work"
@@ -736,7 +846,7 @@
                          :role 'file-name))))
                      (presentation
                       (org-files-db-presentation--make-presentation
-                       :version 2
+                       :version 3
                        :database-id "db"
                        :generation 1
                        :config "main"
@@ -859,7 +969,7 @@
                                   ((kind . "link") (heading_level . 4))))
                   (let* ((presentation
                           (org-files-db-presentation--make-presentation
-                           :version 2
+                           :version 3
                            :database-id "db"
                            :generation 1
                            :config "main"
@@ -887,7 +997,7 @@
                          :role 'tag))))
                      (presentation
                       (org-files-db-presentation--make-presentation
-                       :version 2
+                       :version 3
                        :database-id "db"
                        :generation 1
                        :config "work"
@@ -917,7 +1027,7 @@
                        :search-text "Same" :display-text "Same" :role 'title))
                      (presentation
                       (org-files-db-presentation--make-presentation
-                       :version 2
+                       :version 3
                        :database-id "db"
                        :generation 1
                        :config "main"
@@ -973,7 +1083,7 @@
                          :role 'title))))
                      (presentation
                       (org-files-db-presentation--make-presentation
-                       :version 2
+                       :version 3
                        :database-id "db"
                        :generation 1
                        :config "main"
@@ -994,18 +1104,7 @@
                      (org-files-db-default-config "main"))
                 (cl-letf (((symbol-function 'org-files-db-process--call-json)
                            (lambda (&rest _args)
-                             '((presentation_version . 2)
-                               (database_id . "db")
-                               (generation . 1)
-                               (results . [])
-                               (schemas
-                                . ((row_fields . ["result_index" "row_context" "cells"])
-                                   (cell_fields . ["search_text" "display_text" "role"])
-                                   (row_context_shapes . nil)
-                                   (display_text_null . "same-as-search_text")
-                                   (role_encoding . "null-or-index-into-role_values")
-                                   (role_values . [])))
-                               (rows . [])))))
+                             (org-files-db-test--empty-wire))))
                   (expect
                    (org-files-db-presentation-config
                     (org-files-db-query-results '(files) :config "work"))
@@ -1561,8 +1660,7 @@
                         :to-equal nil)
                 (expect (org-files-db-views--resolved-action resolved)
                         :to-equal #'ignore)
-                (expect (org-files-db-views--resolved-action-includes resolved)
-                        :to-equal nil)))
+                (expect (org-files-db-views--resolved-p resolved) :to-equal t)))
 
           (it "rejects missing queries, unsupported keys, duplicate keys, and invalid cache values"
               (let* ((main (org-files-db-test--config-file "main.toml"))
@@ -1671,8 +1769,6 @@
                            (lambda () (setq org-files-db-watch-mode t)))
                           ((symbol-function 'org-files-db-watch--probe-active-p)
                            (lambda (_file) t))
-                          ((symbol-function 'org-files-db-actions--required-includes)
-                           (lambda (_action) '(target path target)))
                           ((symbol-function 'org-files-db-process--call-json)
                            (lambda (arguments)
                              (push arguments registered)
@@ -1693,14 +1789,11 @@
                           :to-equal '((title)))
                   (expect (org-files-db-views--resolved-sort resolved)
                           :to-equal '((title :direction asc)))
-                  (expect (org-files-db-views--resolved-action-includes resolved)
-                          :to-equal '("path" "target"))
                   (expect (org-files-db-cache--entry-rust-name entry)
                           :to-match "test-session")
                   (expect arguments :to-contain "view")
                   (expect arguments :to-contain "register")
-                  (expect arguments :to-contain "--include")
-                  (expect arguments :to-contain "path,target"))))
+                  (expect arguments :not :to-contain "--include"))))
 
           (it "rolls back registrations and watch mode after cache activation failure"
               (let* ((main (org-files-db-test--config-file "main.toml"))
@@ -1950,8 +2043,7 @@
                        :sort nil
                        :row-source nil
                        :cache t
-                       :action #'ignore
-                       :action-includes nil))
+                       :action #'ignore))
                      (entry
                       (org-files-db-cache--entry-create
                        :resolved resolved :rust-name "private"))

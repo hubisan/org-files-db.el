@@ -19,7 +19,7 @@ Provide an Emacs interface for querying ~org-files-db~ through the ~orgfdb~ CLI.
 The current package is reference material only. The rebuild does not preserve the old internal architecture or compatibility aliases.
 
 - Use the public ~orgfdb~ CLI as the only Rust seam.
-- Use ~presentation-json~ version 3 as the internal Emacs presentation model. Changed from version 2 after hubisan/org-files-db#116 and #117; adopting it is tracked in #1.
+- Use ~presentation-json~ version 3 as the internal Emacs presentation model. Changed from version 2 after hubisan/org-files-db#116 and #117. The client decodes version 3 only (done in #1).
 - Keep ~orgfdb query --format json~ unchanged on the Rust side, but do not use it as the normal Emacs presentation model. It is used to load more data for a selected result by id.
 - Let Rust own columns, sorting, row expansion, width calculation, truncation, padding, and presentation caching.
 - Keep Emacs responsible for configuration, process control, JSON decoding, faces, completion, navigation, and user actions.

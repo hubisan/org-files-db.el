@@ -107,7 +107,7 @@ presentation forms.  This function does not open completion or run an action."
 (defun org-files-db-query--run-presentation-action (presentation target &optional action)
   "Select one row from PRESENTATION and run ACTION for TARGET.
 Use the configured default action when ACTION is nil.  Return the selected
-original result."
+action record."
   (let* ((effective-action (org-files-db-query--effective-action target action))
          (result (org-files-db-presentation--read presentation))
          (org-files-db-actions--current-action-config
@@ -121,7 +121,7 @@ original result."
   "Run structural QUERY, select one result, and execute its action.
 CONFIG is a name from `org-files-db-configs'.  COLUMNS, SORT, and ROW-SOURCE
 override the configured presentation defaults.  ACTION overrides the default
-action for the query target.  Return the selected original result.
+action for the query target.  Return the selected action record.
 
 With an interactive prefix argument, select the configuration before running
 the query."

@@ -53,8 +53,7 @@
   sort
   row-source
   cache
-  action
-  action-includes)
+  action)
 
 (defun org-files-db-views--name (view)
   "Return the validated name of VIEW."
@@ -108,18 +107,6 @@
     (vconcat (mapcar #'org-files-db-views--copy-data value)))
    (t value)))
 
-(defun org-files-db-views--normalize-includes (includes)
-  "Return canonical string names for explicit query INCLUDES."
-  (let (names)
-    (dolist (include includes)
-      (let ((name
-             (cond
-              ((symbolp include) (symbol-name include))
-              ((and (stringp include) (not (string-empty-p include))) include)
-              (t (user-error "Invalid orgfdb query include: %S" include)))))
-        (push name names)))
-    (sort (delete-dups names) #'string<)))
-
 (defun org-files-db-views--resolve (view)
   "Return the complete effective definition for VIEW."
   (let* ((name (org-files-db-views--name view))
@@ -141,10 +128,7 @@
            (cache (plist-get properties :cache))
            (action
             (org-files-db-query--effective-action
-             target (plist-get properties :action)))
-           (action-includes
-            (org-files-db-views--normalize-includes
-             (org-files-db-actions--required-includes action))))
+             target (plist-get properties :action))))
       (unless (memq cache '(nil t))
         (user-error "View `%s' has invalid :cache value: %S" name cache))
       (org-files-db-presentation--spec-json columns sort row-source)
@@ -159,8 +143,7 @@
        :sort (org-files-db-views--copy-data sort)
        :row-source (org-files-db-views--copy-data row-source)
        :cache cache
-       :action action
-       :action-includes (org-files-db-views--copy-data action-includes)))))
+       :action action))))
 
 (defun org-files-db-views--resolved-views ()
   "Validate and return all predefined views as resolved snapshots."
@@ -214,7 +197,7 @@
 
 ;;;###autoload
 (defun org-files-db-view (&optional name)
-  "Run predefined view NAME and return the selected original result.
+  "Run predefined view NAME and return the selected action record.
 When NAME is nil, read one configured view name interactively."
   (interactive)
   (let ((name (or name (org-files-db-views--read-name))))
