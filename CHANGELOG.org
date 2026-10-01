@@ -2,6 +2,10 @@
 
 * Unreleased
 
+- =ADDED= Added structured CLI errors and reload by id.
+  - Every ~orgfdb~ call passes ~--error-format json~; the single JSON line on stderr is decoded so error messages use the CLI ~message~, and the error data is ~(MESSAGE STATUS STDERR KIND)~ with ~KIND~ nil for plain text stderr.
+  - Added the ~org-files-db-stale-index~ error (a child of ~org-files-db-cli-error~) for the ~stale-index~ kind.
+  - Added ~org-files-db-reload-results~, which reloads heading, link, file or root records by id with ~--expect-database-id~ and ~--expect-generation~ from the presentation they came from.
 - =CHANGED= Adopted ~presentation-json~ version 3 and dropped version 2.
   - Decodes the top-level ~files~ table and positional action records for ~root~, ~heading~, ~file~, and ~link~ results; file indexes are resolved to absolute paths and malformed records or out-of-range indexes are rejected.
   - Selected candidates now carry an ~org-files-db-record~ action record instead of a full result object; ~database_id~ and ~generation~ stay on the decoded presentation for the stale-index guard of later reloads by id.

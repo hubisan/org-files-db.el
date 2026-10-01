@@ -1,0 +1,114 @@
+{
+  "target": "headings",
+  "output": "flat",
+  "includes": [
+    "properties"
+  ],
+  "results": [
+    {
+      "kind": "heading",
+      "matched": true,
+      "id": 2,
+      "file_id": 1,
+      "parent_id": 1,
+      "level": 1,
+      "title": "Grüße aus Zürich",
+      "title_raw": "TODO Grüße aus Zürich",
+      "todo_keyword": "TODO",
+      "todo_type": "open",
+      "priority": null,
+      "scheduled_raw": null,
+      "scheduled_ts": null,
+      "deadline_raw": null,
+      "deadline_ts": null,
+      "closed_raw": null,
+      "closed_ts": null,
+      "archivedp": false,
+      "footnote_section_p": false,
+      "all_tags": [
+        "travel"
+      ],
+      "location": {
+        "file_path": "@CORPUS@/notes.org",
+        "line": 3,
+        "byte_start": 16,
+        "byte_end": 168
+      },
+      "properties": [
+        {
+          "key": "ID",
+          "value": "a1b2c3d4-0000-4000-8000-000000000001",
+          "source": "property_drawer",
+          "append": false,
+          "line_number": 5
+        }
+      ]
+    },
+    {
+      "kind": "heading",
+      "matched": true,
+      "id": 3,
+      "file_id": 1,
+      "parent_id": 1,
+      "level": 1,
+      "title": "Plain heading",
+      "title_raw": "Plain heading",
+      "todo_keyword": null,
+      "todo_type": null,
+      "priority": null,
+      "scheduled_raw": null,
+      "scheduled_ts": null,
+      "deadline_raw": null,
+      "deadline_ts": null,
+      "closed_raw": null,
+      "closed_ts": null,
+      "archivedp": false,
+      "footnote_section_p": false,
+      "all_tags": [],
+      "location": {
+        "file_path": "@CORPUS@/notes.org",
+        "line": 9,
+        "byte_start": 168,
+        "byte_end": 280
+      },
+      "properties": [
+        {
+          "key": "CUSTOM_ID",
+          "value": "plain",
+          "source": "property_drawer",
+          "append": false,
+          "line_number": 11
+        }
+      ]
+    },
+    {
+      "kind": "heading",
+      "matched": true,
+      "id": 4,
+      "file_id": 1,
+      "parent_id": 1,
+      "level": 1,
+      "title": "No ids",
+      "title_raw": "No ids",
+      "todo_keyword": null,
+      "todo_type": null,
+      "priority": null,
+      "scheduled_raw": null,
+      "scheduled_ts": null,
+      "deadline_raw": null,
+      "deadline_ts": null,
+      "closed_raw": null,
+      "closed_ts": null,
+      "archivedp": false,
+      "footnote_section_p": false,
+      "all_tags": [],
+      "location": {
+        "file_path": "@CORPUS@/notes.org",
+        "line": 15,
+        "byte_start": 280,
+        "byte_end": 303
+      },
+      "properties": []
+    }
+  ]
+}

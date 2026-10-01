@@ -1,0 +1,16 @@
+#+title: Notes
+
+* TODO Grüße aus Zürich :travel:
+:PROPERTIES:
+:ID:       a1b2c3d4-0000-4000-8000-000000000001
+:END:
+Body with [[file:target.org][the target file]].
+
+* Plain heading
+:PROPERTIES:
+:CUSTOM_ID: plain
+:END:
+See [[file:target.org::*Target heading][target heading]].
+
+* No ids
+Nothing here.

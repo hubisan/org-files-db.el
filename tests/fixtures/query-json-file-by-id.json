@@ -1,0 +1,30 @@
+{
+  "target": "files",
+  "output": "flat",
+  "includes": [],
+  "results": [
+    {
+      "kind": "file",
+      "matched": true,
+      "id": 2,
+      "level": 0,
+      "path": "@CORPUS@/target.org",
+      "name": "target.org",
+      "dir": "@CORPUS@",
+      "title": "Target",
+      "title_raw": "Target",
+      "root_heading_id": 5,
+      "mtime_ns": 1790863085387458139,
+      "size": 40,
+      "content_hash": "sha256:b399f8351d912b660444f49ad9bd28b5634e318eb30471481c9a4333500be46b",
+      "indexed_at": 1790863090,
+      "location": {
+        "file_path": "@CORPUS@/target.org",
+        "line": 1,
+        "byte_start": null,
+        "byte_end": null
+      },
+      "tags": []
+    }
+  ]
+}
