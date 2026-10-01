@@ -1,0 +1,139 @@
+#+TITLE: Create the Clean Package Foundation
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-24 Mon 23:55]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Implement Step 1 of the ~org-files-db.el~ rebuild.
+
+* Planning
+
+** Problem summary
+
+The old package mixes configuration, presentation, Search, caching, process control, and actions.
+
+The rebuilt client needs a small package foundation before the new CLI pipeline is added.
+
+** Goals
+
+- Define named configurations and one default configuration.
+- Define default columns and sorting for ~headings~, ~files~, and ~links~.
+- Define separate default actions for the three query targets.
+- Create the new package module structure.
+- Validate configuration names and readable configuration files before use.
+- Keep Search and the old compatibility interface outside the new package.
+- Remove ~async.el~ from the rebuilt package dependencies.
+
+** Non-goals
+
+- Do not execute ~orgfdb~ yet.
+- Do not decode ~presentation-json~ yet.
+- Do not implement query completion yet.
+- Do not implement watcher or Rust view lifecycle code yet.
+- Do not port the old result actions yet.
+
+** Architecture
+
+Use these package modules:
+
+#+begin_example
+lisp/org-files-db.el
+lisp/org-files-db-process.el
+lisp/org-files-db-presentation.el
+lisp/org-files-db-query.el
+lisp/org-files-db-views.el
+lisp/org-files-db-actions.el
+#+end_example
+
+The process module owns executable and configuration options.
+
+The presentation module owns default columns and sorting.
+
+The actions module owns default action options.
+
+The query and view modules contain only the foundation needed by later steps.
+
+Keep the old implementation under ~.project/reference/~ until later rebuild steps no longer need it.
+
+** Execution plan
+
+1. Replace the main package entry point.
+2. Add the new process and presentation modules.
+3. Replace query, view, and action modules with clean foundations.
+4. Move the old implementation to ~.project/reference/~.
+5. Remove runtime ~async.el~ and development Consult dependencies.
+6. Replace old tests with Step 1 foundation tests.
+7. Run the available checks.
+
+** Risks & assumptions
+
+The old implementation remains useful as reference material for later action and integration work.
+
+This step does not keep the old package runnable through its old interfaces.
+
+** Open questions
+
+None.
+
+** Proposed checks
+
+- Byte-compile the rebuilt package.
+- Run the Buttercup tests.
+- Run package lint checks.
+- Check that the new package does not load Search, cache, or ~async.el~ code.
+
+* Results
+
+** Approach
+
+The package now loads only the six new foundation modules.
+
+Named configurations use ~org-files-db-configs~ and ~org-files-db-default-config~.
+
+Configuration validation rejects duplicate names, unknown names, and unreadable files.
+
+Views validate their effective configuration name against the named configuration list.
+
+The old implementation is stored under ~.project/reference/~ for later porting work.
+
+** Changed files
+
+- ~Eask~
+- ~lisp/org-files-db.el~
+- ~lisp/org-files-db-process.el~
+- ~lisp/org-files-db-presentation.el~
+- ~lisp/org-files-db-query.el~
+- ~lisp/org-files-db-views.el~
+- ~lisp/org-files-db-actions.el~
+- ~tests/org-files-db-test.el~
+- ~.project/reference/~
+- ~.project/tasks/todo.org~
+
+** Checks performed
+
+- Checked balanced parentheses in all new Lisp files and the new test file.
+- Checked the new entry-point dependencies.
+- Checked that new Lisp files do not reference the old configuration interface.
+- Checked that new Lisp files do not require Search, cache, Core, or ~async.el~.
+- Tried ~make compile~.
+
+** Test results
+
+The static checks pass.
+
+~make compile~ cannot run in the sandbox because the ~eask~ executable is not installed.
+
+The sandbox also does not contain Emacs. Buttercup and byte-compilation tests cannot run here.
+
+** Blockers
+
+The local development checks still need an environment with Emacs and Eask.
+
+** Follow-ups
+
+Run the repository checks in the normal development environment before approval.

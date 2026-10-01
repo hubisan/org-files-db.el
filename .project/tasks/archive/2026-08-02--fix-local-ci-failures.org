@@ -1,0 +1,67 @@
+#+TITLE: Fix local CI failures
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-02 Sunday 00:00]
+#+TASK_COMPLETED: [2026-08-02 Sunday 00:00]
+
+* Original Task (User only)
+
+bitte die Fehler von make ci im Projekt korrigieren so weit möglich
+
+* Planning
+
+** Problem summary
+
+~make ci~ reports an Eask package summary mismatch and cannot download development package archives because the sandbox cannot resolve the package host.
+
+** Goals
+
+- Correct project-owned CI configuration errors.
+- Run the CI checks and fix further project-owned failures within scope.
+
+** Non-goals
+
+- Change package dependencies or external network configuration.
+
+** Execution plan
+
+- Align the Eask package summary with the expected package metadata.
+- Install dependencies with network access, then run and address CI failures.
+
+** Risks & assumptions
+
+- Dependency installation only modifies ignored Eask state.
+
+** Proposed checks
+
+- ~make ci~
+
+* Results
+
+** Approach
+
+- Aligned Eask metadata with the package description required by Eask.
+- Updated Buttercup expectations for the current matcher API and isolated Org persistence and Consult calls in tests.
+- Restored linked-heading export by explicitly parsing Org links in heading titles.
+- Replaced ~with-eval-after-load~ with a one-time post-load hook for Embark exporter registration.
+
+** Changed files
+
+- Eask package metadata, export and live-search implementation, tests, changelog, and lint documentation.
+
+** Checks performed
+
+- ~make ci~
+- ~git diff --check~
+
+** Test results
+
+- 38 Buttercup specs passed with no failures.
+
+** Blockers
+
+- None.
+
+** Follow-ups
+
+- Suggested commit: ~fix: make CI pass with current dependencies~

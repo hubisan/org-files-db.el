@@ -1,0 +1,150 @@
+#+TITLE: Build Lightweight Completion and Semantic Faces
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-26 Wed 21:35]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Implement Step 4 of the ~org-files-db.el~ rebuild.
+
+* Planning
+
+** Problem summary
+
+Rust now returns prepared presentation rows, but Emacs cannot show them in completion yet.
+
+Step 4 needs lightweight candidates that preserve Rust search and display text.
+
+** Goals
+
+- Build candidates directly from decoded presentation rows.
+- Keep complete ~search_text~ in each completion candidate.
+- Show Rust ~display_text~ without recalculating layout.
+- Map semantic roles to configurable Emacs faces.
+- Use heading levels from original heading results for heading faces.
+- Keep normal completion text height for heading faces.
+- Keep row, result, row-context, and configuration metadata on candidates.
+- Preserve Rust row order in standard ~completing-read~.
+- Resolve duplicate candidates to the correct original result.
+
+** Non-goals
+
+- Do not implement the public interactive query command.
+- Do not execute result actions.
+- Do not add Consult.
+- Do not sort, truncate, pad, or expand presentation rows in Emacs.
+- Do not implement watcher or cached-view lifecycle code.
+
+** Architecture
+
+Keep candidate construction and face mapping in ~org-files-db-presentation.el~.
+
+Store the effective configuration name on the decoded presentation object after a one-shot query.
+
+Build one searchable candidate string per Rust row. Use a separate propertized display string for the Rust-prepared visible row.
+
+Append a hidden candidate identity. This identity keeps duplicate rows distinct after completion removes text properties.
+
+Use a completion table that keeps Rust row order. Use standard ~completing-read~ for selection.
+
+** Execution plan
+
+1. Add tests for search text and Rust display text.
+2. Add tests for role faces and heading-level faces.
+3. Add tests for candidate metadata and effective configuration.
+4. Add a duplicate-candidate selection test.
+5. Implement package faces and role mapping.
+6. Implement lightweight candidate construction and selection helpers.
+7. Store the effective configuration on one-shot presentations.
+8. Run available checks and review the changed code.
+
+** Risks & assumptions
+
+Rust ~display_text~ already contains truncation and padding for each cell.
+
+Emacs only joins prepared cells into one visible row. It does not change their content.
+
+Completion frontends can remove text properties from the selected string. The hidden identity therefore remains part of the candidate string.
+
+** Open questions
+
+None.
+
+** Proposed checks
+
+- Run the Buttercup tests.
+- Byte-compile the package.
+- Run the repository lint checks.
+- Check that candidate code contains no width, truncation, sorting, or row-expansion logic.
+- Check that no Consult dependency exists.
+
+* Results
+
+** Approach
+
+~org-files-db-presentation.el~ now builds one lightweight completion candidate for each prepared Rust row.
+
+The candidate keeps complete cell ~search_text~ in its underlying string. A separate display property shows the Rust-prepared cell text.
+
+Semantic roles map to package faces. Heading roles use ~level~ or ~heading_level~ from the original result.
+
+Heading faces inherit Org heading faces and set ~:height 1.0~. This keeps normal completion text height.
+
+Each candidate keeps its row, original result, row context, and effective configuration name as text properties.
+
+A hidden private-use identity keeps duplicate candidate strings distinct. Selection can resolve the correct result after text properties disappear.
+
+The completion table uses identity sort functions. This keeps the row order that Rust produced.
+
+~org-files-db-query-results~ stores the effective configuration name on the decoded presentation object.
+
+** Changed files
+
+- ~lisp/org-files-db-presentation.el~
+- ~lisp/org-files-db-query.el~
+- ~tests/org-files-db-test.el~
+- ~.project/tasks/todo.org~
+- ~.project/tasks/2026-08-26--implement-presentation-json-v2.org~
+- ~.project/tasks/2026-08-26--build-lightweight-completion-and-semantic-faces.org~
+
+** Checks performed
+
+- Added Buttercup tests before the Step 4 implementation.
+- Checked balanced delimiters in all changed Emacs Lisp files.
+- Compared the role list with the current Rust presentation documentation.
+- Checked that candidate construction does not calculate widths or truncate text.
+- Checked that candidate construction does not sort or expand rows.
+- Checked that the rebuilt package has no Consult dependency.
+- Checked that ~read-eval~ does not exist in the rebuilt code.
+- Reviewed duplicate candidate selection and effective configuration metadata.
+- Tried ~make ci~.
+
+** Test results
+
+The new tests cover:
+
+- complete search text with truncated visible text
+- all current semantic roles
+- heading-level face selection
+- normal heading face height
+- row, result, row-context, and configuration metadata
+- duplicate visible candidates
+- Rust row-order metadata
+- absence of Emacs width, truncation, and sorting work
+- effective configuration on one-shot presentation results
+
+Static syntax checks pass for the changed Lisp files.
+
+~make ci~ stops before the repository checks because the sandbox does not contain ~eask~.
+
+** Blockers
+
+Run ~make fmt~ and ~make ci~ in the normal development environment before approval.
+
+** Follow-ups
+
+Step 5 can use ~org-files-db--read-presentation~ for the public query command and default action flow.

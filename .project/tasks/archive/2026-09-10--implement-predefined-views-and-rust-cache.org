@@ -1,0 +1,223 @@
+#+TITLE: Implement Predefined Views and Rust Cache Integration
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-09-10 Thu 22:10]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Goal: Make a view a named query with presentation configuration and optional Rust caching.
+
+Use a flat view definition. For example:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("open-tasks"
+         :config "main"
+         :query (headings (not (done)))
+         :columns ((todo-keyword :width (fixed 8))
+                   (outline-path :width (max 80)))
+         :sort ((priority :direction asc))
+         :cache t
+         :action org-files-db-actions-open-result)))
+#+end_src
+
+Supported view keys include:
+
+- ~:config~
+- ~:query~
+- ~:columns~
+- ~:sort~
+- ~:row-source~
+- ~:cache~
+- ~:action~
+
+Use ~nil~ as the default for ~:cache~.
+
+Provide one public view function:
+
+#+begin_src emacs-lisp
+(org-files-db-view)
+(org-files-db-view "open-tasks")
+#+end_src
+
+Interactive use without a name asks for a view.
+
+Users create key bindings with normal Lisp functions or lambdas. Do not generate one command per view.
+
+When cache mode is disabled:
+
+- run every view through one-shot ~presentation-json~
+- ignore ~:cache t~ as a materialization request
+- keep the view fully usable
+
+Provide:
+
+#+begin_src emacs-lisp
+(org-files-db-cache-mode 1)
+(org-files-db-cache-start)
+(org-files-db-cache-stop)
+(org-files-db-cache-stop t)
+#+end_src
+
+~org-files-db-cache-start~ enables ~org-files-db-cache-mode~.
+
+~org-files-db-cache-stop~ disables ~org-files-db-cache-mode~.
+
+With a non-nil argument, ~org-files-db-cache-stop~ also disables watch mode.
+
+Cache mode activation must:
+
+1. make sure that watch mode is active
+2. make sure that every cached view has a watcher for its effective configuration
+3. resolve every cached view to its complete effective definition
+4. create a private per-Emacs-session Rust view name
+5. register every ~:cache t~ view
+6. store an activation snapshot
+
+The effective snapshot includes inherited values such as:
+
+- default configuration
+- default columns
+- default sorting
+- action data requirements
+
+If any registration fails, roll back all registrations from that activation attempt.
+
+If cache mode started watch mode during the same attempt, restore the previous watch-mode state on failure.
+
+Cache mode deactivation must remove the registrations from its activation snapshot.
+
+Do not recalculate the list from the current ~org-files-db-views~ value during cleanup.
+
+If a cached view definition changes while cache mode is active, report a clear error when that view is used.
+
+Tell the user to restart ~org-files-db-cache-mode~ to apply the new definition.
+
+When cache mode is active and ~:cache t~ is set:
+
+- read the Rust view with ~orgfdb view read~
+- do not fall back silently to a one-shot query on rebuild or watcher errors
+
+If ~view read~ reports ~view_not_found~ after a watcher restart:
+
+- register the stored activation snapshot again
+- retry the read once
+
+Do not use the current changed Lisp definition for this recovery.
+
+Do not allow ~org-files-db-watch-mode~ to stop while cache mode is active. Signal a user error instead.
+
+Acceptance criteria:
+
+- Views work with and without cache mode.
+- ~:cache t~ is an opt-in performance choice, not a functional requirement.
+- Cached views use ~view register~ and ~view read~.
+- Non-cached views use the same one-shot query pipeline as ~org-files-db-query~.
+- View names are unique in Emacs.
+- Rust view names are private to one Emacs session.
+- View configuration changes require a cache-mode restart.
+- Cleanup removes exactly the registrations created by the active snapshot.
+- Cache failures are visible and do not trigger a silent query fallback.
+- Watcher restart recovery uses the stored snapshot.
+- Normal Emacs exit removes active Emacs-owned registrations.
+
+* Planning
+
+** Problem summary
+
+Named views exist only as validated configuration. They do not execute queries or use the Rust presentation-view cache yet.
+
+** Goals
+
+- Resolve flat view definitions to complete effective values.
+- Run views through the normal one-shot query path when cache mode is inactive.
+- Register only ~:cache t~ views when cache mode starts.
+- Read cached views through ~orgfdb view read~.
+- Keep one immutable activation snapshot for registration, cleanup, and restart recovery.
+- Keep watcher ownership rules from Step 6.
+
+** Non-goals
+
+- New result actions or action-specific includes beyond the Step 7 requirement seam.
+- Embark integration.
+- Emacs-side result caching.
+- Automatic watcher restart.
+
+** Architecture
+
+Keep view definition and one-shot execution in ~org-files-db-views.el~. Keep optional Rust cache lifecycle management in ~org-files-db-cache.el~. Rust remains the only result-cache owner.
+
+Use private Rust names that combine one Emacs-session identifier with the user view name. Cache entries store fully resolved view data and never depend on later changes to ~org-files-db-views~ for cleanup or recovery.
+
+Use the existing watcher pre-exit hook so cached registrations are removed before Emacs-owned watchers stop.
+
+** Execution plan
+
+1. Extend flat view validation and effective view resolution.
+2. Add ~org-files-db-view~ and share the existing query presentation/action path.
+3. Add ~org-files-db-cache.el~ for cache-mode activation, registration, snapshots, rollback, and cleanup.
+4. Add cached reads and one-time ~view_not_found~ recovery from the snapshot.
+5. Prevent watch-mode shutdown while cache mode is active.
+6. Add Buttercup coverage and update the changelog.
+
+** Risks & assumptions
+
+The current Rust CLI contract uses ~view register~, ~view read~, and ~view remove~ through the active watcher. ~view read~ returns presentation-json version 2 directly.
+
+** Open questions
+
+None.
+
+** Proposed checks
+
+#+begin_src sh
+make fmt
+make ci
+#+end_src
+
+* Results
+
+** Approach
+
+Added flat predefined view resolution and one public ~org-files-db-view~ entry point. Non-cached execution reuses the existing one-shot query pipeline.
+
+Added ~org-files-db-cache.el~ for Rust view registration, reads, activation snapshots, rollback, restart recovery, and cleanup. Emacs stores registration metadata only. Rust remains the result-cache owner.
+
+** Changed files
+
+- ~lisp/org-files-db-views.el~
+- ~lisp/org-files-db-cache.el~
+- ~lisp/org-files-db-watch.el~
+- ~lisp/org-files-db-actions.el~
+- ~lisp/org-files-db-core.el~
+- ~lisp/org-files-db.el~
+- ~tests/org-files-db-test.el~
+- ~CHANGELOG.org~
+- project task files
+
+** Checks performed
+
+- Compared the implementation with the current Rust ~view register~, ~view read~, and ~view remove~ CLI contract.
+- Checked Emacs Lisp delimiter balance for all package and test files.
+- Checked that no generic ~org-files-db--*~ private symbols remain.
+- Checked that public ~defcustom~ and ~defface~ forms remain in Core.
+- Checked module dependencies for cycles.
+- Checked the patch with ~git diff --check~ in a temporary review repository.
+
+** Test results
+
+Emacs and Eask are not available in the implementation environment. Run ~make fmt~ and ~make ci~ locally before approval.
+
+Buttercup coverage was added for flat view resolution, one-shot execution, cache activation, rollback, snapshots, cached reads, restart recovery, watcher protection, and exit cleanup.
+
+** Blockers
+
+None for implementation. Local Emacs CI remains to be run by the user.
+
+** Follow-ups
+
+Step 8 can add concrete action data requirements through the action include seam added in this step.

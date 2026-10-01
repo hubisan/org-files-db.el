@@ -1,0 +1,570 @@
+#+TITLE: Configurable Result Sorting
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-09 Sun 00:16]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Implement the active ~Add configurable result sorting~ task from ~todo.org~ in the current repository.
+* DONE Add configurable result sorting
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+[[./archive/2026-08-09--configurable-result-sorting.org][Task details]]
+
+Goal: Allow query and search results to be sorted by one or more user-facing columns before they are presented, exported, or rendered in dynamic blocks.
+
+Sorting must reuse the shared result-presentation pipeline and must not introduce separate query, completion, or rendering paths.
+
+** Public syntax
+
+Add an optional ~:sort~ argument to query and search commands.
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings (not (done)))
+ '((todo-keyword)
+   (priority :width (fixed 3))
+   (outline-path :width (max 80))
+   (file-name :width (max 30)))
+ nil
+ :sort
+ '((priority :direction asc :missing last)
+   (outline-path :direction asc)))
+#+end_src
+
+Search example:
+
+#+begin_src emacs-lisp
+(org-files-db-search
+ "quarterly report"
+ nil
+ nil
+ :scope 'all
+ :sort
+ '((rank :direction asc)
+   (title :direction asc)))
+#+end_src
+
+~:sort nil~ preserves the order returned by ~orgfdb~.
+
+Each sort specification has the form:
+
+#+begin_src emacs-lisp
+(COLUMN
+ :direction asc
+ :missing last
+ :case-fold t)
+#+end_src
+
+Supported options are:
+
+- ~:direction asc~ sorts in ascending order.
+- ~:direction desc~ sorts in descending order.
+- ~:missing first~ places missing values before non-missing values.
+- ~:missing last~ places missing values after non-missing values.
+- ~:case-fold t~ compares textual values without case distinctions.
+- ~:case-fold nil~ compares textual values with case distinctions.
+
+Defaults are:
+
+#+begin_example
+direction   asc
+missing     last
+case-fold   t
+#+end_example
+
+Allow multiple sort keys. Later keys are used only when all earlier keys compare equally.
+
+** Supported sort columns
+
+Sorting uses the same public column names as result presentation.
+
+Examples include:
+
+- ~title~
+- ~todo-keyword~
+- ~todo-type~
+- ~priority~
+- ~outline-path~
+- ~source-outline-path~
+- ~target-outline-path~
+- ~tags~
+- ~file-title~
+- ~file-name~
+- ~file-path~
+- ~line-number~
+- ~scheduled-raw~
+- ~deadline-raw~
+- ~closed-raw~
+- ~link-type~
+- ~link-target~
+- ~link-description~
+- ~resolution-status~
+- ~rank~
+
+A sort column does not need to be displayed.
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings)
+ '((title)
+   (file-name :width (max 30)))
+ nil
+ :sort
+ '((priority :direction asc)
+   (title :direction asc)))
+#+end_src
+
+Here ~priority~ controls the ordering without appearing as a visible column.
+
+Do not expose arbitrary internal JSON fields as supported sort keys. Sortable columns must use the documented public column API.
+
+** Comparison semantics
+
+Use type-aware comparison.
+
+*** Text
+
+Textual columns are compared as strings.
+
+With the default ~:case-fold t~, values differing only by case compare equally for the current sort key.
+
+Use the original result order as the final tie-breaker so sorting remains stable.
+
+*** Numbers
+
+Numeric columns such as ~line-number~ and ~rank~ are compared numerically rather than as strings.
+
+For example:
+
+#+begin_example
+2
+10
+100
+#+end_example
+
+must not be ordered as:
+
+#+begin_example
+10
+100
+2
+#+end_example
+
+*** Priority
+
+Org priorities use their natural order.
+
+Ascending order means:
+
+#+begin_example
+A
+B
+C
+#+end_example
+
+Missing priorities follow the configured ~:missing~ behaviour.
+
+*** Timestamps
+
+Planning columns such as:
+
+- ~scheduled-raw~
+- ~deadline-raw~
+- ~closed-raw~
+
+are compared chronologically.
+
+Parse each timestamp at most once per presentation.
+
+Invalid or absent timestamps are treated as missing values and follow the configured ~:missing~ behaviour.
+
+*** Outline paths
+
+~outline-path~, ~source-outline-path~, and ~target-outline-path~ are compared using their complete untruncated path values.
+
+Display truncation must not affect sorting.
+
+Custom separators affect presentation only and must not change the logical path order.
+
+*** Tags
+
+The aggregate ~tags~ column is compared using its complete tag collection, not its truncated display value.
+
+When row expansion is active with:
+
+#+begin_src emacs-lisp
+:row-source 'tags
+#+end_src
+
+the singular ~tag~ column sorts by the individual expanded tag.
+
+** Sorting and cached presentation rows
+
+Integrate sorting with the optimized presentation pipeline.
+
+Conceptually:
+
+#+begin_example
+results
+→ normalized column and sort specifications
+→ cached presentation rows
+→ cached sort keys
+→ stable sorting
+→ shared-width calculation
+→ formatted completion candidates
+#+end_example
+
+Calculate every sort key at most once per presentation row.
+
+When a sort key uses the same value as a displayed column, reuse the already cached value.
+
+Do not call the general column extractor again during individual comparisons.
+
+A comparison function may be called many times by the sorting algorithm, so it must compare already normalized cached values.
+
+Do not sort using truncated, padded, propertized, or otherwise formatted candidate strings.
+
+** Stable ordering
+
+Sorting must be stable.
+
+When all configured sort keys compare equally, preserve the original order returned by ~orgfdb~.
+
+Store the original result position in the presentation row and use it as the final tie-breaker when necessary.
+
+This ensures deterministic handling of:
+
+- duplicate titles
+- identical file names
+- equal priorities
+- missing values
+- row-expanded values with the same text
+
+** Row expansion
+
+Sorting applies after row expansion.
+
+Example:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings)
+ '((tag)
+   (outline-path :width (max 60)))
+ nil
+ :row-source 'tags
+ :sort
+ '((tag :direction asc)
+   (outline-path :direction asc)))
+#+end_src
+
+This sorts individual tag rows rather than only their original heading results.
+
+The singular row columns are valid only with their matching row source:
+
+- ~tag~ with ~tags~
+- ~property-name~ and ~property-value~ with ~effective-properties~
+- ~keyword-name~ and ~keyword-value~ with ~keywords~
+
+Do not create separate sorting implementations for expanded rows.
+
+** Defaults by result type
+
+Provide configurable default sorting:
+
+#+begin_src emacs-lisp
+(defcustom org-files-db-heading-sort nil
+  "Default sorting for heading query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-file-sort nil
+  "Default sorting for file query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-link-sort nil
+  "Default sorting for link query results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-search-sort nil
+  "Default sorting for full-text search results."
+  :type '(repeat sexp)
+  :group 'org-files-db)
+#+end_src
+
+All defaults are ~nil~, preserving the CLI order.
+
+This is especially important for search results, where the default CLI order represents search relevance.
+
+An explicit command-specific ~:sort~ overrides the corresponding global default.
+
+An explicitly supplied ~nil~ preserves the CLI order for that invocation even when a global default is configured.
+
+The implementation must distinguish an omitted ~:sort~ argument from an explicitly supplied ~nil~.
+
+** Views
+
+Allow query and search views to define ~:sort~:
+
+#+begin_src emacs-lisp
+(setq org-files-db-views
+      '(("next-actions"
+         :command query
+         :query (headings (not (done)))
+         :sort
+         ((priority :direction asc :missing last)
+          (deadline-raw :direction asc :missing last)
+          (outline-path :direction asc))
+         :columns
+         ((todo-keyword)
+          (priority :width (fixed 3))
+          (deadline-raw :width (max 20))
+          (outline-path :width (max 80))))
+
+        ("recent-search"
+         :command search
+         :expression "org-files-db"
+         :sort
+         ((title :direction asc))
+         :columns
+         ((title)
+          (file-name :width (max 30))))))
+#+end_src
+
+View-specific sorting overrides the corresponding global default.
+
+A view without ~:sort~ inherits the default for its result type.
+
+An explicit ~:sort nil~ preserves the order returned by ~orgfdb~.
+
+Views continue to delegate to ~org-files-db-query~ or ~org-files-db-search~.
+
+** Dynamic blocks
+
+Allow direct dynamic blocks to specify sorting:
+
+#+begin_src org
+,#+BEGIN: org-files-db-query :query "(headings (not (done)))" :sort "((priority :direction asc) (outline-path :direction asc))" :layout flat
+,#+END:
+#+end_src
+
+Parse the sort expression safely with ~read-eval~ disabled.
+
+Dynamic blocks referencing a view inherit that view's sorting.
+
+Exported and rendered entries must follow the same order as interactive completion.
+
+** Embark export
+
+~embark-export~ preserves the current sorted candidate order.
+
+It must not:
+
+- restore the original CLI order
+- sort candidates alphabetically through the completion framework
+- recalculate sort keys
+- reorder equal candidates unexpectedly
+
+Keep the completion metadata sorting functions set to ~identity~ where required so the prepared order remains authoritative.
+
+For outline export, preserve the requested sort order where it does not conflict with the required ancestor hierarchy.
+
+Matched siblings within the same generated hierarchy must follow the configured sorting.
+
+** Performance
+
+Sorting approximately 10,000 prepared rows must remain practical.
+
+To avoid repeated work:
+
+- normalize sort specifications once
+- extract every sort key once
+- parse timestamps once
+- reuse displayed column values where possible
+- compare cached scalar values
+- avoid allocating new strings inside comparison functions
+- preserve the original position as a numeric tie-breaker
+
+Add sorting benchmarks for approximately:
+
+- 1,000 rows
+- 10,000 rows
+- multiple text keys
+- numeric keys
+- timestamp keys
+- row-expanded tag values
+
+Measure sorting separately from JSON parsing, row preparation, width calculation, and candidate formatting.
+
+** Validation
+
+Report clear errors for:
+
+- unknown sort columns
+- malformed sort specifications
+- unsupported directions
+- unsupported missing-value positions
+- non-boolean ~:case-fold~ values
+- singular row columns without the corresponding row source
+- sort columns unavailable for the selected result type
+
+Include the affected command or view name where available.
+
+** README documentation
+
+Document:
+
+- sorting by one or more columns
+- ascending and descending order
+- missing-value placement
+- case-sensitive and case-insensitive text sorting
+- sort columns not needing to be displayed
+- per-command sorting
+- per-view sorting
+- global defaults by result type
+- search preserving relevance order when no sort is configured
+- row-expanded sorting
+- dynamic-block sorting
+
+Use practical examples rather than implementation details.
+
+** Acceptance criteria
+
+- Query results can be sorted by one or more columns.
+- Search results can be sorted without changing their default relevance order.
+- Sort columns do not need to be displayed.
+- Text, numeric, priority, timestamp, and outline-path values use appropriate comparisons.
+- Missing values can be placed first or last.
+- Ascending and descending ordering are supported.
+- Text comparison supports configurable case folding.
+- Sorting uses complete untruncated values.
+- Every sort key is calculated at most once per presentation row.
+- Sorting reuses cached displayed values where possible.
+- Equal rows preserve their original CLI order.
+- Row-expanded tags, properties, and keywords can be sorted.
+- Views and dynamic blocks support sorting.
+- Embark export preserves the configured ordering.
+- Existing result actions continue to receive their original result objects.
+- Tests cover all comparison types, multiple keys, missing values, explicit ~nil~, global defaults, view overrides, row expansion, duplicate values, stable ordering, Embark export, and non-ASCII text.
+- Benchmarks document sorting performance for approximately 1,000 and 10,000 rows.
+
+* Planning
+
+** Problem summary
+
+Query and search results currently preserve only the order returned by ~orgfdb~. Users need optional stable, type-aware sorting by the same public columns used for presentation, with defaults per result type and consistent propagation through commands, views, dynamic blocks, completion, and Embark export.
+
+** Goals
+
+- Add normalized multi-key sorting to the shared presentation pipeline.
+- Preserve CLI order when sorting is omitted or explicitly disabled as specified.
+- Cache each sort key once per presentation row and reuse displayed cell values when possible.
+- Support text, numeric, priority, timestamp, outline-path, and aggregate-tag comparisons.
+- Add per-result-type sort defaults in Core.
+- Thread explicit/inherited sorting through query, search, views, dynamic blocks, and the current prepared-view cache path.
+- Add validation, tests, documentation, changelog notes, and 1,000/10,000-row sorting benchmarks.
+
+** Non-goals
+
+- Do not implement the separate row-expansion feature in this task.
+- Do not redesign the prepared-view cache lifecycle.
+- Do not change ~orgfdb~ ordering or query syntax.
+
+** Architecture
+
+- Add normalized sort descriptors in Core alongside presentation columns.
+- Build presentation rows first, populate displayed cells once, prepare sort keys once, sort rows using cached keys plus original position, then calculate widths/faces and format candidates.
+- Keep the existing no-sort fast path so ordinary presentation does not pay for sort preparation.
+- Represent outline and tag sort values structurally so separators and truncation never affect ordering.
+- Resolve omitted versus explicit ~nil~ sorting at command/view boundaries before presentation.
+- Dynamic blocks reuse the same row/sort helpers but return sorted original results rather than completion candidates.
+
+** Execution plan
+
+1. Add Core sort defaults, descriptors, validation, normalization, key preparation, comparison, and shared sorting helpers.
+2. Extend presentation entry points to accept sort specifications and result context while preserving the no-sort fast path.
+3. Thread sorting through query, search, live search, views, current cache preparation, and dynamic blocks.
+4. Add Buttercup coverage for comparison semantics, defaults, overrides, validation, views, dynamic blocks, export ordering, and non-ASCII text.
+5. Add sorting benchmarks for 1,000 and 10,000 rows with text, numeric, timestamp, and multi-key cases.
+6. Update README and CHANGELOG.
+7. Run ~make ci~ or the most specific available checks.
+
+** Risks & assumptions
+
+- Row expansion is a later task; the sorter is built around presentation rows so expanded rows can reuse it when that feature lands, but public singular row-source columns are not introduced here.
+- Search defaults must remain relevance order unless explicitly configured.
+- Existing cache code is due for a later rewrite; only minimal sort propagation is added so cached views do not silently ignore view sorting.
+
+** Open questions
+
+- None blocking implementation.
+
+** Proposed checks
+
+- ~make ci~
+- Focused Buttercup tests for sorting semantics and option propagation.
+- Static inspection of completion metadata to ensure prepared order remains authoritative.
+
+* Results
+
+** Approach
+
+- Added normalized multi-key sort descriptors to Core and integrated them with the shared presentation-row pipeline.
+- Cached each sort key once per row, reused already extracted displayed column values when possible, and kept the existing no-sort presentation path unchanged.
+- Added type-aware comparison for text, numbers, Org priorities, planning timestamps, structural outline paths, and complete tag collections with stable original-order tie breaking.
+- Added per-result-type defaults and preserved the distinction between omitted ~:sort~ and explicit ~:sort nil~.
+- Threaded sorting through query, one-shot search, live search, predefined views, dynamic blocks, Embark-visible candidate order, and the current cache compatibility path.
+- Added sort-only include inference so source and target outline sort keys request the required CLI context without being displayed.
+
+** Changed files
+
+- ~lisp/org-files-db-core.el~
+- ~lisp/org-files-db-query.el~
+- ~lisp/org-files-db-search.el~
+- ~lisp/org-files-db-views.el~
+- ~lisp/org-files-db-dblock.el~
+- ~lisp/org-files-db-cache.el~
+- ~tests/org-files-db-test.el~
+- ~benchmarks/org-files-db-benchmark.el~
+- ~README.org~
+- ~CHANGELOG.org~
+- ~.project/tasks/todo.org~
+- ~.project/tasks/2026-08-09--configurable-result-sorting.org~
+
+** Checks performed
+
+- Verified balanced parentheses, vectors, strings, and comments in all changed Emacs Lisp/test/benchmark files with a lexical delimiter scan.
+- Verified no duplicate changed function/struct definitions.
+- Verified no tabs were introduced in changed implementation, test, benchmark, documentation, or task files.
+- Ran ~git diff --no-index --check~ against the uploaded repository; it reported no whitespace errors.
+- Attempted ~make ci~.
+
+** Test results
+
+- Added Buttercup coverage for command defaults and explicit nil, files/links defaults, text/numeric/priority/timestamp/outline/tag comparisons, stable ordering, missing values, undisplayed sort columns, cached sort-key extraction, validation, views, dynamic blocks, Embark export order, live search, and non-ASCII values.
+- Added a timestamp regression proving timestamp parsing occurs once per row and a displayed-column regression proving value extraction is reused for sorting.
+- Added sorting benchmarks for 1,000 and 10,000 rows covering multiple text keys, numeric keys, timestamp keys, and aggregate tag collections.
+- Automated Emacs CI could not run in this execution environment because ~eask~ is unavailable; ~make ci~ stops at ~eask clean all~ with ~eask: No such file or directory~.
+
+** Blockers
+
+- Full byte compilation, linting, Buttercup execution, and benchmark execution require the user's local Emacs/Eask environment.
+
+** Follow-ups
+
+- Run ~make ci~ locally.
+- Run ~M-x org-files-db-benchmark-sorting~ and inspect the 1,000-row and 10,000-row cases.
+- The separate row-expansion task should add singular ~tag~, property, and keyword row values to this same row sorter and add the row-expanded-tag benchmark required once that API exists.

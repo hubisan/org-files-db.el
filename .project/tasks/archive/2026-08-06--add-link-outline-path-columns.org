@@ -1,0 +1,361 @@
+#+TITLE: Add source and target outline-path columns for links
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-06 Thursday 01:03]
+#+TASK_COMPLETED: [2026-08-06 Thursday 01:18]
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Implement the ~Add source and target outline-path columns for links~ task from [[./todo.org]], including explicit source and target columns, shared outline options, automatic include inference, truncation, tests, and documentation.
+
+** DONE Add source and target outline-path columns for links
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+[[./2026-08-06--add-link-outline-path-columns.org][Task details]]
+
+Goal: Display the outline hierarchy containing a link and the outline hierarchy of its resolved target as separate configurable columns.
+
+*** Column names
+
+For link results, provide two explicit columns:
+
+- ~source-outline-path~ shows the hierarchy in which the link occurs.
+- ~target-outline-path~ shows the hierarchy of the resolved link target.
+
+Use ~outline-path~ for heading and search results.
+
+Do not use the ambiguous ~outline-path~ name as the documented link column.
+
+Existing support for ~outline-path~ on link results may remain temporarily as an alias for ~source-outline-path~, but new documentation and examples must use the explicit column names.
+
+*** Source outline path
+
+~source-outline-path~ represents the Org hierarchy containing the matched link.
+
+Example source:
+
+#+begin_src org
+,* Applications
+,** Editors
+,*** Emacs
+,**** [[file:packages.org][Packages]]
+#+end_src
+
+The source outline path is:
+
+#+begin_example
+Applications » Editors » Emacs
+#+end_example
+
+The link itself is not an outline component.
+
+The column uses structured source context returned for link results.
+
+The query command must request the required source data automatically when ~source-outline-path~ is configured.
+
+Prefer the structured source heading outline path when available.
+
+A ~node_path~ returned through the ~path~ include may be used when it represents the same source hierarchy.
+
+Do not require ~--output outline~ merely to calculate this column.
+
+*** Target outline path
+
+~target-outline-path~ represents the hierarchy of the resolved target.
+
+Example target:
+
+#+begin_src org
+,* heading 1
+,** heading 2
+,*** heading 3
+:PROPERTIES:
+:CUSTOM_ID: 4cd16e0c-cd97-42c7-8338-b4208e02224c
+:END:
+#+end_src
+
+Given a resolved link to ~heading 3~, the target data contains:
+
+#+begin_src json
+"target": {
+  "file": {
+    "title": "test-subheading"
+  },
+  "heading": {
+    "title": "heading 3",
+    "outline_path": [
+      "heading 1",
+      "heading 2",
+      "heading 3"
+    ]
+  }
+}
+#+end_src
+
+The displayed target outline path is:
+
+#+begin_example
+heading 1 » heading 2 » heading 3
+#+end_example
+
+The query command must automatically request ~--include target~ when ~target-outline-path~ is configured.
+
+No additional query may be executed for each target.
+
+*** File targets
+
+When the resolved target is a file rather than a heading:
+
+- With ~:include-root t~, display the target file title.
+- With ~:include-root nil~, display an empty value.
+
+When the target is a heading, the target file title is included only when ~:include-root t~.
+
+Example:
+
+#+begin_example
+test-subheading » heading 1 » heading 2 » heading 3
+#+end_example
+
+*** Unresolved targets
+
+~target-outline-path~ is empty when the link target is:
+
+- unresolved
+- ambiguous
+- external
+- unsupported
+- missing structured target data
+
+Do not display the authored raw target as an outline path.
+
+Other columns such as ~link-target~ and ~resolution-status~ continue to expose those details.
+
+*** Shared outline options
+
+Both columns support the same outline options:
+
+#+begin_src emacs-lisp
+(source-outline-path
+ :separator " » "
+ :include-root nil
+ :include-match t
+ :width (max 50)
+ :truncate (:position right :marker "…"))
+
+(target-outline-path
+ :separator " » "
+ :include-root nil
+ :include-match t
+ :width (max 50)
+ :truncate (:position middle :marker "…"))
+#+end_src
+
+The options have the following meaning:
+
+- ~:separator~ separates path components.
+- ~:include-root~ includes the source or target file root.
+- ~:include-match~ includes the final heading component.
+- ~:width~ controls the shared column width.
+- ~:truncate~ controls shortening when the final width is exceeded.
+
+The global outline defaults also apply:
+
+#+begin_src emacs-lisp
+org-files-db-outline-path-separator
+org-files-db-outline-path-include-root
+org-files-db-outline-path-include-match
+#+end_src
+
+*** Include inference
+
+Determine required CLI includes from the configured columns.
+
+At minimum:
+
+#+begin_example
+source-outline-path  → source or path
+target-outline-path  → target
+#+end_example
+
+When both columns are configured, invoke the CLI with all required includes in one call.
+
+Conceptually:
+
+#+begin_src sh
+orgfdb query \
+  --include source,target \
+  '(links (status "resolved"))'
+#+end_src
+
+If ~path~ is required for source hierarchy instead of ~source~, combine it in the same invocation:
+
+#+begin_src sh
+orgfdb query \
+  --include path,target \
+  '(links (status "resolved"))'
+#+end_src
+
+Do not require users to specify includes manually merely because they selected these columns.
+
+Do not request expensive includes that are not needed by the configured columns or actions.
+
+*** Output mode
+
+Keep the normal link query output flat for completion and column formatting.
+
+~--output outline~ changes the shape of the result output and is intended for hierarchical output, not for providing individual column values.
+
+The package's Org exporter may still construct outline output from the included path information.
+
+Do not maintain separate flat and outline query execution paths solely for these columns.
+
+*** Default link columns
+
+Update the configurable link-column defaults to use explicit source and target names where appropriate.
+
+Example:
+
+#+begin_src emacs-lisp
+(setq org-files-db-link-columns
+      '((source-outline-path
+         :width (max 50))
+        (link-description
+         :width (max 40))
+        (target-outline-path
+         :width (max 50))
+        (resolution-status
+         :width (fixed 10))
+        (file-name
+         :width (max 30))))
+#+end_src
+
+The target column need not be part of the built-in default if requesting target information for every link would be undesirable.
+
+It must nevertheless be available as a documented supported column.
+
+*** README documentation
+
+Document:
+
+- ~source-outline-path~ as the hierarchy containing the link
+- ~target-outline-path~ as the hierarchy of the resolved target
+- unresolved targets producing an empty target path
+- both columns supporting the standard outline and truncation options
+- required includes being selected automatically by the package
+
+Do not imply that ~--output outline~ is required.
+
+*** Acceptance criteria
+
+- Link results support ~source-outline-path~.
+- Link results support ~target-outline-path~.
+- The source path describes where the link occurs.
+- The target path describes the resolved target hierarchy.
+- File roots can be included independently through ~:include-root~.
+- The final heading can be omitted through ~:include-match nil~.
+- Unresolved and external targets produce an empty target path.
+- Configured columns automatically add the required CLI includes.
+- Source and target data are retrieved in one CLI invocation.
+- No per-result target queries are executed.
+- Flat query output remains usable for completion.
+- The columns support separators, widths, and general truncation options.
+- Tests cover nested source headings, nested target headings, file targets, root inclusion, match exclusion, unresolved targets, custom separators, include inference, and simultaneous source and target columns.
+  
+* Planning
+
+** Problem summary
+
+Link results currently expose ~source-outline-path~ only as an alias of the generic path formatter, always request ~path~, and do not support resolved target hierarchies or per-column outline options.
+
+** Goals
+
+- Format source and resolved target outline paths independently.
+- Infer ~path~ and ~target~ includes from configured query columns.
+- Preserve flat query output and a single CLI invocation.
+- Add shared outline defaults and general column truncation options.
+- Cover link path semantics and include inference with Buttercup tests.
+
+** Non-goals
+
+- Change the orgfdb JSON contract or database schema.
+- Execute per-result target queries.
+- Add a separate link-query execution path.
+
+** Architecture
+
+- Keep argument construction and presentation in ~org-files-db-core.el~.
+- Let ~org-files-db-query~ infer includes from the effective columns before executing the query.
+- Read source context from structured source data, falling back to ~node_path~ from the ~path~ include.
+- Read target context only from structured resolved target data.
+
+** Execution plan
+
+1. Add shared outline and truncation customization options.
+2. Add column-driven include inference and optional query includes.
+3. Add source and target outline component extraction and formatting.
+4. Apply per-column separator, root, match, width, and truncation settings.
+5. Update tests, README, changelog, and task records.
+6. Run the available project checks.
+
+** Risks & assumptions
+
+- The source hierarchy may be returned through either structured ~source~ data or ~node_path~.
+- Resolved target data follows the documented ~target.file~ and ~target.heading.outline_path~ shape.
+
+** Open questions
+
+None.
+
+** Proposed checks
+
+- ~make ci~
+- Focused Buttercup tests for path formatting and include inference
+- Static source and whitespace checks if development dependencies are unavailable
+
+* Results
+
+** Approach
+
+- Added column-driven query include inference so source and target context are requested only when the configured columns require them.
+- Kept query output flat and combined all inferred includes in one CLI invocation.
+- Added separate source and resolved-target outline extraction with shared root, match, separator, width, and truncation handling.
+- Preserved ~outline-path~ as a compatibility alias for the source hierarchy on link results.
+- Kept outline dynamic-block export working by requesting path context only for outline layouts.
+
+** Changed files
+
+- ~lisp/org-files-db-core.el~
+- ~lisp/org-files-db-query.el~
+- ~lisp/org-files-db-dblock.el~
+- ~tests/org-files-db-test.el~
+- ~README.org~
+- ~CHANGELOG.org~
+- ~.project/tasks/todo.org~
+- ~.project/tasks/2026-08-06--add-link-outline-path-columns.org~
+
+** Checks performed
+
+- Attempted ~make ci~.
+- Checked Lisp parentheses and string structure for all source and test files.
+- Checked duplicate function definitions, private module prefixes, internal call targets, and require cycles.
+- Checked changed lines for trailing whitespace, final newlines, generated artefacts, and flat query execution invariants.
+
+** Test results
+
+- Added Buttercup coverage for nested source and target headings, file targets, root inclusion, match exclusion, unresolved targets, custom separators, truncation, include inference, one-call retrieval, and dynamic-block path inference.
+- Static checks passed.
+
+** Blockers
+
+- ~make ci~ could not run because ~eask~ and Emacs are unavailable in the execution environment; Make stopped at ~eask clean all~ with exit status 127.
+
+** Follow-ups
+
+- Run ~make ci~ in the project development environment.
+- Suggested commit: ~feat: add source and target link outline paths~

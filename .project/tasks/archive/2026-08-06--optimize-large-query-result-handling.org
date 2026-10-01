@@ -1,0 +1,800 @@
+#+TITLE: Optimize Large Query Result Handling
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-06 Thu 15:12]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Implement the ~Optimize large query result handling~ task in one pass and return only the changed files. Measuring the optimized implementation afterwards is sufficient; a recorded pre-change baseline is not required for this build.
+
+** DONE Optimize large query result handling
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+[[./archive/2026-08-06--optimize-large-query-result-handling.org][Task details]]
+
+Goal: Make synchronous queries returning 10,000 or more results fast enough that the completion interface appears promptly and filtering remains effectively instant.
+
+Keep the existing synchronous public interface.
+
+Do not add asynchronous query commands, Emacs Lisp worker threads, streaming, pagination, or lazy result loading as part of this task.
+
+Follow the same general performance model used successfully by Vulpea:
+
+#+begin_example
+database or CLI results
+→ build each display candidate once
+→ associate it directly with the original result
+→ pass the prepared candidates to completion
+#+end_example
+
+The optimized ~org-files-db~ pipeline additionally needs shared-width handling:
+
+#+begin_example
+orgfdb response
+→ parse once
+→ normalize column specifications once
+→ calculate each required result value once
+→ calculate each displayed cell once
+→ calculate shared widths from cached cells
+→ format each candidate once
+→ open completion
+#+end_example
+
+Once completion opens, filtering and redisplay must reuse the already prepared candidate strings without invoking result extraction, column formatting, width calculation, or face processing again.
+
+*** Expected user experience
+
+A call such as:
+
+#+begin_src emacs-lisp
+(org-files-db-query
+ '(headings)
+ '((todo-keyword)
+   (title)
+   (file-name :width (max 30))))
+#+end_src
+
+waits synchronously until the complete result set has been prepared.
+
+After preparation:
+
+- the completion interface appears promptly
+- typing filters the prepared candidate strings
+- redisplay does not rebuild columns or candidates
+- selecting a result remains immediate
+- actions and Embark receive the original result object
+
+Do not introduce a separate asynchronous command or require users to choose between synchronous and asynchronous execution.
+
+*** Establish a performance baseline
+
+Add repeatable benchmarks for result sets containing approximately:
+
+- 100 results
+- 1,000 results
+- 10,000 results
+- 50,000 results where practical
+
+Measure these phases independently:
+
+- CLI execution
+- JSON parsing
+- column-specification normalization
+- result-value extraction
+- presentation-row construction
+- sort-key preparation when sorting is enabled
+- shared-width calculation
+- face preparation
+- candidate formatting
+- completion-frontend initialization
+- total time until the minibuffer is usable
+
+Use representative columns:
+
+#+begin_src emacs-lisp
+'((todo-keyword)
+  (title)
+  (file-name :width (max 30)))
+#+end_src
+
+Also benchmark more expensive columns:
+
+#+begin_src emacs-lisp
+'((todo-keyword)
+  (priority :width (fixed 3))
+  (outline-path :width (max 80))
+  (tags)
+  (file-name :width (max 30)))
+#+end_src
+
+Use:
+
+- synthetic result objects for deterministic regression benchmarks
+- at least one captured representative ~orgfdb~ response
+- duplicate titles and file names
+- non-ASCII text
+- nested outline paths
+- missing values
+
+Record baseline results before changing the implementation.
+
+Do not optimize only according to total command duration.
+
+Identify whether the dominant cost comes from:
+
+- ~orgfdb~
+- JSON parsing
+- repeated result access
+- repeated column calculation
+- width calculation
+- face handling
+- string allocation
+- candidate construction
+- completion initialization
+
+*** Benchmark JSON representations
+
+Compare JSON parsing with:
+
+#+begin_src emacs-lisp
+:object-type 'alist
+#+end_src
+
+and:
+
+#+begin_src emacs-lisp
+:object-type 'hash-table
+#+end_src
+
+Measure:
+
+- parsing time
+- repeated direct field access
+- repeated nested field access
+- complete presentation preparation
+- garbage collection
+- memory use where practical
+
+Do not switch to hash tables merely because individual lookups have better theoretical complexity.
+
+Hash tables create additional objects and may increase parsing time and memory use.
+
+Change the JSON representation only when the complete representative benchmark shows a meaningful overall improvement.
+
+Keep all JSON access behind shared access functions so the chosen representation remains an internal implementation detail.
+
+*** Normalize column specifications once
+
+Compile each configured column into an internal presentation specification before processing results.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(cl-defstruct org-files-db--presentation-column
+  name
+  extractor
+  width-kind
+  width-limit
+  truncate-position
+  truncate-marker
+  face-function
+  outline-options)
+#+end_src
+
+The exact representation may differ.
+
+Each normalized specification should contain everything required to process its cells without repeatedly inspecting the original property list.
+
+Resolve and validate once per invocation:
+
+- column name
+- value extractor
+- width mode
+- width limit
+- truncation position
+- truncation marker
+- outline separator
+- root inclusion
+- matched-heading inclusion
+- face selection
+- required CLI includes
+
+Avoid repeated ~pcase~, ~plist-get~, and validation inside the result loop.
+
+*** Extract shared result values once
+
+Vulpea uses compact ~cl-defstruct~ note objects and direct accessors such as:
+
+#+begin_src emacs-lisp
+(vulpea-note-title note)
+(vulpea-note-path note)
+(vulpea-note-tags note)
+#+end_src
+
+Do not repeatedly traverse raw nested alists for every displayed column.
+
+Build a compact presentation source containing only values required by the current invocation.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(cl-defstruct org-files-db--presentation-source
+  result
+  kind
+  title
+  file-path
+  file-name
+  line-number
+  heading-level
+  todo-keyword
+  todo-type
+  priority
+  tags
+  outline-path
+  source-outline-path
+  target-outline-path)
+#+end_src
+
+The exact fields may differ.
+
+Only calculate values required by:
+
+- displayed columns
+- configured sort keys
+- row expansion
+- presentation metadata
+
+Do not eagerly normalize every possible result field.
+
+Several columns depending on the same value must reuse the normalized value.
+
+Examples:
+
+- ~file-name~ reuses the already extracted ~file-path~
+- ~outline-path~ is constructed once
+- aggregate tags are formatted once
+- title lookup is not repeated for display, searching, sorting, and export
+
+Keep the original result object unchanged.
+
+Actions continue to receive the original result rather than the normalized presentation source.
+
+*** Build cached presentation rows
+
+Represent every visible row explicitly.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(cl-defstruct org-files-db--presentation-row
+  result
+  source
+  original-position
+  row-source
+  row-value
+  cells
+  sort-keys
+  candidate)
+#+end_src
+
+A normal result creates one presentation row.
+
+Tag, property, and keyword expansion may create several rows sharing the same presentation source and original result.
+
+Each cached cell contains at least:
+
+#+begin_example
+logical value
+display string
+display width
+source face
+#+end_example
+
+The preparation pipeline becomes:
+
+#+begin_example
+raw results
+→ presentation sources
+→ row expansion
+→ cached presentation rows
+→ cached sort keys
+→ stable sorting
+→ shared-width calculation
+→ candidate formatting
+#+end_example
+
+Calculate each displayed value at most once per presentation row.
+
+Do not call the general column extractor again during width calculation or candidate formatting.
+
+*** Calculate widths from cached cells
+
+Calculate final shared widths from cached display widths.
+
+For ~(fixed N)~:
+
+- use ~N~ directly
+- do not scan cell widths to determine the column width
+- still calculate each cell once because its value is needed for display and filtering
+
+For ~(max N)~:
+
+- track the largest cached display width
+- stop updating the width accumulator once it reaches ~N~
+- continue preparing remaining cells because they are still required as candidates
+
+For ~auto~:
+
+- inspect all cached display widths
+- preserve exact existing behaviour
+- do not estimate or sample
+
+Avoid creating a temporary list of all widths before reducing it.
+
+Do not use a pattern such as:
+
+#+begin_src emacs-lisp
+(apply #'max
+       (mapcar #'string-width values))
+#+end_src
+
+Update width accumulators directly while rows are prepared or through one allocation-free pass over cached cells.
+
+*** Format every candidate exactly once
+
+Vulpea constructs each completion candidate once:
+
+#+begin_src emacs-lisp
+(cons (vulpea-select-describe note) note)
+#+end_src
+
+Follow the same principle.
+
+After final shared widths are known, build one complete completion string per presentation row.
+
+The candidate contains:
+
+- truncated and padded column text
+- faces
+- searchable column values
+- an invisible unique identity where required
+- a direct reference to the original result
+- row-expansion metadata where applicable
+
+Do not:
+
+- rebuild candidates during filtering
+- rebuild candidates during redisplay
+- recalculate columns in an annotation function
+- recalculate columns in an affixation function
+- recalculate result metadata through completion callbacks
+
+Filtering must operate on already prepared candidate strings.
+
+All configured visible values must remain searchable.
+
+The internal uniqueness component must not be visible and must not meaningfully affect filtering.
+
+*** Keep the completion representation simple
+
+Use an eager representation comparable to:
+
+#+begin_example
+formatted candidate string → original result
+#+end_example
+
+Prefer attaching the original result and row metadata directly to the candidate through text properties when this remains compatible with standard completion and Embark.
+
+For example, the equivalent of:
+
+#+begin_src emacs-lisp
+(get-text-property 0 'org-files-db-result candidate)
+#+end_src
+
+is preferable to repeatedly searching a large association list.
+
+Avoid a lookup implementation such as:
+
+#+begin_src emacs-lisp
+(cdr (assoc selected candidates))
+#+end_src
+
+for large result collections.
+
+A linear lookup through 10,000 candidates must not occur during:
+
+- preview
+- redisplay
+- selection
+- Embark actions
+- Embark export
+
+The selected representation must support:
+
+- identical visible candidate text
+- stable individual identity
+- direct access to the original result
+- row-expansion metadata
+- standard completion
+- Embark actions
+- Embark export
+
+*** Cache sanitized faces
+
+Do not call ~face-attribute~ for every displayed cell.
+
+Create a presentation-local cache:
+
+#+begin_src emacs-lisp
+(make-hash-table :test #'eq)
+#+end_src
+
+For each distinct source face:
+
+- sanitize it once
+- cache the resulting property list
+- reuse it for every matching cell
+
+Typical faces include:
+
+- ~org-todo~
+- ~org-done~
+- ~org-priority~
+- ~org-tag~
+- ~org-date~
+- ~org-level-1~ through ~org-level-8~
+
+Use a presentation-local cache so later invocations observe theme changes.
+
+Do not globally cache complete formatted candidates or cells.
+
+*** Reduce temporary allocation
+
+Avoid unnecessary temporary objects in hot paths.
+
+In particular:
+
+- do not create a list of all cell widths before reducing it
+- do not repeatedly derive a file name from the same path
+- do not repeatedly join the same outline components
+- do not repeatedly format the same tags
+- do not repeatedly convert the same scalar value to text
+- do not rebuild searchable strings during filtering
+- do not repeatedly sanitize the same face
+- do not repeatedly inspect column property lists
+- do not allocate strings inside sort comparison functions
+- do not copy result objects solely for presentation
+
+Use vectors or compact structs for fixed-size cell collections if benchmarks show a measurable advantage.
+
+Prefer understandable code over speculative micro-optimization.
+
+*** Completion frontend comparison
+
+Benchmark the same completely prepared candidate collection with:
+
+- standard ~completing-read~
+- ~consult--read~ when Consult is available
+
+Begin this benchmark only after all candidate strings have been constructed.
+
+This separates presentation-preparation cost from completion-frontend initialization and filtering cost.
+
+When testing Consult:
+
+- pass already formatted candidate strings
+- do not perform column formatting through annotations
+- do not perform result lookup through repeated linear ~assoc~
+- disable Consult sorting when CLI or configured result order is authoritative
+- preserve duplicate candidates through their internal identity
+- do not enable previews during the core performance benchmark
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(consult--read
+ candidates
+ :sort nil
+ ...)
+#+end_src
+
+Vulpea uses:
+
+#+begin_src emacs-lisp
+:sort t
+#+end_src
+
+because its note selector allows Consult to control ordering.
+
+Do not copy this behaviour for ~org-files-db~ when the authoritative order comes from:
+
+- ~orgfdb~
+- search relevance
+- configured sorting
+- row expansion
+
+Do not add Consult as a requirement for normal query completion merely for performance reasons.
+
+Consult integration remains optional.
+
+The implementation must remain fast with standard completion.
+
+*** Preserve prepared ordering
+
+Completion must preserve the order established before the minibuffer opens.
+
+This may be:
+
+- CLI order
+- search relevance order
+- configured result sorting
+- expanded-row sorting
+
+Use identity sorting metadata where necessary.
+
+Do not let the completion framework alphabetically reorder candidates unless explicitly requested by a future user option.
+
+Candidate filtering must not modify the authoritative result order.
+
+*** Profiling and benchmark helpers
+
+Add an internal helper that prepares results without opening the minibuffer.
+
+Conceptually:
+
+#+begin_src emacs-lisp
+(org-files-db--benchmark-presentation
+ results
+ columns
+ &rest options)
+#+end_src
+
+Return or report timings for:
+
+- column normalization
+- result-value extraction
+- row construction
+- sort-key extraction
+- sorting
+- width calculation
+- face preparation
+- candidate formatting
+- total preparation
+
+Also provide a way to benchmark already prepared candidates with the supported completion frontends.
+
+Keep benchmark helpers internal.
+
+Document how to profile a real invocation with:
+
+#+begin_example
+M-x profiler-start
+M-x profiler-report
+#+end_example
+
+Where practical, use repeated measurements rather than one run and report:
+
+- minimum
+- median
+- maximum
+- garbage collections
+
+*** Preserve synchronous execution
+
+Keep the public interface synchronous:
+
+#+begin_src emacs-lisp
+(org-files-db-query QUERY COLUMNS &optional ACTION ...)
+#+end_src
+
+The command continues to:
+
+- invoke ~orgfdb~
+- wait for the complete response
+- parse all results
+- prepare all candidates
+- open completion
+- call the selected action
+
+Do not add:
+
+- ~org-files-db-query-async~
+- an ~:async~ view option
+- background completion appearing later
+- Emacs Lisp worker threads
+- duplicate ~orgfdb~ processes
+- chunked UI updates
+- lazy candidate formatting
+- streaming requirements
+- pagination requirements
+
+Reconsider these approaches only if the optimized eager pipeline remains insufficient after measurement.
+
+*** Shared presentation pipeline
+
+Use one presentation implementation for:
+
+- heading queries
+- file queries
+- link queries
+- one-shot search
+- query views
+- search views
+- Embark export
+- dynamic-block rendering where applicable
+- row-expanded tags, properties, and keywords
+- configured sorting
+
+Do not keep separate old and optimized presentation implementations.
+
+Views and dynamic blocks continue to delegate through the normal query and search interfaces.
+
+*** Embark and actions
+
+Optimization must not change externally visible behaviour.
+
+- Selecting a candidate calls the configured action with the original result.
+- Embark actions receive the correct original result.
+- ~embark-export~ preserves the currently filtered and prepared candidate order.
+- Duplicate visible candidates remain individually selectable.
+- Insert-link actions continue to work.
+- Follow-link actions continue to work.
+- Rename actions continue to work.
+- Result configuration context remains available.
+- Row-expanded candidates retain original result and row metadata.
+
+Embark export must not reconstruct query results from candidate text.
+
+*** Implementation plan
+
+Implement and measure in this order:
+
+1. Add benchmarks for the current implementation.
+2. Separate CLI, JSON, presentation, and completion timings.
+3. Benchmark standard completion and Consult using already prepared candidates.
+4. Normalize column specifications once.
+5. Extract only required result-level values.
+6. Build presentation rows with cached cell strings and display widths.
+7. Calculate shared widths from cached cells.
+8. Format every candidate once.
+9. Attach result identity and row metadata without linear lookup.
+10. Cache sanitized faces per presentation.
+11. Remove temporary allocation identified by profiling.
+12. Integrate row expansion with the same presentation-row structure.
+13. Integrate sorting using cached logical values.
+14. Benchmark alists and hash tables using the complete pipeline.
+15. Change JSON representation only when justified by results.
+16. Remove the previous duplicate presentation path.
+17. Run all regression tests.
+18. Record before-and-after benchmark results.
+
+Do not combine speculative optimizations before recording the baseline.
+
+*** Acceptance criteria
+
+- The public query interface remains synchronous.
+- No additional asynchronous query command is introduced.
+- A query returning approximately 10,000 headings opens completion substantially faster than before.
+- Filtering after completion opens remains effectively instant.
+- Every displayed column value is calculated at most once per presentation row.
+- Frequently reused result-level values are extracted at most once where practical.
+- Width calculation reuses cached display widths.
+- Candidate formatting reuses cached cell strings.
+- Every completion candidate is formatted exactly once.
+- Completion filtering does not invoke result extraction or column formatting.
+- Fixed-width columns do not perform unnecessary width comparisons.
+- Maximum-width accumulators stop updating after reaching their cap.
+- Automatic widths preserve exact existing behaviour.
+- Sanitized face attributes are calculated once per distinct face and presentation.
+- No repeated linear lookup through all candidates occurs during selection, preview, or export.
+- All configured column values remain searchable.
+- Prepared result order is preserved.
+- Duplicate visible candidates remain individually selectable.
+- Result actions receive the original result object.
+- Embark export retains original result and row metadata.
+- Row expansion uses the same cached presentation-row structure.
+- Sorting compares cached logical values rather than formatted strings.
+- Alist and hash-table JSON representations are benchmarked before changing the parser.
+- Standard completion remains supported without Consult.
+- Tests cover cached values, width modes, face caching, duplicate candidates, order preservation, actions, Embark metadata, row metadata, sorting metadata, non-ASCII values, Unicode display widths, and truncation.
+- Benchmarks document before-and-after results for approximately 1,000 and 10,000 rows.
+
+* Planning
+
+** Problem summary
+
+Large synchronous query and search result sets repeatedly extracted column values, recalculated widths, sanitized faces, and formatted candidates. Candidate selection also needed a fallback scan when completion returned a string without text properties.
+
+** Goals
+
+- Prepare each displayed cell once per result row.
+- Normalize column definitions and inferred CLI includes once per invocation.
+- Reuse cached strings and display widths for shared-width calculation and candidate formatting.
+- Sanitize each distinct face once per presentation.
+- Preserve original results, duplicate visible candidates, configured order, Embark metadata, and live-search behaviour.
+- Keep complete truncated values searchable without rebuilding candidates during filtering.
+- Add repeatable synthetic and representative benchmarks.
+
+** Non-goals
+
+- Asynchronous commands, worker threads, streaming, pagination, or lazy result loading.
+- Generation-aware predefined-view caching.
+- Adding sorting or row-expansion behaviour that is not yet implemented by the package.
+- Switching the production JSON representation without benchmark evidence.
+
+** Architecture
+
+Compile configured columns into normalized presentation specifications. Build one lightweight source and row per result, cache each logical and displayed cell value, derive shared widths from the cached display widths, cache sanitized faces locally, and format each candidate once. Attach the original result and row metadata directly to each candidate and keep a direct lookup for completion strings whose properties were removed.
+
+** Execution plan
+
+1. Introduce normalized presentation columns, sources, cells, rows, and complete presentations in Core.
+2. Route query, one-shot search, and live search through the shared eager presentation pipeline.
+3. Preserve full truncated values as hidden searchable candidate text and add compact invisible identities for duplicates.
+4. Add direct candidate-to-result lookup and preserve completion order.
+5. Add presentation and JSON-representation benchmark helpers with deterministic fixtures.
+6. Add regression tests for caching, width handling, face caching, duplicate identity, direct lookup, searchable truncation, Unicode, and hash-table access.
+7. Update README and changelog.
+
+** Risks & assumptions
+
+- The package currently has no implemented presentation sorting or row expansion, so the new structures retain fields for those future stages without adding a second speculative implementation.
+- Theme-sensitive face properties must remain presentation-local.
+- Standard completion and Consult must receive the same already prepared candidate strings.
+
+** Open questions
+
+None.
+
+** Proposed checks
+
+- Run ~make ci~.
+- Run the benchmark command for 1,000 and 10,000 rows locally.
+- Validate Lisp structure, JSON fixtures, internal function references, naming, dependencies, and whitespace.
+
+* Results
+
+** Approach
+
+Replaced the repeated width-and-format loops with one eager presentation pipeline. Column options and required includes are compiled once. Result-level values are cached lazily, every visible cell records its logical value, display string, display width, and source face, and shared widths consume those cached widths. Distinct faces are sanitized once per invocation. Candidates are formatted once, retain hidden full values only where truncation occurred, carry compact invisible identities, and expose direct result and row metadata.
+
+Query, one-shot search, and live search now pass normalized columns into the same Core implementation. Production JSON remains alist-based, while the benchmark can compare alists and hash tables through the shared access functions.
+
+** Changed files
+
+- ~lisp/org-files-db-core.el~
+- ~lisp/org-files-db-query.el~
+- ~lisp/org-files-db-search.el~
+- ~tests/org-files-db-test.el~
+- ~benchmarks/org-files-db-benchmark.el~
+- ~benchmarks/fixtures/representative-query-response.json~
+- ~README.org~
+- ~CHANGELOG.org~
+- ~.project/tasks/todo.org~
+- ~.project/tasks/2026-08-06--optimize-large-query-result-handling.org~
+
+** Checks performed
+
+- Checked balanced Lisp delimiters, strings, and comments for all package files, the Buttercup test file, and the benchmark file.
+- Parsed the representative JSON fixture successfully.
+- Checked private symbol ownership, internal function references, module dependency direction, duplicate definitions, trailing whitespace, and changed-file scope.
+- Verified the final ZIP against the working files.
+
+** Test results
+
+The new regression tests cover normalized-column reuse, one extraction per displayed row cell, no formatting work during filtering, fixed and capped width behaviour, local face caching, direct result lookup, duplicate candidates, complete truncated-value searching, mapped JSON fields, hash-table nested paths and direct result arrays, benchmark phase reporting, and existing Unicode truncation behaviour.
+
+** Blockers
+
+~make ci~ could not be executed in the build environment because Emacs and Eask are not installed and the environment cannot reach the package repositories. The complete CI and benchmark commands therefore still need to run in the normal development checkout.
+
+** Follow-ups
+
+- Run ~make ci~ locally.
+- Run ~org-files-db-benchmark-run~ and record measurements for 1,000 and 10,000 rows after applying the changes.

@@ -1,0 +1,105 @@
+#+TITLE: Reduce asynchronous view-cache prewarm latency
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-07 Fri 15:42]
+#+TASK_COMPLETED: [2026-08-07 Fri 15:55]
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+The generation-aware cache works after the async lifecycle fixes, but preparing a cache still takes roughly 15 seconds even though the underlying query is much faster. Optimize the current repository implementation.
+
+* Planning
+
+** Problem summary
+
+The current async worker serializes a complete duplicated presentation graph: original results, logical rows and cells, widths, and preformatted candidate templates. The main Emacs then reads that large artifact and reconstructs the same row/candidate structures. The previously recorded 9,903-row run spent substantially more time writing, reading, and reconstructing a 22 MB artifact than the normal query and presentation required.
+
+** Goals
+
+- Keep query/search execution and JSON parsing outside the main Emacs process.
+- Transfer only complete result objects and resolved column definitions from the worker.
+- Reuse the optimized main-process presentation pipeline once after transfer instead of serializing rows, cells, faces, and candidates.
+- Avoid transferring complete patch base results to the worker; return only restricted replacement results and merge them with the retained cache in the main process.
+- Prioritize an interactively requested view when its prewarm job is waiting behind other queued views.
+- Preserve generation, token, action, duplicate-candidate, truncation-search, file-notify, and bounded-wait semantics.
+
+** Non-goals
+
+- Direct SQLite access, persistent cache files, Lisp threads, or changes to Rust.
+- Multiple concurrent cache workers.
+- Changing direct query and search commands.
+
+** Architecture
+
+- Continue using ~async.el~ only for the expensive CLI/query/JSON phase.
+- Write a compact job-owned payload containing result data and normalized column definitions.
+- For a patch job, return only restricted upsert results. The main process validates the unchanged source entry, merges results, and runs the already optimized presentation builder.
+- Keep the final generation recheck and atomic publication in the main process.
+
+** Execution plan
+
+1. Simplify worker payload and patch request data.
+2. Move full presentation construction to the optimized main-process publication step.
+3. Prioritize an interactively awaited queued refresh.
+4. Update validation, tests, benchmarks, README, changelog, and task records.
+5. Run available static checks and package checks where the environment permits.
+
+** Risks & assumptions
+
+- Main-process presentation for approximately 10,000 rows is already measured in well under one second and is substantially cheaper than serializing and rehydrating the complete presentation graph.
+- Worker payloads still retain full untruncated values through original results; the normal presentation pipeline recreates hidden searchable text identically to a fresh query.
+- A short publication pause is preferable to several seconds of duplicated worker transport and reconstruction.
+
+** Open questions
+
+None.
+
+** Proposed checks
+
+- ~make ci~
+- Cache benchmark for results-only transfer, main publication, patch publication, and warm lookup.
+- Real prewarm timing with ~org-files-db-cache-debug~ enabled.
+
+* Results
+
+** Approach
+
+- Narrowed the async worker boundary to CLI execution and JSON decoding.
+- Replaced the duplicated logical-row, cell, width, face, and candidate-template artifact with a compact payload containing only complete results and resolved column definitions.
+- Changed patch workers to return only restricted upsert results. The main process now validates the unchanged source generation, removes affected and deleted file groups, merges the restricted results, and prepares one complete replacement.
+- Reused the optimized main-process presentation pipeline once after payload transfer so full untruncated search text, result metadata, duplicate identity, widths, faces, and actions remain identical to a fresh query.
+- Removed the complete retained patch result set from worker requests.
+- Prioritized the latest queued refresh for a view when an interactive caller waits behind other initial prewarm jobs.
+- Bumped the cache-format version so entries from the former transport representation cannot be reused.
+
+** Changed files
+
+- ~lisp/org-files-db-cache.el~: compact worker payload, main-process publication, patch-source validation, request reduction, and interactive queue priority.
+- ~tests/org-files-db-test.el~: compact worker, publication, patch request, queue-priority, and truncated-search regressions.
+- ~benchmarks/org-files-db-benchmark.el~: results-only payload size, transfer, publication, patch, and rebuild measurements.
+- ~README.org~ and ~CHANGELOG.org~: updated worker boundary and queue-priority documentation.
+- ~.project/tasks/todo.org~ and this task file: active workflow and implementation record.
+
+** Checks performed
+
+- Checked all Emacs Lisp files for balanced parentheses while ignoring strings, comments, and character literals.
+- Checked changed Emacs Lisp files for tabs and trailing whitespace.
+- Checked for duplicate function definitions and obsolete logical-presentation helper references.
+- Ran ~git diff --no-index --check~ against the supplied repository state.
+
+** Test results
+
+- Static structure and whitespace checks passed.
+- Runtime compilation, Buttercup, linting, and cache benchmarks were not available because this environment has neither Emacs nor Eask installed.
+
+** Blockers
+
+- The user environment must run ~make ci~ and the real cache benchmark to verify the measured improvement with the local database and Emacs build.
+
+** Follow-ups
+
+- Run ~M-x org-files-db-benchmark-view-cache~ and compare ~worker-payload-bytes~, ~worker-transfer~, ~main-publication~, and warm lookup with the previous 22 MB artifact baseline.
+- With ~org-files-db-cache-debug~ enabled, verify that initial prewarming publishes the requested view before first use and that an interactively awaited queued view moves ahead of remaining prewarm jobs.

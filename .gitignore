@@ -32,11 +32,14 @@ flycheck_*.el
 # Package artifacts
 *.tar
 *.tar.gz
+*.zip
+
+# Build / Cache
+tmp/
+temp/
 
 # OS and editor metadata
 .DS_Store
 .idea/
 .vscode/
-
-# Project update temporary files
-.project-update-tmp/
+*:Zone.Identifier

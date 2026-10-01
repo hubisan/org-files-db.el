@@ -6,7 +6,7 @@
 
 (package "org-files-db"
          "0.1.0"
-         "Interface for the org-files-db command-line tool")
+         "Emacs interface for orgfdb")
 
 (website-url "https://github.com/hubisan/org-files-db.el")
 (keywords "outlines" "tools" "convenience")
@@ -14,7 +14,7 @@
 
 (package-file "lisp/org-files-db.el")
 (files "lisp/*.el")
-(load-paths "./lisp" "./tests")
+(load-paths "./lisp" "./tests" "./benchmarks")
 
 (source "gnu")
 (source "nongnu")
@@ -24,6 +24,7 @@
 
 (development
  (depends-on "buttercup")
+ (depends-on "embark")
  (depends-on "package-lint")
  (depends-on "relint"))
 

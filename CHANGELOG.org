@@ -2,4 +2,63 @@
 
 * Unreleased
 
-- =ADDED= Added the initial package, test, lint, and CI skeleton.
+- =ADDED= Added rebuilt predefined query views with optional Rust materialized caching.
+  - ~org-files-db-view~ runs named views through the normal one-shot presentation path unless active cache mode selects ~:cache t~.
+  - ~org-files-db-cache-mode~ registers private per-Emacs-session Rust views, keeps an activation snapshot, and removes exactly those registrations on cleanup.
+  - Cached reads use ~orgfdb view read~, recover one missing registration from the stored snapshot, and never silently fall back to a fresh query.
+  - Cache activation reuses Step 6 watcher lifecycle management and prevents watcher shutdown while cache mode is active.
+- =FIXED= Made file rename link maintenance preserve the exact authored link description and syntax from ~orgfdb~ result data, and close clean source buffers opened only for the rename action.
+- =ADDED= Added configurable stable sorting for query, search, predefined-view, and dynamic-block results.
+  - Sort by one or more public columns with ascending or descending direction, configurable missing-value placement, and case-sensitive or case-insensitive text comparison.
+  - Text, numeric values, Org priorities, planning timestamps, outline paths, and complete tag collections use type-aware cached sort keys; equal rows retain their original ~orgfdb~ order.
+  - Per-result-type defaults are available through ~org-files-db-heading-sort~, ~org-files-db-file-sort~, ~org-files-db-link-sort~, and ~org-files-db-search-sort~; explicit ~:sort nil~ preserves CLI order and search relevance.
+  - Sort-only columns can request required source or target context without being displayed, and completion, Embark export, and dynamic blocks preserve the prepared order.
+  - Added 1,000- and 10,000-row sorting benchmarks with separate sort-key and comparison timing phases.
+- =CHANGED= Made column truncation presentation-only while retaining complete completion text.
+  - Truncated columns now keep their full logical value in the completion candidate and use ~display~ text properties for the shortened visual representation.
+  - Standard completion and Consult can match text that is hidden by left, middle, right, fixed-width, or maximum-width truncation without appending duplicate hidden search strings.
+  - Candidate text properties survive readable Lisp print/read round trips, preparing the representation for future async cache dumps.
+- =ADDED= Reworked predefined-view caching around a measurable asynchronous full-rebuild Phase 1.
+  - Views opt in with ~:pre-cache t~, while the global ~org-files-db-cache-mode~ resolves Rust-authoritative ~database_path~, ~database_id~, and ~generation~, installs file notification watches, and asynchronously pre-caches every eligible view.
+  - Each child Emacs performs the complete query/search, JSON normalization, sorting, width calculation, formatting, truncation, searchable candidate construction, and metadata preparation for exactly one view.
+  - Complete prepared candidates travel through a unique short-lived readable-Lisp dump; the async callback carries only small metadata and timing data.  The parent reads the dump once, validates and atomically publishes the in-memory entry, then deletes the transport file.
+  - Warm predefined views use only the already prepared in-memory candidates.  Direct ~org-files-db-query~ and ~org-files-db-search~ calls remain uncached and fresh.
+  - SQLite ~file-notify~ activity is the only database-change wake-up signal.  Event bursts are briefly coalesced around actual notifications, followed by one authoritative ~orgfdb status~ check; there is no polling fallback or periodic cache timer.
+  - Any committed generation change performs a complete Phase 1 rebuild.  Newer generations immediately supersede and terminate older workers, remove their dumps, and cannot be overwritten by stale callbacks.
+  - Opening a view during initial pre-cache or a generation rebuild waits for the existing async worker while servicing process output and follows a superseding replacement; bounded failures do not overwrite a valid published entry.
+  - Added structured lifecycle tracing for worker phases, dump transport, parent blocking and GC, raw file notification events, generation detection, publication latency, and cancellation/supersession metrics, plus human-readable cache benchmark and raw event reports.
+  - Moved all user-facing ~defcustom~ definitions into ~org-files-db-core.el~ and removed the former cache polling, LRU/result-limit, mutation-hook, and incremental patch machinery.  Incremental refresh remains explicitly deferred to Phase 2.
+- =CHANGED= Optimized eager presentation for large synchronous query and search result sets.
+  - Column definitions, result values, display cells, widths, faces, and candidates are now prepared once per invocation and reused throughout completion.
+  - Fixed widths avoid width scans, capped widths stop scanning after reaching their limit, and face attributes are cached per presentation.
+  - Candidate selection now uses direct metadata lookup while preserving duplicate visible candidates, original result objects, CLI order, and searchable untruncated values.
+  - Large presentations now reduce outline-path and candidate allocation, use compact nested JSON arrays, release temporary row data, and avoid repeated garbage collections during completion preparation.
+  - Added repeatable synthetic and representative benchmarks for presentation phases, completion frontend initialization, and alist versus hash-table JSON parsing.
+- =ADDED= Added explicit ~source-outline-path~ and ~target-outline-path~ columns for link results.
+  - Source paths describe the hierarchy containing the link; target paths describe the hierarchy of resolved file or heading targets.
+  - Added per-column and global separator, root, match, width, and truncation options.
+  - Query columns now infer and combine required ~path~ and ~target~ includes in one flat CLI invocation.
+  - Unresolved, ambiguous, external, unsupported, and structurally incomplete targets produce an empty target path.
+- =ADDED= Added per-command and per-view configuration files for query, one-shot search, live search, actions, the setup diagnostic, and Org dynamic blocks.
+  - Omitted command options inherit ~org-files-db-config-file~, paths override it, and explicit ~nil~ disables ~--config~ for Lisp entry points.
+  - Dynamic blocks accept ~:config-file PATH~ and ~:config-file none~; view-backed blocks use the selected view's configuration.
+  - Query and search results retain their effective configuration for indexed follow-up operations such as ID resolution and file rename link discovery.
+  - Retained compatibility with the former positional search scope argument.
+- =CHANGED= Aligned function names with module ownership while retaining ~org-files-db-query~, ~org-files-db-search~, and ~org-files-db-search-live~ as the concise central operations.
+  - Renamed ~org-files-db-open-result~ to ~org-files-db-actions-open-result~.
+  - Renamed ~org-files-db-insert-file-link~ and ~org-files-db-insert-heading-link~ to ~org-files-db-actions-insert-file-link~ and ~org-files-db-actions-insert-heading-link~.
+  - Renamed ~org-files-db-query-insert-file-link~ and ~org-files-db-query-insert-heading-link~ to ~org-files-db-actions-query-insert-file-link~ and ~org-files-db-actions-query-insert-heading-link~.
+  - Renamed ~org-files-db-follow-heading-link~, ~org-files-db-rename-file~, ~org-files-db-rename-file-result~, and ~org-files-db-backlinks~ to their ~org-files-db-actions-*~ forms.
+  - Renamed ~org-files-db-get-view~, ~org-files-db-query-view~, and ~org-files-db-search-view~ to ~org-files-db-views-get~, ~org-files-db-views-query~, and ~org-files-db-views-search~.
+  - Renamed ~org-files-db-embark-export-org~ to ~org-files-db-export-embark-org~.
+  - Renamed private helpers to module-specific double-hyphen prefixes and kept shared helpers in core.
+  - Omitted compatibility aliases because version 0.1.0 remains unreleased.
+- =FIXED= Preserved file and ID links in exported heading titles with current Org versions.
+- =ADDED= Added shared ~orgfdb~ configuration, synchronous and asynchronous process execution, JSON handling, and setup diagnostics.
+- =ADDED= Added query completion with configurable columns, widths, result actions, and UTF-8 byte-offset navigation.
+- =ADDED= Added one-shot and Consult-powered live FTS5 search.
+- =ADDED= Added named query and search views.
+- =ADDED= Added Embark export to flat or outline Org buffers.
+- =ADDED= Added file and heading link insertion actions, linked-heading navigation, backlinks, and file rename with path-link maintenance.
+- =ADDED= Added query, search, view, and backlink Org dynamic blocks.
+- =ADDED= Added Buttercup coverage for the CLI layer, formatting, views, export, actions, dynamic blocks, and asynchronous processes.

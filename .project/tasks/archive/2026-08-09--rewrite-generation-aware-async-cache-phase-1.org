@@ -1,0 +1,109 @@
+#+TITLE: Rewrite Generation-aware Async Cache - Phase 1
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-09 Sun 23:10]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Implement only Phase 1 of the predefined-view cache rewrite.  The previous cache may be removed completely.  Return only changed repository files as a ZIP and provide a command that overlays them onto ~/projects/coding/org-files-db.el.
+
+* Planning
+
+** Problem summary
+
+The existing predefined-view cache mixed polling, persisted/cache-limit concerns, and Phase 2-style generation delta patching into the main lifecycle.  Phase 1 needs a smaller architecture whose correctness and latency can be measured before incremental refresh is attempted.
+
+** Goals
+
+- Replace the existing cache with asynchronous complete view rebuilds.
+- Build complete ready-to-use completion candidates in one child Emacs per rebuild and transport the large result through a temporary readable-Lisp dump.
+- Keep published warm entries entirely in parent Emacs memory and make warm lookup avoid CLI, parsing, presentation rebuilding, and cache-file access.
+- Use file notifications as the only database-change wake-up and Rust ~status~ as the authority for database identity and committed generation.
+- Cancel and supersede obsolete generation work safely.
+- Add lifecycle tracing and benchmarks for worker work, dump transport, parent blocking, raw file events, generation detection, waiting, and cancellation.
+- Keep every user-facing ~defcustom~ in ~org-files-db-core.el~.
+
+** Non-goals
+
+- Do not use ~orgfdb changes~.
+- Do not use ~--restrict-files-json~ from the cache.
+- Do not implement incremental result/candidate patching, width maintenance, or delta dumps.
+- Do not add polling or a polling fallback.
+
+** Architecture
+
+Use one global cache mode with one FIFO queue and at most one active ~async.el~ child.  Enabling resolves authoritative status once per effective configuration, installs a directory file-notify watcher for the canonical SQLite path, and queues every ~:pre-cache t~ view.  Each worker performs query/search execution, JSON normalization, presentation preparation, sorting, width calculation, candidate formatting, and metadata construction, then writes one complete transport dump.  The parent callback rechecks authoritative status, safely reads and validates the dump, atomically replaces the published in-memory entry, deletes the dump, and records blocking/GC metrics.  Relevant raw file events are coalesced only by a short one-shot debounce timer before a status check.  A newer required database identity/generation cancels older running or queued jobs before replacement work is started.
+
+** Execution plan
+
+- Remove the previous cache implementation and specialised cache options.
+- Centralize all package ~defcustom~ forms in core.
+- Implement the Phase 1 worker, queue, dump transport, publication, waiting, file-notify, generation, cancellation, and cleanup lifecycle.
+- Reuse the existing presentation pipeline inside the child so query/search semantics, metadata, actions, sorting, and truncation stay aligned with fresh execution.
+- Add structured benchmark records and concise interactive reports.
+- Replace Phase 2-oriented cache tests and synthetic benchmark code with Phase 1 coverage.
+- Update README and CHANGELOG.
+
+** Risks & assumptions
+
+- ~async.el~ 1.9.9 starts a fresh ~-Q~ child and resolves its own library path when each child is started, so the cache must explicitly reuse the path found when cache mode is enabled.
+- Parent publication necessarily remains synchronous while reading and validating the completed dump; this cost must be measured rather than hidden.
+- File notifications are wake-up signals only and can be noisy; correctness comes from the subsequent Rust status result, not from SQLite filename activity itself.
+
+** Proposed checks
+
+- Run ~make ci~.
+- Verify all Emacs Lisp files have balanced syntax delimiters.
+- Verify specialised modules contain no ~defcustom~ forms.
+- Verify the cache contains no polling, changes query, restricted-file query, or incremental patch implementation.
+- Verify the only cache timer creation is the one-shot file-notify debounce.
+- Exercise initial pre-cache, publication, warm lookup, coalescing, generation change, supersession, interactive waiting, failure retention, disable cleanup, idle state, and benchmark records in Buttercup.
+
+* Results
+
+** Approach
+
+Replaced the former cache with a Phase 1-only in-memory lifecycle.  One queued rebuild maps to one short-lived child Emacs and one short-lived dump.  The child owns all expensive candidate preparation; the parent owns authoritative final validation and atomic publication.  File notifications only schedule a one-shot status check, and generation transitions replace stale work instead of patching it.
+
+** Changed files
+
+- ~lisp/org-files-db-cache.el~: complete Phase 1 cache rewrite, file-notify lifecycle, async worker/dump transport, cancellation/waiting, tracing, and benchmark report.
+- ~lisp/org-files-db-core.el~: centralized existing user options and added Phase 1 cache options.
+- ~lisp/org-files-db-actions.el~: removed local user options moved to core.
+- ~lisp/org-files-db-search.el~: removed local user option moved to core.
+- ~lisp/org-files-db-views.el~: removed local user option and obsolete Phase 2 cache adapters; updated refresh semantics.
+- ~tests/org-files-db-test.el~: replaced old cache tests with Phase 1 lifecycle coverage.
+- ~benchmarks/org-files-db-benchmark.el~: replaced delta-oriented synthetic cache benchmark with Phase 1 preparation/dump/warm measurements.
+- ~README.org~: documented Phase 1 lifecycle, options, waiting, tracing, and idle behaviour.
+- ~CHANGELOG.org~: documented the cache rewrite and deferred Phase 2.
+- ~.project/tasks/todo.org~ and this task file: recorded Phase 1 build/review state while leaving the overall two-phase task TODO because Phase 2 is intentionally untouched.
+
+** Checks performed
+
+- Ran a static balanced-delimiter scan across all repository ~*.el~ files.
+- Searched all ~lisp/*.el~ files to confirm every ~defcustom~ is in ~org-files-db-core.el~.
+- Searched the new cache for polling, ~changes~, restricted-file, and incremental patch implementation.
+- Confirmed the only timer creation in the cache is the file-notify debounce ~run-at-time~.
+- Inspected the upstream ~async.el~ 1.9.9 child-start implementation and adjusted worker startup to reuse the cached async library path.
+- Attempted ~make ci~.
+
+** Test results
+
+- Static Emacs Lisp delimiter scan: passed for all 12 ~*.el~ files.
+- User-facing option placement check: passed; specialised modules contain no ~defcustom~ forms.
+- Phase 1 scope grep: passed; no polling or Phase 2 cache implementation remains.
+- ~make ci~ could not run in the delivery container because ~eask~ is not installed; the command stops at ~eask clean all~ with exit status 127.
+
+** Blockers
+
+The delivery environment has neither Eask nor Emacs installed.  Installing missing tooling was not possible because the container could not resolve the package repository host, so byte compilation, Checkdoc, package-lint, indent-lint, relint, and Buttercup could not be executed here.
+
+** Follow-ups
+
+- Run ~make ci~ in the normal project development environment before accepting Phase 1.
+- Exercise ~org-files-db-cache-benchmark-report~ and ~org-files-db-cache-file-notify-trace~ against the real database to collect initial, generation-refresh, supersession, warm-lookup, and interactive-wait timings.
+- Begin Phase 2 only after Phase 1 passes CI and its real lifecycle measurements are satisfactory.

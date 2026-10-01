@@ -1,0 +1,117 @@
+#+TITLE: Implement the New Query Command and Default Action Flow
+#+STARTUP: showall
+#+TEMPLATE_VERSION: 0.8.0
+#+TASK_STARTED: [2026-08-26 Wed 22:35]
+#+TASK_COMPLETED:
+
+* Original Task (User only)
+:PROPERTIES:
+:VISIBILITY: folded
+:END:
+
+Implement Step 5 of the ~org-files-db.el~ rebuild.
+
+* Planning
+
+** Problem summary
+
+The rebuilt client has data access and completion candidates. It does not yet have one public structural query workflow.
+
+** Goals
+
+- Add the public ~org-files-db-query~ command.
+- Keep ~org-files-db-query-results~ as the UI-free data interface.
+- Use the shared presentation and completion pipeline.
+- Select the default action from the query target.
+- Let one call override the action.
+- Pass the original Rust result to the action.
+- Provide the effective configuration through dynamic action context.
+- Return the selected original result to Lisp callers.
+- Let an interactive prefix select another named configuration.
+
+** Non-goals
+
+- Do not port result navigation in this step.
+- Do not port insert, rename, or link-target actions.
+- Do not add watcher or cached-view code.
+- Do not add Embark or Consult integration.
+- Do not add presentation logic to Emacs.
+
+** Architecture
+
+~org-files-db-query-results~ remains the only one-shot data path.
+
+~org-files-db-query~ resolves interaction choices around that data path. It then uses the common presentation reader.
+
+The action receives only the selected original result. A dynamic configuration value is active only during the action call.
+
+** Execution plan
+
+1. Add tests for default actions by query target.
+2. Add tests for per-call action and presentation overrides.
+3. Add a test for dynamic configuration context.
+4. Add interactive tests for default and prefix-selected configurations.
+5. Add the query reader and public query command.
+6. Add the shared action execution helper.
+7. Review the implementation against the Step 5 acceptance criteria.
+
+** Risks & assumptions
+
+The default open action remains a placeholder until Step 8 ports result navigation.
+
+Step 5 proves the query, completion, selection, and action flow with injected action functions.
+
+** Proposed checks
+
+- Run Buttercup tests.
+- Byte-compile the package.
+- Run package and source linters.
+- Check that ~org-files-db-query-results~ remains UI-free.
+- Check that no watcher, cache, Consult, or Embark code enters the query module.
+
+* Results
+
+** Approach
+
+~org-files-db-query~ now uses one query plus keyword arguments.
+
+Interactive use reads one structural query. It uses the default configuration unless a prefix requests configuration selection.
+
+The command calls ~org-files-db-query-results~, opens standard completion, and resolves the selected original result.
+
+The command selects the default action from ~headings~, ~files~, or ~links~ when ~:action~ is absent.
+
+~org-files-db-current-config~ exposes the effective configuration name only while the action runs.
+
+The public query command returns the selected original result after the action finishes.
+
+** Changed files
+
+- ~lisp/org-files-db-actions.el~
+- ~lisp/org-files-db-query.el~
+- ~tests/org-files-db-test.el~
+- ~.project/tasks/todo.org~
+- ~.project/tasks/2026-08-26--implement-new-query-command-and-default-action-flow.org~
+
+** Checks performed
+
+- Added Step 5 Buttercup tests before the implementation.
+- Checked the public query signature against the agreed design.
+- Checked that the command uses the shared Presentation JSON v2 path.
+- Checked that actions receive original results instead of candidates.
+- Checked that the action configuration context is dynamic and temporary.
+- Checked that no new presentation semantics exist in the query module.
+
+** Test results
+
+Run ~make fmt~ and ~make ci~ in the normal development environment.
+
+The current sandbox does not contain Emacs or Eask.
+
+** Blockers
+
+The default open action still reports that result navigation is unavailable. Step 8 ports the real navigation actions.
+
+** Follow-ups
+
+Step 6 adds watcher lifecycle management.
