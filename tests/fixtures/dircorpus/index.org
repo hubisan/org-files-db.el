@@ -1,0 +1,6 @@
+#+title: Index
+
+* Projekte
+[[file:projekte/alt/notiz.org][Notiz]] and [[file:projekte/alt/notiz.org::*Teil][Teil]].
+* Elsewhere
+[[file:archiv/old.org][Old]]

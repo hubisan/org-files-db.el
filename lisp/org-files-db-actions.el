@@ -252,29 +252,41 @@ DESCRIPTION is the link description or nil. FORMAT is the link format."
       ("plain" target)
       (_ (org-link-make-string target description)))))
 
+(defun org-files-db-actions--link-region (link)
+  "Return the (START . END) region of indexed LINK in the current buffer.
+Return nil when the buffer text there does not match the indexed link."
+  (let* ((location (alist-get 'location link))
+         (start (byte-to-position (1+ (alist-get 'byte_start location))))
+         (end (byte-to-position (1+ (alist-get 'byte_end location)))))
+    (when (and start end
+               (equal (buffer-substring-no-properties start end)
+                      (alist-get 'raw link)))
+      (cons start end))))
+
+(defun org-files-db-actions--link-replacement (link source new-file)
+  "Return the text of incoming LINK retargeted to NEW-FILE.
+SOURCE is the path of the file holding LINK. Keep the link format, its
+description and its search option."
+  (let ((search-option (alist-get 'search_option link))
+        (description (alist-get 'raw_description link))
+        (path (org-files-db-actions--rename-link-path
+               (alist-get 'link_path link) new-file source)))
+    (org-files-db-actions--rename-link-string
+     (concat path (when search-option (concat "::" search-option)))
+     (and (stringp description)
+          (not (string-empty-p description))
+          description)
+     (alist-get 'format link))))
+
 (defun org-files-db-actions--rewrite-link (link source new-file)
   "Rewrite incoming LINK in the current buffer for NEW-FILE and return non-nil.
 SOURCE is the current path of the file being edited. Return nil without
 changes when the buffer text does not match the indexed link."
-  (let* ((location (alist-get 'location link))
-         (start (byte-to-position (1+ (alist-get 'byte_start location))))
-         (end (byte-to-position (1+ (alist-get 'byte_end location))))
-         (search-option (alist-get 'search_option link))
-         (description (alist-get 'raw_description link)))
-    (when (and start end
-               (equal (buffer-substring-no-properties start end)
-                      (alist-get 'raw link)))
-      (let ((path (org-files-db-actions--rename-link-path
-                   (alist-get 'link_path link) new-file source)))
-        (goto-char start)
-        (delete-region start end)
-        (insert (org-files-db-actions--rename-link-string
-                 (concat path (when search-option (concat "::" search-option)))
-                 (and (stringp description)
-                      (not (string-empty-p description))
-                      description)
-                 (alist-get 'format link)))
-        t))))
+  (when-let* ((region (org-files-db-actions--link-region link)))
+    (goto-char (car region))
+    (delete-region (car region) (cdr region))
+    (insert (org-files-db-actions--link-replacement link source new-file))
+    t))
 
 (defun org-files-db-actions--rename-visiting-buffer (old-file new-file)
   "Make a buffer visiting OLD-FILE visit NEW-FILE, keeping its modified state."

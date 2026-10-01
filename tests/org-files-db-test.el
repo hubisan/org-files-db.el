@@ -2662,6 +2662,241 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                                       :to-throw 'user-error '("Result is not a file"))
                               (expect (file-exists-p target) :to-be t)))))))
 
+(defun org-files-db-test--directory-snapshot (directory)
+  "Return the sorted names and contents below DIRECTORY."
+  (sort (mapcar (lambda (file)
+                  (cons (file-relative-name file directory)
+                        (if (file-directory-p file)
+                            :directory
+                          (with-temp-buffer
+                            (insert-file-contents file)
+                            (buffer-string)))))
+                (seq-remove (lambda (file)
+                              (string-prefix-p ".#" (file-name-nondirectory file)))
+                            (directory-files-recursively directory "" t)))
+        (lambda (a b) (string< (car a) (car b)))))
+
+(defun org-files-db-test--absolute-link-json (json relative absolute)
+  "Return JSON with link 6 rewritten from RELATIVE to the ABSOLUTE target."
+  (let* ((data (json-parse-string json :null-object :null :false-object :false))
+         (links (gethash "results" data))
+         (raw (format "[[file:%s::*Teil][Teil]]" absolute)))
+    (seq-doseq (link links)
+      (when (equal (gethash "raw" link) (format "[[file:%s::*Teil][Teil]]" relative))
+        (let ((location (gethash "location" link)))
+          (puthash "raw" raw link)
+          (puthash "raw_target" (format "file:%s::*Teil" absolute) link)
+          (puthash "link_path" absolute link)
+          (puthash "byte_end" (+ (gethash "byte_start" location) (string-bytes raw))
+                   location))))
+    (json-serialize data)))
+
+(describe "renaming a directory"
+          (let (corpus old new json messages)
+            (before-each
+             (setq org-files-db-test--actions-directory
+                   (make-temp-file "org-files-db-dir-" t)
+                   corpus (expand-file-name "corpus" org-files-db-test--actions-directory)
+                   old (expand-file-name "projekte/alt" corpus)
+                   new (expand-file-name "projekte/neu" corpus)
+                   messages nil)
+             (copy-directory (expand-file-name "dircorpus"
+                                               org-files-db-test--fixture-directory)
+                             corpus)
+             (setq json (org-files-db-test--corpus-fixture
+                         "dir-incoming-links.json" corpus))
+             (spy-on 'message :and-call-fake
+                     (lambda (format &rest args)
+                       (push (apply #'format format args) messages)))
+             (spy-on 'yes-or-no-p :and-return-value t)
+             (spy-on 'display-buffer))
+
+            (after-each
+             (dolist (buffer (buffer-list))
+               (when-let* ((name (buffer-file-name buffer)))
+                 (when (string-prefix-p org-files-db-test--actions-directory name)
+                   (with-current-buffer buffer (set-buffer-modified-p nil))
+                   (kill-buffer buffer))))
+             (when (get-buffer "*org-files-db rename directory*")
+               (kill-buffer "*org-files-db rename directory*"))
+             (delete-directory org-files-db-test--actions-directory t))
+
+            (cl-flet* ((file (name) (expand-file-name name corpus))
+                       (text (name)
+                         (with-temp-buffer
+                           (insert-file-contents (file name))
+                           (buffer-string)))
+                       (serve (&optional (query-json json) query-stderr)
+                         (spy-on 'org-files-db-process--run-process :and-call-fake
+                                 (lambda (arguments &optional _input)
+                                   (if (member "status" arguments)
+                                       (list :status 0
+                                             :stdout (org-files-db-test--corpus-fixture
+                                                      "dir-status.json" corpus))
+                                     (expect (cadr (member "--expect-generation" arguments))
+                                             :to-equal "1")
+                                     (expect (car (last arguments))
+                                             :to-equal
+                                             (format "(links (target (files (file-path \"^%s/\" :regexp t))))"
+                                                     (regexp-quote old)))
+                                     (if query-stderr
+                                         (list :status 1 :stdout "" :stderr query-stderr)
+                                       (list :status 0 :stdout query-json))))))
+                       (rename (&optional (destination new) (source old))
+                         (let ((org-files-db-configs (org-files-db-test--actions-configs))
+                               (org-files-db-default-config "main"))
+                           (org-files-db-rename-directory source destination)))
+                       (snapshot ()
+                         (org-files-db-test--directory-snapshot corpus))
+                       (absolute-variant ()
+                         ;; notiz2.org links notiz.org by absolute path.
+                         (let ((relative "notiz.org")
+                               (absolute (file "projekte/alt/notiz.org")))
+                           (with-temp-file (file "projekte/alt/notiz2.org")
+                             (insert (string-replace
+                                      (format "[[file:%s::*Teil]" relative)
+                                      (format "[[file:%s::*Teil]" absolute)
+                                      (text "projekte/alt/notiz2.org"))))
+                           (setq json (org-files-db-test--absolute-link-json
+                                       json relative absolute))
+                           (serve))))
+
+              (before-each (serve))
+
+              (it "builds an escaped regexp query for the directory"
+                  (expect (org-files-db-directory--incoming-query "/x/a.b")
+                          :to-equal
+                          "(links (target (files (file-path \"^/x/a\\\\.b/\" :regexp t))))"))
+
+              (it "renames the directory and updates the incoming links"
+                  (let ((inside (text "projekte/alt/notiz.org")))
+                    (expect (rename) :to-be nil)
+                    (expect (file-directory-p old) :to-be nil)
+                    (expect (file-exists-p (file "projekte/neu/notiz.org")) :to-be t)
+                    (expect (text "index.org") :to-match
+                            (regexp-quote "[[file:projekte/neu/notiz.org][Notiz]]"))
+                    (expect (text "index.org") :to-match
+                            (regexp-quote "[[file:projekte/neu/notiz.org::*Teil][Teil]]"))
+                    (expect (text "index.org") :to-match
+                            (regexp-quote "[[file:archiv/old.org][Old]]"))
+                    (expect (text "projekte/neu/notiz.org") :to-equal inside)
+                    (expect messages :to-equal '("Directory renamed, 2 links updated"))
+                    (expect 'yes-or-no-p :to-have-been-called-with
+                            "Rename directory and update 2 links in 1 files? ")))
+
+              (it "shows the plan before changing anything"
+                  (rename)
+                  (with-current-buffer "*org-files-db rename directory*"
+                    (expect (derived-mode-p 'special-mode) :to-be-truthy)
+                    (expect (buffer-string) :to-match "\\`Rename .*alt → .*neu\n")
+                    (expect (buffer-string) :to-match
+                            (concat "index\\.org:4  "
+                                    (regexp-quote "[[file:projekte/alt/notiz.org][Notiz]] → ")
+                                    (regexp-quote "[[file:projekte/neu/notiz.org][Notiz]]")))
+                    (expect (buffer-string) :not :to-match "Skipped:")))
+
+              (it "retargets a visiting buffer without marking it modified"
+                  (let ((buffer (find-file-noselect (file "projekte/alt/notiz.org"))))
+                    (rename)
+                    (expect (buffer-file-name buffer)
+                            :to-equal (file "projekte/neu/notiz.org"))
+                    (expect (buffer-modified-p buffer) :to-be nil)))
+
+              (it "rewrites an absolute link from inside to inside"
+                  (absolute-variant)
+                  (rename)
+                  (expect (text "projekte/neu/notiz2.org") :to-match
+                          (regexp-quote (format "[[file:%s::*Teil][Teil]]"
+                                                (file "projekte/neu/notiz.org"))))
+                  (expect messages :to-equal '("Directory renamed, 3 links updated")))
+
+              (it "skips links whose text no longer matches the index"
+                  (with-temp-file (file "index.org")
+                    (insert (string-replace "[Notiz]" "[NOTIZ]" (text "index.org"))))
+                  (rename)
+                  (expect (text "index.org") :to-match
+                          (regexp-quote "[[file:projekte/alt/notiz.org][NOTIZ]]"))
+                  (expect (text "index.org") :to-match
+                          (regexp-quote "[[file:projekte/neu/notiz.org::*Teil]"))
+                  (expect messages :to-equal
+                          '("Directory renamed, 1 links updated, 1 skipped"))
+                  (with-current-buffer "*org-files-db rename directory*"
+                    (expect (buffer-string) :to-match "Skipped:\n.*index\\.org:4")))
+
+              (it "refuses a source that is not a directory"
+                  (expect (rename new (file "index.org")) :to-throw 'user-error))
+
+              (it "refuses an existing destination and changes nothing"
+                  (make-directory new)
+                  (let ((before (snapshot)))
+                    (expect (rename) :to-throw 'user-error)
+                    (expect (snapshot) :to-equal before)))
+
+              (it "refuses a destination in another directory"
+                  (let ((before (snapshot)))
+                    (expect (rename (file "archiv/alt")) :to-throw 'user-error
+                            '("Moving to another directory is not supported yet"))
+                    (expect (snapshot) :to-equal before)))
+
+              (it "refuses a destination inside the source"
+                  (expect (rename (expand-file-name "sub" old)) :to-throw 'user-error))
+
+              (dolist (name '("index.org" "projekte/alt/notiz.org"))
+                (it (format "refuses a modified buffer of %s" name)
+                    (let ((before (snapshot)))
+                      (with-current-buffer (find-file-noselect (file name))
+                        (goto-char (point-max))
+                        (insert "x"))
+                      (expect (rename) :to-throw 'user-error)
+                      (expect (snapshot) :to-equal before))))
+
+              (it "changes nothing when the index is stale"
+                  (serve json (org-files-db-test--fixture-text "error-stale-index.stderr"))
+                  (let ((before (snapshot)))
+                    (expect (rename) :to-throw 'user-error
+                            '("Index changed, run the query again"))
+                    (expect (snapshot) :to-equal before)))
+
+              (it "changes nothing when the confirmation is declined"
+                  (spy-on 'yes-or-no-p :and-return-value nil)
+                  (let ((before (snapshot)))
+                    (expect (rename) :to-be nil)
+                    (expect (snapshot) :to-equal before)
+                    (expect messages :to-equal '("Directory not renamed"))
+                    (expect (get-buffer "*org-files-db rename directory*") :to-be-truthy)))
+
+              (describe "when a step fails"
+                        (dolist (step '(("editing a file outside" write-region "index.org")
+                                        ("editing a file inside" write-region "projekte/alt/notiz2.org")
+                                        ("renaming the directory" rename-file nil)
+                                        ("retargeting a buffer" set-visited-file-name nil)))
+                          (it (format "restores the original state when %s fails" (car step))
+                              (absolute-variant)
+                              (let* ((function (nth 1 step))
+                                     (target (and (nth 2 step) (file (nth 2 step))))
+                                     (failed nil)
+                                     (original (symbol-function function))
+                                     (buffer (find-file-noselect (file "projekte/alt/notiz.org")))
+                                     (before (snapshot)))
+                                (cl-letf (((symbol-function function)
+                                           (lambda (&rest args)
+                                             (if (and (not failed)
+                                                      (or (null target)
+                                                          (equal (expand-file-name (nth 2 args))
+                                                                 target)))
+                                                 (progn (setq failed t)
+                                                        (error "Injected failure"))
+                                               (apply original args)))))
+                                  (expect (condition-case err (rename)
+                                            (user-error (cadr err)))
+                                          :to-match
+                                          (concat "\\`Directory rename failed: Injected failure; "
+                                                  "restored: .*; not restored: nothing\\'")))
+                                (expect failed :to-be t)
+                                (expect (snapshot) :to-equal before)
+                                (expect (buffer-file-name buffer)
+                                        :to-equal (file "projekte/alt/notiz.org")))))))))
+
 (describe "Embark integration"
           (let ((cases
                  '((org-files-db-embark-open-result org-files-db-actions-open-result "o")

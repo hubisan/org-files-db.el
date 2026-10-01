@@ -1,0 +1,4 @@
+#+title: Notiz
+
+* Teil
+Back to [[file:../../index.org][index]] and [[file:notiz2.org][notiz2]].

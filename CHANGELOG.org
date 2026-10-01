@@ -2,6 +2,8 @@
 
 * Unreleased
 
+- =ADDED= Added ~org-files-db-rename-directory~ to rename a directory in place and update incoming file links.
+  - Guarded by the index state, shown as a plan in ~*org-files-db rename directory*~ and confirmed before anything changes; failures restore the previous state. Moving to another directory is not supported yet.
 - =ADDED= Added result buffers for queries and views.
   - ~org-files-db-show-view~ and ~org-files-db-show-query~ list every row in a read-only ~org-files-db-export-mode~ buffer (~RET~ action, ~o~ outline, ~g~ refresh); a view with ~:display buffer~ is shown this way by ~org-files-db-view~.
   - The buffer code moved from ~org-files-db-embark.el~ to ~org-files-db-results.el~ and no longer depends on Embark.

@@ -121,14 +121,19 @@ action record."
   "Query target names for reloading records by kind.")
 
 (cl-defun org-files-db-query--guarded-json
-    (query-string presentation &key includes config output)
+    (query-string presentation &key includes config output database-id generation)
   "Run QUERY-STRING guarded by the index state of PRESENTATION.
 Return the parsed JSON `results' vector. INCLUDES is a list of include
 names. OUTPUT is an optional output shape name such as \"outline\".
-CONFIG defaults to the configuration of PRESENTATION. Signal
-`org-files-db-stale-index' when the index changed since PRESENTATION."
+CONFIG defaults to the configuration of PRESENTATION. DATABASE-ID and
+GENERATION give the index state directly and may replace PRESENTATION, which
+is then nil. Signal `org-files-db-stale-index' when the index changed."
   (let* ((config-name (org-files-db-process--config-name
                        (or config (org-files-db-presentation-config presentation))))
+         (database-id (or database-id
+                          (org-files-db-presentation-database-id presentation)))
+         (generation (or generation
+                         (org-files-db-presentation-generation presentation)))
          (arguments
           (append
            (list "query" "--format" "json")
@@ -136,9 +141,9 @@ CONFIG defaults to the configuration of PRESENTATION. Signal
            (apply #'append
                   (mapcar (lambda (include) (list "--include" include)) includes))
            (list "--expect-database-id"
-                 (format "%s" (org-files-db-presentation-database-id presentation))
+                 (format "%s" database-id)
                  "--expect-generation"
-                 (format "%s" (org-files-db-presentation-generation presentation)))
+                 (format "%s" generation))
            (org-files-db-process--config-arguments config-name)
            (list query-string))))
     (alist-get 'results (org-files-db-process--call-json arguments))))
