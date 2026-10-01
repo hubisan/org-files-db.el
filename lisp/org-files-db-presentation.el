@@ -19,7 +19,7 @@
 
 ;;; Commentary:
 
-;; PresentationSpec serialization, presentation-json version 2 decoding, and
+;; PresentationSpec serialization, presentation-json version 3 decoding, and
 ;; lightweight completion data.  Rust owns presentation semantics and layout
 ;; work.
 
@@ -30,7 +30,7 @@
 (require 'subr-x)
 (require 'org-files-db-core)
 
-(defconst org-files-db-presentation--version 2
+(defconst org-files-db-presentation--version 3
   "Presentation JSON version supported by this package.")
 
 (defconst org-files-db-presentation--candidate-identity-base #x1900
@@ -43,9 +43,40 @@
   database-id
   generation
   config
+  files
   results
   schemas
   rows)
+
+(cl-defstruct (org-files-db-record
+               (:constructor org-files-db-presentation--make-record))
+  "One decoded version 3 action record.
+KIND is one of the symbols `root', `heading', `file' and `link'.  ID is
+the heading, file or link id.  FILE is the absolute path of the source
+file.  LINE and BYTE-START locate the result in FILE; BYTE-START is nil
+for `root' and `file' records.  The TARGET-* slots are only set for a
+`link' record with a resolved target; TARGET-BYTE-START is nil for a
+file target."
+  kind
+  id
+  file
+  line
+  byte-start
+  target-file
+  target-line
+  target-byte-start)
+
+(defun org-files-db-record-target-resolved-p (record)
+  "Return non-nil when link RECORD has a resolved target."
+  (and (org-files-db-record-target-file record) t))
+
+(defconst org-files-db-presentation--record-kinds
+  '(("root" . ("kind" "id" "file" "line" "byte_start"))
+    ("heading" . ("kind" "id" "file" "line" "byte_start"))
+    ("file" . ("kind" "id" "file" "line" "byte_start"))
+    ("link" . ("kind" "id" "file" "line" "byte_start"
+               "target_file" "target_line" "target_byte_start")))
+  "Supported action record kinds with their required positional fields.")
 
 (cl-defstruct (org-files-db-presentation-row
                (:constructor org-files-db-presentation--make-presentation-row))
@@ -259,7 +290,7 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
   (let ((entry (assq key object)))
     (unless entry
       (org-files-db-presentation--error
-       "Presentation JSON version 2 is missing %s" key))
+       "Presentation JSON version 3 is missing %s" key))
     (cdr entry)))
 
 (defun org-files-db-presentation--field-index (fields name section)
@@ -452,8 +483,119 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
          (org-files-db-presentation--decode-cell cell schema))
        cells)))))
 
+(defun org-files-db-presentation--decode-files (files)
+  "Return FILES as a validated vector of path strings."
+  (unless (vectorp files)
+    (org-files-db-presentation--error
+     "Presentation JSON files are not an array"))
+  (cl-loop for path across files
+           unless (and (stringp path) (not (string-empty-p path)))
+           do (org-files-db-presentation--error
+               "Invalid presentation files entry: %S" path))
+  files)
+
+(defun org-files-db-presentation--compile-result-kinds (schemas)
+  "Return validated result kinds from SCHEMAS.
+The result is a vector of (KIND . FIELDS) conses ordered like
+`schemas.result_kinds', where FIELDS is the emitted shape vector."
+  (let ((kinds (org-files-db-presentation--required schemas 'result_kinds))
+        (shapes (org-files-db-presentation--required schemas 'result_shapes))
+        (encoding
+         (org-files-db-presentation--required schemas 'result_file_encoding)))
+    (unless (equal encoding "index-into-files")
+      (org-files-db-presentation--error
+       "Unsupported presentation result file encoding: %S" encoding))
+    (unless (vectorp kinds)
+      (org-files-db-presentation--error
+       "Presentation JSON result_kinds are not an array"))
+    (unless (listp shapes)
+      (org-files-db-presentation--error
+       "Presentation JSON result_shapes are not an object"))
+    (vconcat
+     (mapcar
+      (lambda (kind)
+        (let* ((supported
+                (and (stringp kind)
+                     (assoc kind org-files-db-presentation--record-kinds)))
+               (fields (and supported (cdr (assq (intern kind) shapes)))))
+          (unless supported
+            (org-files-db-presentation--error
+             "Unsupported presentation result kind: %S" kind))
+          (unless (and (vectorp fields)
+                       (equal (append fields nil) (cdr supported)))
+            (org-files-db-presentation--error
+             "Invalid presentation result shape for %s: %S" kind fields))
+          (cons kind fields)))
+      kinds))))
+
+(defun org-files-db-presentation--record-integer (value description &optional nullable)
+  "Return VALUE when it is a non-negative integer for DESCRIPTION.
+When NULLABLE is non-nil, nil is also accepted."
+  (unless (or (and nullable (null value))
+              (and (integerp value) (>= value 0)))
+    (org-files-db-presentation--error
+     "Invalid presentation record %s: %S" description value))
+  value)
+
+(defun org-files-db-presentation--record-file (index files &optional nullable)
+  "Return the path for file INDEX in FILES.
+When NULLABLE is non-nil, a nil INDEX returns nil."
+  (if (and nullable (null index))
+      nil
+    (org-files-db-presentation--record-integer index "file index")
+    (unless (< index (length files))
+      (org-files-db-presentation--error
+       "Presentation record file index %d is out of range" index))
+    (aref files index)))
+
+(defun org-files-db-presentation--decode-record (encoded kinds files)
+  "Decode action record ENCODED with result KINDS and FILES."
+  (unless (and (vectorp encoded) (> (length encoded) 0))
+    (org-files-db-presentation--error
+     "Invalid presentation action record: %S" encoded))
+  (let ((kind-index (aref encoded 0)))
+    (unless (and (integerp kind-index)
+                 (>= kind-index 0)
+                 (< kind-index (length kinds)))
+      (org-files-db-presentation--error
+       "Invalid presentation record kind index: %S" kind-index))
+    (let* ((entry (aref kinds kind-index))
+           (kind (car entry)))
+      (unless (= (length encoded) (length (cdr entry)))
+        (org-files-db-presentation--error
+         "Invalid presentation %s record length: %d" kind (length encoded)))
+      (let ((id (aref encoded 1))
+            (line (aref encoded 3))
+            (byte-start (aref encoded 4)))
+        (org-files-db-presentation--record-integer id "id")
+        (org-files-db-presentation--record-integer line "line" t)
+        (org-files-db-presentation--record-integer byte-start "byte_start" t)
+        (let ((record
+               (org-files-db-presentation--make-record
+                :kind (intern kind)
+                :id id
+                :file (org-files-db-presentation--record-file
+                       (aref encoded 2) files)
+                :line line
+                :byte-start byte-start)))
+          (when (equal kind "link")
+            (let ((target-file (aref encoded 5))
+                  (target-line (aref encoded 6))
+                  (target-byte-start (aref encoded 7)))
+              (org-files-db-presentation--record-integer
+               target-line "target_line" t)
+              (org-files-db-presentation--record-integer
+               target-byte-start "target_byte_start" t)
+              (setf (org-files-db-record-target-file record)
+                    (org-files-db-presentation--record-file
+                     target-file files t)
+                    (org-files-db-record-target-line record) target-line
+                    (org-files-db-record-target-byte-start record)
+                    target-byte-start)))
+          record)))))
+
 (defun org-files-db-presentation--decode (wire)
-  "Decode one presentation-json version 2 WIRE alist."
+  "Decode one presentation-json version 3 WIRE alist."
   (unless (listp wire)
     (org-files-db-presentation--error
      "Invalid presentation-json response"))
@@ -466,6 +608,8 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
           (org-files-db-presentation--required wire 'database_id))
          (generation
           (org-files-db-presentation--required wire 'generation))
+         (files
+          (org-files-db-presentation--required wire 'files))
          (results
           (org-files-db-presentation--required wire 'results))
          (schemas
@@ -488,6 +632,14 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
       (org-files-db-presentation--error
        "Presentation JSON rows are not an array"))
     (let* ((schema (org-files-db-presentation--compile-wire-schema schemas))
+           (files (org-files-db-presentation--decode-files files))
+           (kinds (org-files-db-presentation--compile-result-kinds schemas))
+           (results
+            (vconcat
+             (mapcar
+              (lambda (record)
+                (org-files-db-presentation--decode-record record kinds files))
+              results)))
            (rows
             (vconcat
              (mapcar
@@ -498,6 +650,7 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
        :version org-files-db-presentation--version
        :database-id database-id
        :generation generation
+       :files files
        :results results
        :schemas schemas
        :rows rows))))
@@ -640,7 +793,7 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
   (funcall table "" nil 'org-files-db-presentation--candidates))
 
 (defun org-files-db-presentation--candidate-result (selected presentation)
-  "Return the original result for SELECTED from PRESENTATION."
+  "Return the action record for SELECTED from PRESENTATION."
   (or (and (stringp selected)
            (> (length selected) 0)
            (get-text-property 0 'org-files-db-result selected))
@@ -651,7 +804,7 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
              presentation (aref rows index)))))))
 
 (defun org-files-db-presentation--read (presentation &optional prompt)
-  "Read one result from PRESENTATION with standard completion and PROMPT."
+  "Read one action record from PRESENTATION with standard completion and PROMPT."
   (let ((candidates (org-files-db-presentation--candidates presentation)))
     (unless candidates
       (user-error "The query returned no results"))
@@ -664,7 +817,7 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
           (user-error "Selected result is no longer available")))))
 
 (defun org-files-db-presentation--row-result (presentation row)
-  "Return the original result for ROW in PRESENTATION."
+  "Return the action record for ROW in PRESENTATION."
   (let* ((results (org-files-db-presentation-results presentation))
          (index (org-files-db-presentation-row-result-index row)))
     (unless (and (vectorp results)

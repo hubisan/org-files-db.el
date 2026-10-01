@@ -96,7 +96,7 @@ Heading and search results use the ~outline-path~ column.  Link results use two 
 
 ~:separator~ controls the text between components.  ~:include-root~ includes the corresponding source or target file title.  ~:include-match nil~ omits the final source heading or resolved target heading.  For a target that resolves directly to a file, ~target-outline-path~ is empty unless ~:include-root t~ is used.
 
-The package infers required CLI includes from the configured columns.  ~source-outline-path~ requests source path context and ~target-outline-path~ requests structured target context; both are retrieved in the same flat query invocation.  Users do not need to add ~--include~ or switch to outline output.  For compatibility, ~outline-path~ on link results currently behaves like ~source-outline-path~, but new configurations should use the explicit link column name.
+Rust infers the data needed for the configured columns.  ~source-outline-path~ requests source path context and ~target-outline-path~ requests structured target context; both are retrieved in the same flat query invocation.  Users do not need to add ~--include~ or switch to outline output; the package passes no ~--include~ to presentation queries.  For compatibility, ~outline-path~ on link results currently behaves like ~source-outline-path~, but new configurations should use the explicit link column name.
 
 Truncation is available for every displayed column.  Customize the defaults with ~org-files-db-truncate-position~ and ~org-files-db-truncate-marker~, or override them per column with ~:truncate (:position left|middle|right :marker STRING)~.  The marker counts toward the final column width, and an empty marker performs hard truncation.  Truncation is visual only: standard Emacs completion and Consult continue to search the complete untruncated column value, including text that is not currently visible.
 
@@ -136,7 +136,7 @@ Supported heading sort columns include ~title~, ~todo-keyword~, ~todo-type~, ~pr
 
 ** Large result sets
 
-Query and search presentation is eager and synchronous.  The package normalizes column definitions once, extracts each displayed value once per row, calculates shared widths from cached cell widths, sanitizes each distinct face once, and formats every completion candidate once.  Completion filtering and redisplay operate only on the prepared candidate strings; selected actions and Embark still receive the original result object.
+Query and search presentation is eager and synchronous.  The package normalizes column definitions once, extracts each displayed value once per row, calculates shared widths from cached cell widths, sanitizes each distinct face once, and formats every completion candidate once.  Completion filtering and redisplay operate only on the prepared candidate strings; selected actions and Embark receive the selected presentation-json version 3 action record (kind, id, file path, line, byte offset, and for links the resolved target position).
 
 Duplicate visible candidates retain separate invisible identities and direct result metadata.  Prepared CLI order is preserved, selection does not scan the complete candidate list, and visually shortened values remain complete in the underlying completion candidate.  Truncated column regions use presentation-only ~display~ properties instead of appended hidden search copies.
 

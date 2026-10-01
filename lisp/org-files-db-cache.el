@@ -74,12 +74,6 @@
    (org-files-db-views--resolved-sort resolved)
    (org-files-db-views--resolved-row-source resolved)))
 
-(defun org-files-db-cache--include-arguments (resolved)
-  "Return explicit orgfdb include arguments for RESOLVED."
-  (let ((includes (org-files-db-views--resolved-action-includes resolved)))
-    (when includes
-      (list "--include" (string-join includes ",")))))
-
 (defun org-files-db-cache--register-entry (entry)
   "Register the Rust view represented by cache ENTRY."
   (let* ((resolved (org-files-db-cache--entry-resolved entry))
@@ -88,7 +82,6 @@
            (list "view" "register"
                  "--config" (org-files-db-views--resolved-config-file resolved)
                  "--output" "flat")
-           (org-files-db-cache--include-arguments resolved)
            (list "--presentation-spec-json"
                  (org-files-db-cache--presentation-spec-json resolved)
                  (org-files-db-cache--entry-rust-name entry)
@@ -217,8 +210,7 @@ When QUIET is non-nil, report cleanup failures as warnings."
    (org-files-db-views--resolved-sort resolved)
    (org-files-db-views--resolved-row-source resolved)
    (org-files-db-views--resolved-cache resolved)
-   (org-files-db-views--resolved-action resolved)
-   (org-files-db-views--resolved-action-includes resolved)))
+   (org-files-db-views--resolved-action resolved)))
 
 (defun org-files-db-cache--raw-view-by-name (name)
   "Return the only current raw view named NAME, or nil."
