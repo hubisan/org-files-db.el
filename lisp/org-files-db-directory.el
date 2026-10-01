@@ -19,7 +19,8 @@
 
 ;;; Commentary:
 
-;; Rename a directory in place and update the indexed incoming file links.
+;; Rename or move a directory and update the indexed file links: incoming
+;; links to files inside it and outgoing relative links from files inside it.
 ;; The change is planned from guarded orgfdb queries, shown for confirmation
 ;; and rolled back when a step fails.
 
@@ -33,7 +34,7 @@
 (require 'org-files-db-query)
 
 (defconst org-files-db-directory--plan-buffer "*org-files-db rename directory*"
-  "Name of the buffer showing the planned directory rename.")
+  "Name of the buffer showing the planned directory rename or move.")
 
 (defun org-files-db-directory--inside-p (file directory)
   "Return non-nil when FILE is inside DIRECTORY, which has no trailing slash."
@@ -49,28 +50,48 @@
           (org-files-db-directory--quote
            (concat "^" (regexp-quote (file-name-as-directory old))))))
 
-(defun org-files-db-directory--incoming-links (old config)
-  "Return the indexed file links that must change for renaming OLD.
-CONFIG is the configuration name. Keep links from files outside OLD and links
-inside OLD with an absolute path. Signal a user error when the index changed
-between the status check and the query."
+(defun org-files-db-directory--outgoing-query (old)
+  "Return the query for links from files inside directory OLD."
+  (format "(links (source (files (file-path \"%s\" :regexp t))))"
+          (org-files-db-directory--quote
+           (concat "^" (regexp-quote (file-name-as-directory old))))))
+
+(defun org-files-db-directory--affected-links (old config)
+  "Return the indexed file links that must change for moving OLD.
+CONFIG is the configuration name. Keep incoming links from files outside OLD
+and from files inside OLD with an absolute path, and outgoing relative links
+to targets outside OLD. Signal a user error when the index changed between the
+status check and a query."
   (condition-case nil
       (let* ((status (org-files-db-process--call-json
                       (append '("status" "--format" "json")
                               (org-files-db-process--config-arguments config))))
-             (links (org-files-db-query--guarded-json
-                     (org-files-db-directory--incoming-query old) nil
-                     :config config
-                     :database-id (alist-get 'database_id status)
-                     :generation (alist-get 'generation status))))
-        (seq-filter
-         (lambda (link)
-           (and (equal (alist-get 'link_type link) "file")
-                (alist-get 'path_absolute link)
-                (or (not (org-files-db-directory--inside-p
-                          (org-files-db-directory--link-file link) old))
-                    (file-name-absolute-p (alist-get 'link_path link)))))
-         links))
+             (query (lambda (string)
+                      (org-files-db-query--guarded-json
+                       string nil
+                       :config config
+                       :database-id (alist-get 'database_id status)
+                       :generation (alist-get 'generation status))))
+             (incoming (funcall query (org-files-db-directory--incoming-query old)))
+             (outgoing (funcall query (org-files-db-directory--outgoing-query old))))
+        (append
+         (seq-filter
+          (lambda (link)
+            (and (equal (alist-get 'link_type link) "file")
+                 (alist-get 'path_absolute link)
+                 (or (not (org-files-db-directory--inside-p
+                           (org-files-db-directory--link-file link) old))
+                     (file-name-absolute-p (alist-get 'link_path link)))))
+          incoming)
+         (seq-filter
+          (lambda (link)
+            (and (equal (alist-get 'link_type link) "file")
+                 (alist-get 'path_absolute link)
+                 (not (file-name-absolute-p (alist-get 'link_path link)))
+                 (not (string-prefix-p "~" (alist-get 'link_path link)))
+                 (not (org-files-db-directory--inside-p
+                       (alist-get 'path_absolute link) old))))
+          outgoing)))
     (org-files-db-stale-index
      (user-error "Index changed, run the query again"))))
 
@@ -78,9 +99,17 @@ between the status check and the query."
   "Return PATH, inside directory OLD, with the prefix OLD replaced by NEW."
   (concat new (substring path (length old))))
 
-(defun org-files-db-directory--new-file (link old new)
-  "Return the path in NEW for the file targeted by LINK inside OLD."
-  (org-files-db-directory--moved (alist-get 'path_absolute link) old new))
+(defun org-files-db-directory--replacement (link old new)
+  "Return the new text of LINK when directory OLD becomes NEW.
+An incoming link follows its moved target. An outgoing link keeps its target
+and is made relative to the moved source file."
+  (let ((file (alist-get 'file_path (alist-get 'location link)))
+        (target (alist-get 'path_absolute link)))
+    (if (org-files-db-directory--inside-p target old)
+        (org-files-db-actions--link-replacement
+         link file (org-files-db-directory--moved target old new))
+      (org-files-db-actions--link-replacement
+       link (org-files-db-directory--moved file old new) target))))
 
 (defun org-files-db-directory--link-start (link)
   "Return the byte start of LINK."
@@ -103,7 +132,8 @@ between the status check and the query."
 
 (defun org-files-db-directory--plan (links old new)
   "Return the rename plan for LINKS when renaming OLD to NEW.
-The plan is an alist. `changes' and `skipped' are lists of entries
+Links whose text stays the same are left out. The plan is an alist.
+`changes' and `skipped' are lists of entries
 \(FILE LINK TEXT) in file and position order, TEXT being the new link text
 and nil when skipped. `files' maps each file to change to its links, last
 position first. Links whose text differs from the index are skipped."
@@ -123,15 +153,13 @@ position first. Links whose text differs from the index are skipped."
         (with-temp-buffer
           (when content (insert content))
           (dolist (link sorted)
-            (if-let* ((text (and content
-                                 (org-files-db-actions--link-region link)
-                                 (org-files-db-actions--link-replacement
-                                  link file
-                                  (org-files-db-directory--new-file
-                                   link old new)))))
-                (progn (push (list file link text) changes)
-                       (push link applied))
-              (push (list file link nil) skipped))))
+            (let ((text (org-files-db-directory--replacement link old new)))
+              (cond
+               ((equal text (alist-get 'raw link)))
+               ((and content (org-files-db-actions--link-region link))
+                (push (list file link text) changes)
+                (push link applied))
+               (t (push (list file link nil) skipped))))))
         (when applied
           (push (cons file applied) files))))
     `((changes . ,(nreverse changes))
@@ -153,12 +181,19 @@ position first. Links whose text differs from the index are skipped."
   (format "%s:%s" (abbreviate-file-name (car entry))
           (alist-get 'line (alist-get 'location (nth 1 entry)))))
 
+(defun org-files-db-directory--moving-p (old new)
+  "Return non-nil when renaming OLD to NEW changes the parent directory."
+  (not (equal (file-name-directory old) (file-name-directory new))))
+
 (defun org-files-db-directory--show-plan (old new plan)
-  "Display the rename PLAN of directory OLD to NEW."
+  "Display the PLAN to rename or move directory OLD to NEW."
   (with-current-buffer (get-buffer-create org-files-db-directory--plan-buffer)
     (let ((inhibit-read-only t))
       (erase-buffer)
-      (insert (format "Rename %s → %s\n\n" (abbreviate-file-name old)
+      (insert (format "%s %s → %s\n\n"
+                      (if (org-files-db-directory--moving-p old new)
+                          "Move" "Rename")
+                      (abbreviate-file-name old)
                       (abbreviate-file-name new)))
       (dolist (entry (alist-get 'changes plan))
         (insert (format "%s  %s → %s\n" (org-files-db-directory--line entry)
@@ -186,7 +221,7 @@ position first. Links whose text differs from the index are skipped."
 
 (defun org-files-db-directory--edit-file (file links old new)
   "Rewrite LINKS in FILE, which are sorted by descending position, and save it.
-OLD and NEW are the renamed directory before and after."
+OLD and NEW are the moved directory before and after."
   (let ((buffer (find-buffer-visiting file)))
     (with-current-buffer (or buffer (generate-new-buffer " *org-files-db edit*"))
       (unwind-protect
@@ -196,8 +231,11 @@ OLD and NEW are the renamed directory before and after."
               (save-restriction
                 (widen)
                 (dolist (link links)
-                  (org-files-db-actions--rewrite-link
-                   link file (org-files-db-directory--new-file link old new)))))
+                  (when-let* ((region (org-files-db-actions--link-region link)))
+                    (goto-char (car region))
+                    (delete-region (car region) (cdr region))
+                    (insert (org-files-db-directory--replacement
+                             link old new))))))
             (if buffer
                 (save-buffer)
               (write-region nil nil file nil 'silent)))
@@ -276,35 +314,40 @@ Restore the previous state and signal a user error when a step fails."
 
 ;;;###autoload
 (defun org-files-db-rename-directory (directory new-name &optional config)
-  "Rename DIRECTORY to NEW-NAME and update incoming file links.
-NEW-NAME must have the same parent as DIRECTORY. Use the indexed incoming
-links of the configuration CONFIG, the default one when nil. Show the planned
-changes and ask for confirmation before anything changes. When a step fails,
-restore the previous state. Return nil.
+  "Rename or move DIRECTORY to NEW-NAME and update file links.
+NEW-NAME is a path, relative to the parent of DIRECTORY when not absolute. Its
+parent directory must exist. Update the indexed incoming links to files inside
+DIRECTORY and the outgoing relative links of files inside it that point
+outside, using the configuration CONFIG, the default one when nil. Show the
+planned changes and ask for confirmation before anything changes. When a step
+fails, restore the previous state. Return nil.
 
 With an interactive prefix argument, select the configuration."
   (interactive
-   (let* ((directory (read-directory-name "Rename directory: " nil nil t))
+   (let* ((directory (read-directory-name "Rename or move directory: "
+                                          nil nil t))
           (parent (file-name-directory (directory-file-name
                                         (expand-file-name directory)))))
      (list directory
-           (read-directory-name "Rename to: " parent nil nil
+           (read-directory-name "Rename or move to: " parent nil nil
                                 (file-name-nondirectory
                                  (directory-file-name directory)))
            (org-files-db-process--interactive-config-name current-prefix-arg))))
   (let* ((old (directory-file-name (expand-file-name directory)))
          (new (directory-file-name
                (expand-file-name new-name (file-name-directory old))))
-         (config-name (org-files-db-process--config-name config)))
+         (config-name (org-files-db-process--config-name config))
+         (moving (org-files-db-directory--moving-p old new)))
     (unless (file-directory-p old)
       (user-error "Not a directory: %s" old))
     (when (org-files-db-directory--inside-p new old)
       (user-error "Destination is inside the directory: %s" new))
-    (unless (equal (file-name-directory old) (file-name-directory new))
-      (user-error "Moving to another directory is not supported yet"))
     (when (file-exists-p new)
       (user-error "Destination already exists: %s" new))
-    (let* ((links (org-files-db-directory--incoming-links old config-name))
+    (unless (file-directory-p (file-name-directory new))
+      (user-error "Destination parent does not exist: %s"
+                  (file-name-directory new)))
+    (let* ((links (org-files-db-directory--affected-links old config-name))
            (plan (org-files-db-directory--plan links old new))
            (changes (alist-get 'changes plan))
            (skipped (length (alist-get 'skipped plan)))
@@ -315,11 +358,13 @@ With an interactive prefix argument, select the configuration."
                     (mapconcat #'buffer-name modified ", ")))
       (org-files-db-directory--show-plan old new plan)
       (if (not (yes-or-no-p
-                (format "Rename directory and update %d links in %d files? "
+                (format "%s directory and update %d links in %d files? "
+                        (if moving "Move" "Rename")
                         (length changes) (length files))))
-          (message "Directory not renamed")
+          (message (if moving "Directory not moved" "Directory not renamed"))
         (org-files-db-directory--apply old new plan)
-        (message "Directory renamed, %d links updated%s" (length changes)
+        (message "Directory %s, %d links updated%s"
+                 (if moving "moved" "renamed") (length changes)
                  (if (> skipped 0) (format ", %d skipped" skipped) "")))
       nil)))
 
