@@ -2209,6 +2209,125 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                 (expect org-files-db-cache--activation :to-equal nil)))
           )
 
+(defvar org-files-db-test--actions-directory nil)
+
+(defconst org-files-db-test--actions-prefix "#+title: Notes\n\n"
+  "Text before the first heading in the action test file.")
+
+(defconst org-files-db-test--actions-first "* TODO Grüße aus Zürich\n"
+  "First heading of the action test file.")
+
+(defun org-files-db-test--actions-file (name)
+  "Create the multibyte action test file NAME and return its absolute path."
+  (let ((file (expand-file-name name org-files-db-test--actions-directory)))
+    (with-temp-file file
+      (let ((coding-system-for-write 'utf-8-unix))
+        (insert org-files-db-test--actions-prefix
+                org-files-db-test--actions-first
+                "body\n** Zweiter Üß\n")))
+    file))
+
+(defun org-files-db-test--actions-record (kind file &rest slots)
+  "Return a record of KIND for FILE with SLOTS as keyword arguments."
+  (apply #'org-files-db-presentation--make-record
+         :kind kind :id 1 :file file slots))
+
+(describe "result actions"
+          (let (file other messages)
+            (before-each
+             (setq org-files-db-test--actions-directory
+                   (make-temp-file "org-files-db-actions-" t)
+                   file (org-files-db-test--actions-file "notes.org")
+                   other (org-files-db-test--actions-file "other.org")
+                   messages nil)
+             (spy-on 'message :and-call-fake
+                     (lambda (format &rest args)
+                       (push (apply #'format format args) messages)))
+             (spy-on 'org-files-db-process--run-process :and-throw-error 'error))
+
+            (after-each
+             (dolist (buffer (buffer-list))
+               (when-let* ((name (buffer-file-name buffer)))
+                 (when (string-prefix-p org-files-db-test--actions-directory name)
+                   (with-current-buffer buffer (set-buffer-modified-p nil))
+                   (kill-buffer buffer))))
+             (delete-directory org-files-db-test--actions-directory t))
+
+            (it "opens headings, files, roots and links at their source location"
+                (let* ((first-byte (string-bytes org-files-db-test--actions-prefix))
+                       (second-byte (+ first-byte
+                                       (string-bytes org-files-db-test--actions-first)
+                                       (string-bytes "body\n"))))
+                  (dolist (case `((heading :byte-start ,first-byte :line 3)
+                                  (heading :byte-start ,second-byte :line 5)
+                                  (heading :byte-start 0 :line 5)
+                                  (heading :line 4)
+                                  (heading)
+                                  (link :byte-start ,second-byte :line 5)
+                                  (file)
+                                  (root)))
+                    (let* ((kind (car case))
+                           (slots (cdr case))
+                           (line (plist-get slots :line))
+                           (byte-start (plist-get slots :byte-start))
+                           (record (apply #'org-files-db-test--actions-record
+                                          kind file slots)))
+                      (setq messages nil)
+                      (expect (org-files-db-actions-open-result record) :to-be nil)
+                      (expect (buffer-file-name) :to-equal file)
+                      (cond
+                       ((or line byte-start)
+                        (expect (line-number-at-pos) :to-equal line)
+                        (when (and byte-start (> byte-start 0))
+                          (expect (position-bytes (point)) :to-equal (1+ byte-start))))
+                       (t (expect (point) :to-equal (point-min))))
+                      (expect messages :to-equal
+                              (list (pcase kind
+                                      ('heading "Heading opened")
+                                      ('link "Link opened")
+                                      (_ "File opened"))))))))
+
+            (it "opens a resolved link target at a heading or at the start of a file"
+                (let ((byte (string-bytes org-files-db-test--actions-prefix)))
+                  (dolist (case `((:target-line 3 :target-byte-start ,byte :line 3)
+                                  (:target-line 1 :target-byte-start nil :line 1)))
+                    (let ((record (org-files-db-test--actions-record
+                                   'link file
+                                   :line 9 :byte-start 0
+                                   :target-file other
+                                   :target-line (plist-get case :target-line)
+                                   :target-byte-start (plist-get case :target-byte-start))))
+                      (setq messages nil)
+                      (expect (org-files-db-actions-open-link-target record) :to-be nil)
+                      (expect (buffer-file-name) :to-equal other)
+                      (expect (line-number-at-pos) :to-equal (plist-get case :line))
+                      (expect messages :to-equal '("Link target opened"))))))
+
+            (it "rejects link targets that cannot be opened"
+                (dolist (case `((,(org-files-db-test--actions-record 'heading file :line 3)
+                                 . "Result is not a link")
+                                (,(org-files-db-test--actions-record 'link file :line 3)
+                                 . "Link target is not resolved")))
+                  (expect (org-files-db-actions-open-link-target (car case))
+                          :to-throw 'user-error (list (cdr case))))
+                (expect messages :to-equal nil))
+
+            (it "runs the default open action from a query"
+                (let* ((record (org-files-db-test--actions-record
+                                'heading file
+                                :line 3
+                                :byte-start (string-bytes org-files-db-test--actions-prefix)))
+                       (presentation
+                        (org-files-db-test--single-result-presentation record "main")))
+                  (cl-letf (((symbol-function 'org-files-db-query-results)
+                             (lambda (&rest _args) presentation))
+                            ((symbol-function 'completing-read)
+                             #'org-files-db-test--select-first-candidate))
+                    (expect (org-files-db-query '(headings)) :to-be record)
+                    (expect (buffer-file-name) :to-equal file)
+                    (expect (line-number-at-pos) :to-equal 3)
+                    (expect messages :to-equal '("Heading opened")))))))
+
 (provide 'org-files-db-test)
 
 ;;; org-files-db-test.el ends here

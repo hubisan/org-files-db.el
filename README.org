@@ -291,7 +291,8 @@ The optional action argument of ~org-files-db-query~ and ~org-files-db-search~ r
 
 Built-in actions and wrappers include:
 
-- ~org-files-db-actions-open-result~
+- ~org-files-db-actions-open-result~ (default) opens a heading, file, or link source at its stored location
+- ~org-files-db-actions-open-link-target~ opens the resolved target of a link result, either the target heading or the target file
 - ~org-files-db-actions-follow-heading-link~
 - ~org-files-db-actions-insert-file-link~
 - ~org-files-db-actions-insert-heading-link~
