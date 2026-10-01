@@ -1,0 +1,83 @@
+#+TITLE: Emacs Path Benchmark
+#+STARTUP: showall
+
+* Purpose
+
+This page records where time goes between ~M-x org-files-db-query~ and a usable candidate list with large result sets. It covers the one-shot path (~orgfdb query --format presentation-json~) and the cached path (~org-files-db-cache-mode~ with ~orgfdb view read~). Issue: #27.
+
+* Running
+
+~make bench~ runs ~bench/org-files-db-bench.el~ with the real package code in ~lisp/~. It is not part of ~make ci~. It prints a message and exits normally when ~orgfdb~ is not found. Set ~ORGFDB~ to select the executable and ~ORGFDB_BENCH_SIZES~ (space separated) to override the sizes.
+
+For each size the script generates a corpus in a temporary directory (about 500 headings per file, levels 1 to 4, todo keywords, tags, some body text), runs ~orgfdb rebuild~ and then measures both paths three times. The tables show the median. Both paths use the columns ~title~, ~tags~, ~file-name~ and ~outline-path~ and the query ~(headings)~.
+
+* Setup
+
+- Machine: Intel Xeon 2.1 GHz, 4 CPUs, 16 GB RAM, Linux (x86_64).
+- Emacs 29.3, batch mode with ~-Q~, default ~gc-cons-threshold~ 800000 and ~gc-cons-percentage~ 1.0.
+- ~orgfdb~ 0.1.0, release build, commit ~2dc49e7~ of org-files-db.
+- Corpus: 100, 1000, 10000 and 50000 headings in 1, 2, 20 and 100 files.
+- Payload (stdout of ~presentation-json~): 45097, 448248, 4647589 and 22878708 bytes.
+- ~orgfdb rebuild~ takes 0.03, 0.05, 0.41 and 1.95 seconds.
+
+* Phases
+
+- *orgfdb*: ~orgfdb~ run with stdout discarded. For ~view read~ this is the Rust cache lookup plus writing to the discarded output.
+- *process call*: ~org-files-db-process--call-raw~, wall time including process start, pipe transfer into an Emacs buffer and decoding to a string.
+- *transfer*: process call minus orgfdb. It is the cost of moving the payload into Emacs.
+- *JSON parse*: ~org-files-db-process--parse-json~ on the stdout string.
+- *presentation decode*: ~org-files-db-presentation--decode~ on the parsed JSON.
+- *candidate construction*: ~org-files-db-presentation--candidates~ on the decoded presentation.
+- *time until completion usable*: the complete package entry point (~org-files-db-query~ or ~org-files-db-view~) from the call until ~completing-read~ is entered. ~completing-read~ is replaced by a stub that records the time and returns the first candidate, so interactive completion itself is not measured.
+- The GC rows show the garbage collection time (~gc-elapsed~ delta) and number of collections inside the phase. Each phase row already includes its GC part.
+
+* One-shot query
+
+Seconds, median of 3 runs.
+
+| Phase                        |   100 |  1000 | 10000 | 50000 |
+|------------------------------+-------+-------+-------+-------|
+| orgfdb (stdout discarded)    | 0.008 | 0.017 | 0.121 | 0.663 |
+| process call (wall)          | 0.006 | 0.021 | 0.180 | 0.925 |
+| transfer (process - orgfdb)  | 0.000 | 0.005 | 0.059 | 0.259 |
+| JSON parse                   | 0.001 | 0.010 | 0.141 | 0.655 |
+| JSON parse, GC part          | 0.000 | 0.000 | 0.025 | 0.042 |
+| presentation decode          | 0.004 | 0.041 | 0.487 | 2.267 |
+| decode, GC part              | 0.000 | 0.000 | 0.075 | 0.193 |
+| candidate construction       | 0.002 | 0.042 | 0.251 | 3.260 |
+| candidates, GC part          | 0.000 | 0.024 | 0.057 | 2.283 |
+| time until completion usable | 0.014 | 0.115 | 1.072 | 6.114 |
+| usable, GC part              | 0.000 | 0.025 | 0.171 | 1.668 |
+| usable, GC runs              |     0 |     1 |     4 |     8 |
+
+* Cached view read
+
+The watcher and the registered view are set up once per size by ~org-files-db-cache-mode~; the rows are warm reads. Registering the view and starting the watcher takes 0.07, 0.07, 0.07 and 0.16 seconds. The first ~view read~ after registration (which materializes the view) takes 0.03, 0.04, 0.27 and 1.08 seconds.
+
+| Phase                        |   100 |  1000 | 10000 | 50000 |
+|------------------------------+-------+-------+-------+-------|
+| orgfdb (stdout discarded)    | 0.012 | 0.013 | 0.008 | 0.008 |
+| process call (wall)          | 0.011 | 0.016 | 0.071 | 0.286 |
+| transfer (process - orgfdb)  | 0.000 | 0.005 | 0.062 | 0.278 |
+| JSON parse                   | 0.001 | 0.010 | 0.140 | 0.617 |
+| JSON parse, GC part          | 0.000 | 0.000 | 0.025 | 0.043 |
+| presentation decode          | 0.004 | 0.043 | 0.444 | 2.258 |
+| decode, GC part              | 0.000 | 0.000 | 0.039 | 0.230 |
+| candidate construction       | 0.002 | 0.043 | 0.378 | 1.785 |
+| candidates, GC part          | 0.000 | 0.025 | 0.186 | 0.848 |
+| time until completion usable | 0.014 | 0.108 | 1.036 | 4.908 |
+| usable, GC part              | 0.000 | 0.024 | 0.245 | 1.081 |
+| usable, GC runs              |     0 |     1 |     3 |     4 |
+
+* Notes
+
+- The phases are measured in separate runs, so their sum differs from the total by GC timing noise. The candidate construction phase at 50000 rows varies the most because its GC share depends on the heap left by earlier phases.
+- The one-shot payload at 50000 rows (22.9 MB) is smaller than the 28.8 MB of the Rust baseline in #5 because the corpus generator and columns differ.
+- The numbers are from one machine in batch mode. Interactive Emacs with a larger ~gc-cons-threshold or a faster CPU will be quicker.
+
+* Conclusion
+
+- *Rust and transfer are not the bottleneck.* At 50000 rows ~orgfdb~ takes 0.66 s one-shot and under 0.01 s for a cached read; moving 22.9 MB into Emacs costs 0.26 to 0.28 s. At 10000 rows both together stay under 0.25 s.
+- *The remaining bottleneck is on the Emacs side after the JSON arrives.* Presentation decode (2.3 s) plus candidate construction (1.8 to 3.3 s, of which 0.8 to 2.3 s is GC) make up 80 to 90 percent of the time until completion is usable: 6.1 s one-shot and 4.9 s cached at 50000 rows, 1.0 to 1.1 s at 10000 rows and about 0.1 s at 1000 rows. JSON parsing (0.62 to 0.66 s) is the next largest part.
+- *The Rust cache only removes about 1.2 s of 6.1 s* at 50000 rows (the query and part of the transfer), because everything the cache cannot skip happens in Emacs.
+- *An Emacs-side cache is not justified yet.* Up to 10000 rows the path is about one second, and at 50000 rows the cost is dominated by decode and candidate construction, which can likely be reduced directly (fewer allocations per row, less GC pressure) before keeping decoded candidates around. A client cache of decoded candidates would only make sense after that, and then needs invalidation against the watcher generation. Both are follow-up decisions and are not part of this measurement.

@@ -395,7 +395,7 @@ make setup
 make ci
 #+end_src
 
-The checks include byte-compilation, package linting, source linting, and Buttercup tests.
+The checks include byte-compilation, package linting, source linting, and Buttercup tests.  ~make bench~ runs the on-demand end-to-end benchmark against a real ~orgfdb~ (results in [[file:docs/benchmark.org][docs/benchmark.org]]).
 
 * Contributing
 
