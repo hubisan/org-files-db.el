@@ -140,18 +140,7 @@ Query and search presentation is eager and synchronous.  The package normalizes 
 
 Duplicate visible candidates retain separate invisible identities and direct result metadata.  Prepared CLI order is preserved, selection does not scan the complete candidate list, and visually shortened values remain complete in the underlying completion candidate.  Truncated column regions use presentation-only ~display~ properties instead of appended hidden search copies.
 
-For a real invocation, profile Emacs with ~M-x profiler-start~, run the query, and inspect ~M-x profiler-report~.  The development benchmark covers synthetic sets of 100, 1,000, 10,000, and 50,000 rows, representative inexpensive and expensive columns, visual-only truncation at 1,000 and 10,000 rows, and alist versus hash-table JSON parsing:
-
-#+begin_src shell
-emacs -Q -L lisp -l benchmarks/org-files-db-benchmark.el \
-  --eval '(org-files-db-benchmark-run 3)'
-#+end_src
-
-Run ~M-x org-files-db-benchmark-query~ to separate real CLI execution, JSON parsing, result normalization, presentation, and total time for the current database.  Run ~M-x org-files-db-benchmark-compare-frontends~ interactively to compare initialization of standard completion and Consult using the same already prepared candidates.  Consult remains optional and normal query completion does not depend on it.
-
-Run ~M-x org-files-db-benchmark-view-cache~ to compare synthetic full candidate preparation, readable-Lisp dump write/read, direct in-memory warm lookup, and warm completion.  For a real cache lifecycle, use ~M-x org-files-db-cache-benchmark-report~ after an initial or file-notify-triggered rebuild; ~M-x org-files-db-cache-file-notify-trace~ shows every raw filesystem event.
-
-Run ~M-x org-files-db-benchmark-sorting~ to benchmark 1,000 and 10,000 prepared rows with multiple text keys, numeric keys, timestamp keys, and complete tag collections.  The report measures sort-key preparation and sorting separately from value extraction, width calculation, face preparation, and candidate formatting.
+For a real invocation, profile Emacs with ~M-x profiler-start~, run the query, and inspect ~M-x profiler-report~. End-to-end measurements of the Emacs path are in ~docs/benchmark.org~; run them with ~make bench~.
 
 * Search
 
@@ -384,8 +373,6 @@ lisp/org-files-db-cache.el    Generation-aware prepared predefined-view caches
 lisp/org-files-db-views.el    Named query and search views
 lisp/org-files-db-dblock.el   Org dynamic blocks
 tests/                        Buttercup tests
-benchmarks/org-files-db-benchmark.el  Performance benchmark module
-benchmarks/fixtures/          Representative benchmark data
 #+end_src
 
 * Development

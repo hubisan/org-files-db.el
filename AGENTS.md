@@ -14,8 +14,7 @@ Emacs Lisp client for the `orgfdb` CLI of
 - Implementation, review, model routing, correction budget or completion workflow: read
   `docs/agents/WORKFLOW.md`.
 - Read history (`.project/tasks/archive/`, `CHANGELOG.org`) only when the active issue
-  requires it. `.project/reference/` is the legacy package, reference only; do not edit or
-  load it unless asked.
+  requires it.
 
 ## Rules
 
