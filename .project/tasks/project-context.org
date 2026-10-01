@@ -1,7 +1,7 @@
 #+TITLE: Project Context
 #+STARTUP: showall
 
-This file contains stable project context, goals, architecture decisions, and non-goals. Active tasks live in [[./todo.org]]. Later phases and backlog live in [[./roadmap.org]].
+This file contains stable project context, goals, architecture decisions, and non-goals. Active work, later phases, and backlog are GitHub issues in ~hubisan/org-files-db.el~.
 
 * Project Goal
 
@@ -13,3 +13,37 @@ Provide an Emacs interface for querying ~org-files-db~ through the ~orgfdb~ CLI.
 - Keep indexing and database access in the Rust project.
 - Keep Emacs-specific presentation and interaction in this package.
 - Do not access SQLite directly from Emacs Lisp.
+
+* Rebuild decisions
+
+The current package is reference material only. The rebuild does not preserve the old internal architecture or compatibility aliases.
+
+- Use the public ~orgfdb~ CLI as the only Rust seam.
+- Use ~presentation-json~ version 3 as the internal Emacs presentation model. Changed from version 2 after hubisan/org-files-db#116 and #117; adopting it is tracked in #1.
+- Keep ~orgfdb query --format json~ unchanged on the Rust side, but do not use it as the normal Emacs presentation model. It is used to load more data for a selected result by id.
+- Let Rust own columns, sorting, row expansion, width calculation, truncation, padding, and presentation caching.
+- Keep Emacs responsible for configuration, process control, JSON decoding, faces, completion, navigation, and user actions.
+- Use synchronous query and view commands. A user starts a query because they want the result immediately.
+- Do not add asynchronous query completion that can appear after the user starts other work.
+- The watcher is the only long-running child process that Emacs can start.
+- Do not use Child Emacs, ~async.el~, presentation dumps, or an Emacs presentation cache.
+- Keep Search outside this rebuild. Do not port ~org-files-db-search.el~.
+- Use standard Emacs completion through ~completing-read~.
+- Keep Embark optional.
+- Do not require ~embark-consult~.
+- A view is a named query with presentation configuration and optional behaviour.
+- A view does not imply caching.
+- ~:cache t~ enables the Rust materialized-view path only while ~org-files-db-cache-mode~ is active.
+- Without active caching, every view can run as a one-shot ~presentation-json~ query.
+- View names are unique in Emacs.
+- Rust view names use a private per-Emacs-session namespace.
+- Use named orgfdb configurations and one explicit default configuration.
+- A view can select one configuration with ~:config~.
+- A view without ~:config~ uses the default configuration.
+- Default actions are configured separately for ~headings~, ~files~, and ~links~.
+- A view can override its default action with ~:action~.
+- Actions receive the selected version 3 action record (kind, id, file, line, byte offset, and for links the resolved target position), not a presentation row. Changed from "Actions receive the original Rust result": version 3 no longer carries full result objects and ~--include~ no longer adds data to presentation responses.
+- An action that needs more data (for example a title, an ~ID~ or ~CUSTOM_ID~ property, a raw link target, or incoming links) reloads the selected result after selection with ~orgfdb query --format json~ by id (~(headings (id N))~, ~(links (id N))~, ~(files (id N))~), guarded by ~--expect-database-id~ and ~--expect-generation~ from the presentation response. A changed index fails with error kind ~stale-index~. This replaces the earlier rule of adding action-dependent includes before the CLI call and never running a second query.
+- Keep ~row_context~ as internal candidate metadata for later integrations.
+- Query and view commands return the selected action record to Lisp callers.
+- Interactive actions give short user feedback and do not expose raw result structures.

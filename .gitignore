@@ -29,9 +29,6 @@ flycheck_*.el
 # Projectiles
 .projectile
 
-# Project update temp folder
-.project-update-tmp/
-
 # Package artifacts
 *.tar
 *.tar.gz
@@ -46,6 +43,3 @@ temp/
 .idea/
 .vscode/
 *:Zone.Identifier
-
-# Project update temporary files
-.project-update-tmp/
