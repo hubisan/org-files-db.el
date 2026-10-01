@@ -14,7 +14,7 @@
 
 (package-file "lisp/org-files-db.el")
 (files "lisp/*.el")
-(load-paths "./lisp" "./tests" "./benchmarks")
+(load-paths "./lisp" "./tests")
 
 (source "gnu")
 (source "nongnu")

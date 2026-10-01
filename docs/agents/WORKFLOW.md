@@ -90,8 +90,7 @@ change is.
   `eask recompile`. Full suite: `make test`.
 - Keep command output compact; inspect detailed logs only when a step fails.
 - Load context progressively. Subagent briefs name the exact files and sections so the
-  implementer does not rediscover them. Do not scan `.claude/skills/` or
-  `.project/reference/`.
+  implementer does not rediscover them. Do not scan `.claude/skills/`.
 
 ## Tests
 
