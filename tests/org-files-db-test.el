@@ -1094,6 +1094,35 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                 (expect (get-text-property 0 'face visible)
                         :to-equal 'org-warning)))
 
+          (it "faces only non-empty cells and leaves the cell texts untouched"
+              (let* ((text (copy-sequence "Task"))
+                     (row
+                      (org-files-db-presentation--make-presentation-row
+                       :result-index 0
+                       :row-context nil
+                       :cells
+                       (vector
+                        (org-files-db-presentation--make-presentation-cell
+                         :search-text "Task" :display-text text :role 'title)
+                        (org-files-db-presentation--make-presentation-cell
+                         :search-text "" :display-text "" :role 'tag)
+                        (org-files-db-presentation--make-presentation-cell
+                         :search-text "a" :display-text "a" :role 'tag))))
+                     (visible (org-files-db-presentation--visible-row row)))
+                (expect (substring-no-properties visible) :to-equal "Task    a")
+                (expect (get-text-property 0 'face visible)
+                        :to-equal 'org-files-db-title)
+                (expect (get-text-property 4 'face visible) :to-equal nil)
+                (expect (get-text-property 8 'face visible)
+                        :to-equal 'org-files-db-tag)
+                (expect (text-properties-at 0 text) :to-equal nil)))
+
+          (it "maps vectors without changing the input"
+              (let ((input (vector 1 2 3)))
+                (expect (org-files-db-presentation--map-vector #'1+ input)
+                        :to-equal (vector 2 3 4))
+                (expect input :to-equal (vector 1 2 3))))
+
           (it "defines one heading face with normal completion text height"
               (expect (not (null (facep 'org-files-db-heading))) :to-equal t)
               (expect (= (face-attribute 'org-files-db-heading :height nil 'default) 1.0)

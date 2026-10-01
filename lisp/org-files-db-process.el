@@ -232,11 +232,14 @@ Return stdout as a string. Request structured JSON errors."
 (defun org-files-db-process--parse-json (text)
   "Parse JSON TEXT into alists and vectors."
   (condition-case err
-      (json-parse-string text
-                         :object-type 'alist
-                         :array-type 'array
-                         :null-object nil
-                         :false-object :false)
+      (let ((gc-cons-threshold
+             (max gc-cons-threshold
+                  org-files-db-core--decode-gc-cons-threshold)))
+        (json-parse-string text
+                           :object-type 'alist
+                           :array-type 'array
+                           :null-object nil
+                           :false-object :false))
     (error
      (signal 'org-files-db-error
              (list (format "Invalid JSON from orgfdb: %s"

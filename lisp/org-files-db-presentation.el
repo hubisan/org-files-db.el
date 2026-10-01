@@ -102,7 +102,8 @@ file target."
   cell-display-text
   cell-role
   row-context-shapes
-  role-values)
+  role-values
+  role-symbols)
 
 (defun org-files-db-presentation--default-columns (target)
   "Return the configured default columns for TARGET."
@@ -312,8 +313,10 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
      "Invalid %s position %S" description index))
   (aref values index))
 
-(defun org-files-db-presentation--role (encoded role-values)
-  "Decode ENCODED with ROLE-VALUES and return a role symbol."
+(defun org-files-db-presentation--role (encoded role-values &optional symbols)
+  "Decode ENCODED with ROLE-VALUES and return a role symbol.
+SYMBOLS, when non-nil, is a vector with one slot per role value that
+caches the interned symbols."
   (cond
    ((null encoded) nil)
    ((not (and (integerp encoded)
@@ -322,12 +325,16 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
               (< encoded (length role-values))))
     (org-files-db-presentation--error
      "Invalid presentation role index: %S" encoded))
+   ((and symbols (aref symbols encoded)))
    (t
     (let ((name (aref role-values encoded)))
       (unless (stringp name)
         (org-files-db-presentation--error
          "Invalid presentation role value at index %d" encoded))
-      (intern name)))))
+      (let ((role (intern name)))
+        (when symbols
+          (aset symbols encoded role))
+        role)))))
 
 (defun org-files-db-presentation--row-context (encoded shapes)
   "Decode row-context ENCODED with schema SHAPES."
@@ -407,40 +414,46 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
      (org-files-db-presentation--field-index
       cell-fields "role" "cell")
      :row-context-shapes shapes
-     :role-values role-values)))
+     :role-values role-values
+     :role-symbols (make-vector (length role-values) nil))))
 
 (defun org-files-db-presentation--decode-cell (encoded schema)
   "Decode one presentation cell ENCODED with compiled SCHEMA."
   (unless (vectorp encoded)
     (org-files-db-presentation--error
      "Invalid presentation cell: %S" encoded))
-  (let* ((search-text
-          (org-files-db-presentation--vector-value
-           encoded
-           (org-files-db-presentation--wire-schema-cell-search-text schema)
-           "cell search_text"))
-         (display-text
-          (org-files-db-presentation--vector-value
-           encoded
-           (org-files-db-presentation--wire-schema-cell-display-text schema)
-           "cell display_text"))
-         (role
-          (org-files-db-presentation--vector-value
-           encoded
-           (org-files-db-presentation--wire-schema-cell-role schema)
-           "cell role")))
-    (unless (stringp search-text)
+  (let* ((size (length encoded))
+         (search-index
+          (org-files-db-presentation--wire-schema-cell-search-text schema))
+         (display-index
+          (org-files-db-presentation--wire-schema-cell-display-text schema))
+         (role-index
+          (org-files-db-presentation--wire-schema-cell-role schema)))
+    (unless (< search-index size)
       (org-files-db-presentation--error
-       "Invalid presentation search_text: %S" search-text))
-    (unless (or (null display-text) (stringp display-text))
+       "Invalid %s position %S" "cell search_text" search-index))
+    (unless (< display-index size)
       (org-files-db-presentation--error
-       "Invalid presentation display_text: %S" display-text))
-    (org-files-db-presentation--make-presentation-cell
-     :search-text search-text
-     :display-text (or display-text search-text)
-     :role
-     (org-files-db-presentation--role
-      role (org-files-db-presentation--wire-schema-role-values schema)))))
+       "Invalid %s position %S" "cell display_text" display-index))
+    (unless (< role-index size)
+      (org-files-db-presentation--error
+       "Invalid %s position %S" "cell role" role-index))
+    (let ((search-text (aref encoded search-index))
+          (display-text (aref encoded display-index)))
+      (unless (stringp search-text)
+        (org-files-db-presentation--error
+         "Invalid presentation search_text: %S" search-text))
+      (unless (or (null display-text) (stringp display-text))
+        (org-files-db-presentation--error
+         "Invalid presentation display_text: %S" display-text))
+      (org-files-db-presentation--make-presentation-cell
+       :search-text search-text
+       :display-text (or display-text search-text)
+       :role
+       (org-files-db-presentation--role
+        (aref encoded role-index)
+        (org-files-db-presentation--wire-schema-role-values schema)
+        (org-files-db-presentation--wire-schema-role-symbols schema))))))
 
 (defun org-files-db-presentation--decode-row (encoded results schema)
   "Decode one presentation row ENCODED with RESULTS and compiled SCHEMA."
@@ -470,18 +483,23 @@ FORMAT-STRING and ARGUMENTS build the user-facing message."
     (unless (vectorp cells)
       (org-files-db-presentation--error
        "Invalid presentation cells array: %S" cells))
-    (org-files-db-presentation--make-presentation-row
-     :result-index result-index
-     :row-context
-     (org-files-db-presentation--row-context
-      row-context
-      (org-files-db-presentation--wire-schema-row-context-shapes schema))
-     :cells
-     (vconcat
-      (mapcar
-       (lambda (cell)
-         (org-files-db-presentation--decode-cell cell schema))
-       cells)))))
+    (let* ((context
+            (org-files-db-presentation--row-context
+             row-context
+             (org-files-db-presentation--wire-schema-row-context-shapes
+              schema)))
+           (count (length cells))
+           (decoded (make-vector count nil))
+           (index 0))
+      (while (< index count)
+        (aset decoded index
+              (org-files-db-presentation--decode-cell
+               (aref cells index) schema))
+        (setq index (1+ index)))
+      (org-files-db-presentation--make-presentation-row
+       :result-index result-index
+       :row-context context
+       :cells decoded))))
 
 (defun org-files-db-presentation--decode-files (files)
   "Return FILES as a validated vector of path strings."
@@ -594,8 +612,24 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
                     target-byte-start)))
           record)))))
 
+(defun org-files-db-presentation--map-vector (function vector)
+  "Return a new vector of FUNCTION applied to each element of VECTOR."
+  (let* ((count (length vector))
+         (mapped (make-vector count nil))
+         (index 0))
+    (while (< index count)
+      (aset mapped index (funcall function (aref vector index)))
+      (setq index (1+ index)))
+    mapped))
+
 (defun org-files-db-presentation--decode (wire)
   "Decode one presentation-json version 3 WIRE alist."
+  (let ((gc-cons-threshold
+         (max gc-cons-threshold org-files-db-core--decode-gc-cons-threshold)))
+    (org-files-db-presentation--decode-1 wire)))
+
+(defun org-files-db-presentation--decode-1 (wire)
+  "Decode one presentation-json version 3 WIRE alist without GC tuning."
   (unless (listp wire)
     (org-files-db-presentation--error
      "Invalid presentation-json response"))
@@ -635,17 +669,15 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
            (files (org-files-db-presentation--decode-files files))
            (kinds (org-files-db-presentation--compile-result-kinds schemas))
            (results
-            (vconcat
-             (mapcar
-              (lambda (record)
-                (org-files-db-presentation--decode-record record kinds files))
-              results)))
+            (org-files-db-presentation--map-vector
+             (lambda (record)
+               (org-files-db-presentation--decode-record record kinds files))
+             results))
            (rows
-            (vconcat
-             (mapcar
-              (lambda (row)
-                (org-files-db-presentation--decode-row row results schema))
-              encoded-rows))))
+            (org-files-db-presentation--map-vector
+             (lambda (row)
+               (org-files-db-presentation--decode-row row results schema))
+             encoded-rows)))
       (org-files-db-presentation--make-presentation
        :version org-files-db-presentation--version
        :database-id database-id
@@ -683,33 +715,47 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
 
 (defun org-files-db-presentation--visible-row (row)
   "Return the Rust-prepared visible string for ROW."
-  (let ((cells (org-files-db-presentation-row-cells row))
-        segments)
-    (dotimes (index (length cells))
+  (let* ((cells (org-files-db-presentation-row-cells row))
+         (count (length cells))
+         (index 0)
+         (position 0)
+         segments
+         faces)
+    (while (< index count)
       (let* ((cell (aref cells index))
-             (segment
-              (copy-sequence
-               (org-files-db-presentation-cell-display-text cell)))
-             (face
-              (org-files-db-presentation--role-face
-               (org-files-db-presentation-cell-role cell)
-               (org-files-db-presentation-cell-search-text cell))))
-        (when (and face (> (length segment) 0))
-          (add-text-properties 0 (length segment) (list 'face face) segment))
-        (push segment segments)))
-    (string-join (nreverse segments) "  ")))
+             (text (org-files-db-presentation-cell-display-text cell))
+             (length (length text)))
+        (when (> length 0)
+          (let ((face
+                 (org-files-db-presentation--role-face
+                  (org-files-db-presentation-cell-role cell)
+                  (org-files-db-presentation-cell-search-text cell))))
+            (when face
+              (push face faces)
+              (push (+ position length) faces)
+              (push position faces))))
+        (push text segments)
+        (setq position (+ position length 2)
+              index (1+ index))))
+    (let ((visible (mapconcat #'identity (nreverse segments) "  ")))
+      (while faces
+        (put-text-property (pop faces) (pop faces) 'face (pop faces) visible))
+      visible)))
 
 (defun org-files-db-presentation--search-row (row)
   "Return complete searchable text for presentation ROW."
-  (let ((cells (org-files-db-presentation-row-cells row))
-        values)
-    (dotimes (index (length cells))
+  (let* ((cells (org-files-db-presentation-row-cells row))
+         (count (length cells))
+         (index 0)
+         values)
+    (while (< index count)
       (let ((value
              (org-files-db-presentation-cell-search-text
               (aref cells index))))
         (unless (string-empty-p value)
-          (push value values))))
-    (string-join (nreverse values) "  ")))
+          (push value values)))
+      (setq index (1+ index)))
+    (mapconcat #'identity (nreverse values) "  ")))
 
 (defun org-files-db-presentation--candidate-identity (index)
   "Return a compact hidden identity suffix for zero-based INDEX."
@@ -761,21 +807,26 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
                 (org-files-db-presentation-config presentation)
                 'org-files-db-presentation presentation
                 'rear-nonsticky t)))
-    (add-text-properties 0 (length candidate) metadata candidate)
-    (add-text-properties 0 body-length (list 'display visible) candidate)
-    (add-text-properties body-length (length candidate) '(display "") candidate)
+    (add-text-properties 0 body-length (cons 'display (cons visible metadata))
+                         candidate)
+    (add-text-properties body-length (length candidate)
+                         (cons 'display (cons "" metadata))
+                         candidate)
     candidate))
 
 (defun org-files-db-presentation--candidates (presentation)
   "Return lightweight completion candidates for PRESENTATION."
-  (let* ((rows (org-files-db-presentation-rows presentation))
+  (let* ((gc-cons-threshold
+          (max gc-cons-threshold org-files-db-core--decode-gc-cons-threshold))
+         (rows (org-files-db-presentation-rows presentation))
          (count (length rows))
+         (index 0)
          candidates)
-    (dotimes (index count)
-      (push
-       (org-files-db-presentation--candidate
-        presentation (aref rows index) index)
-       candidates))
+    (while (< index count)
+      (push (org-files-db-presentation--candidate
+             presentation (aref rows index) index)
+            candidates)
+      (setq index (1+ index)))
     (nreverse candidates)))
 
 (defun org-files-db-presentation--completion-table (candidates)

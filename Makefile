@@ -64,7 +64,11 @@ test:
 
 bench:
 	@printf '\n\e[1;34m%-10s\e[0m\n\n' '>> BENCH'
-	$(EMACS) --batch -Q -L lisp -l bench/org-files-db-bench.el \
+	dir=$$(mktemp -d) && trap 'rm -rf "$$dir"' EXIT && \
+	cp lisp/*.el "$$dir" && \
+	$(EMACS) --batch -Q -L "$$dir" -f batch-byte-compile "$$dir"/*.el && \
+	$(EMACS) --batch -Q -L "$$dir" -l bench/org-files-db-bench.el \
+		--eval '(setq gc-cons-percentage 0.1)' \
 		--eval '(org-files-db-bench-run)'
 
 package:

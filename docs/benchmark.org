@@ -3,22 +3,22 @@
 
 * Purpose
 
-This page records where time goes between ~M-x org-files-db-query~ and a usable candidate list with large result sets. It covers the one-shot path (~orgfdb query --format presentation-json~) and the cached path (~org-files-db-cache-mode~ with ~orgfdb view read~). Issue: #27.
+This page records where time goes between ~M-x org-files-db-query~ and a usable candidate list with large result sets. It covers the one-shot path (~orgfdb query --format presentation-json~) and the cached path (~org-files-db-cache-mode~ with ~orgfdb view read~). Issues: #27 (measurement) and #39 (allocation reduction).
 
 * Running
 
-~make bench~ runs ~bench/org-files-db-bench.el~ with the real package code in ~lisp/~. It is not part of ~make ci~. It prints a message and exits normally when ~orgfdb~ is not found. Set ~ORGFDB~ to select the executable and ~ORGFDB_BENCH_SIZES~ (space separated) to override the sizes.
+~make bench~ copies ~lisp/~ into a temporary directory, byte-compiles it and runs ~bench/org-files-db-bench.el~ against the compiled package, as an installed package runs. It sets ~gc-cons-percentage~ to 0.1, the interactive default (batch Emacs reports 1.0, which hides most GC work). It is not part of ~make ci~. It prints a message and exits normally when ~orgfdb~ is not found. Set ~ORGFDB~ to select the executable and ~ORGFDB_BENCH_SIZES~ (space separated) to override the sizes.
 
 For each size the script generates a corpus in a temporary directory (about 500 headings per file, levels 1 to 4, todo keywords, tags, some body text), runs ~orgfdb rebuild~ and then measures both paths three times. The tables show the median. Both paths use the columns ~title~, ~tags~, ~file-name~ and ~outline-path~ and the query ~(headings)~.
 
 * Setup
 
 - Machine: Intel Xeon 2.1 GHz, 4 CPUs, 16 GB RAM, Linux (x86_64).
-- Emacs 29.3, batch mode with ~-Q~, default ~gc-cons-threshold~ 800000 and ~gc-cons-percentage~ 1.0.
-- ~orgfdb~ 0.1.0, release build, commit ~2dc49e7~ of org-files-db.
+- Emacs 29.3, batch mode with ~-Q~, ~gc-cons-threshold~ 800000 and ~gc-cons-percentage~ 0.1.
+- ~orgfdb~ 0.1.0, release build.
 - Corpus: 100, 1000, 10000 and 50000 headings in 1, 2, 20 and 100 files.
 - Payload (stdout of ~presentation-json~): 45097, 448248, 4647589 and 22878708 bytes.
-- ~orgfdb rebuild~ takes 0.03, 0.05, 0.41 and 1.95 seconds.
+- ~orgfdb rebuild~ takes 0.02, 0.05, 0.38 and 2.06 seconds.
 
 * Phases
 
@@ -33,51 +33,86 @@ For each size the script generates a corpus in a temporary directory (about 500 
 
 * One-shot query
 
-Seconds, median of 3 runs.
+Seconds, median of 3 runs, after the changes of #39.
 
 | Phase                        |   100 |  1000 | 10000 | 50000 |
 |------------------------------+-------+-------+-------+-------|
-| orgfdb (stdout discarded)    | 0.008 | 0.017 | 0.121 | 0.663 |
-| process call (wall)          | 0.006 | 0.021 | 0.180 | 0.925 |
-| transfer (process - orgfdb)  | 0.000 | 0.005 | 0.059 | 0.259 |
-| JSON parse                   | 0.001 | 0.010 | 0.141 | 0.655 |
-| JSON parse, GC part          | 0.000 | 0.000 | 0.025 | 0.042 |
-| presentation decode          | 0.004 | 0.041 | 0.487 | 2.267 |
-| decode, GC part              | 0.000 | 0.000 | 0.075 | 0.193 |
-| candidate construction       | 0.002 | 0.042 | 0.251 | 3.260 |
-| candidates, GC part          | 0.000 | 0.024 | 0.057 | 2.283 |
-| time until completion usable | 0.014 | 0.115 | 1.072 | 6.114 |
-| usable, GC part              | 0.000 | 0.025 | 0.171 | 1.668 |
-| usable, GC runs              |     0 |     1 |     4 |     8 |
+| orgfdb (stdout discarded)    | 0.006 | 0.015 | 0.118 | 0.999 |
+| process call (wall)          | 0.007 | 0.035 | 0.255 | 1.320 |
+| transfer (process - orgfdb)  | 0.000 | 0.021 | 0.130 | 0.300 |
+| JSON parse                   | 0.001 | 0.025 | 0.140 | 0.595 |
+| JSON parse, GC part          | 0.000 | 0.016 | 0.024 | 0.036 |
+| presentation decode          | 0.001 | 0.020 | 0.081 | 0.329 |
+| decode, GC part              | 0.000 | 0.015 | 0.025 | 0.056 |
+| candidate construction       | 0.000 | 0.018 | 0.077 | 0.404 |
+| candidates, GC part          | 0.000 | 0.015 | 0.035 | 0.210 |
+| time until completion usable | 0.009 | 0.097 | 0.553 | 2.664 |
+| usable, GC part              | 0.000 | 0.060 | 0.190 | 0.679 |
+| usable, GC runs              |     0 |     4 |    10 |    34 |
 
 * Cached view read
 
-The watcher and the registered view are set up once per size by ~org-files-db-cache-mode~; the rows are warm reads. Registering the view and starting the watcher takes 0.07, 0.07, 0.07 and 0.16 seconds. The first ~view read~ after registration (which materializes the view) takes 0.03, 0.04, 0.27 and 1.08 seconds.
+The watcher and the registered view are set up once per size by ~org-files-db-cache-mode~; the rows are warm reads. Registering the view and starting the watcher takes 0.07, 0.07, 0.07 and 0.16 seconds. The first ~view read~ after registration (which materializes the view) takes 0.05, 0.06, 0.26 and 1.46 seconds.
 
 | Phase                        |   100 |  1000 | 10000 | 50000 |
 |------------------------------+-------+-------+-------+-------|
-| orgfdb (stdout discarded)    | 0.012 | 0.013 | 0.008 | 0.008 |
-| process call (wall)          | 0.011 | 0.016 | 0.071 | 0.286 |
-| transfer (process - orgfdb)  | 0.000 | 0.005 | 0.062 | 0.278 |
-| JSON parse                   | 0.001 | 0.010 | 0.140 | 0.617 |
-| JSON parse, GC part          | 0.000 | 0.000 | 0.025 | 0.043 |
-| presentation decode          | 0.004 | 0.043 | 0.444 | 2.258 |
-| decode, GC part              | 0.000 | 0.000 | 0.039 | 0.230 |
-| candidate construction       | 0.002 | 0.043 | 0.378 | 1.785 |
-| candidates, GC part          | 0.000 | 0.025 | 0.186 | 0.848 |
-| time until completion usable | 0.014 | 0.108 | 1.036 | 4.908 |
-| usable, GC part              | 0.000 | 0.024 | 0.245 | 1.081 |
-| usable, GC runs              |     0 |     1 |     3 |     4 |
+| orgfdb (stdout discarded)    | 0.013 | 0.014 | 0.011 | 0.009 |
+| process call (wall)          | 0.012 | 0.033 | 0.134 | 0.409 |
+| transfer (process - orgfdb)  | 0.000 | 0.019 | 0.123 | 0.400 |
+| JSON parse                   | 0.001 | 0.025 | 0.133 | 0.617 |
+| JSON parse, GC part          | 0.000 | 0.015 | 0.021 | 0.038 |
+| presentation decode          | 0.001 | 0.020 | 0.080 | 0.325 |
+| decode, GC part              | 0.000 | 0.015 | 0.025 | 0.058 |
+| candidate construction       | 0.000 | 0.019 | 0.075 | 0.424 |
+| candidates, GC part          | 0.000 | 0.015 | 0.036 | 0.221 |
+| time until completion usable | 0.016 | 0.097 | 0.440 | 1.728 |
+| usable, GC part              | 0.000 | 0.061 | 0.162 | 0.420 |
+| usable, GC runs              |     0 |     4 |     8 |    12 |
+
+* Profiling and optimization (#39)
+
+The first measurement (#27) ran the package from the ~.el~ sources, so Emacs interpreted it. Interpreted, presentation decode took 2.3 s and candidate construction 3.3 s at 50000 rows. Byte-compiled code, which is what an installed package runs, is 2 to 4 times faster in these two phases (and the interpreted run hid the real GC share), so the benchmark now compiles the package first.
+
+Measured on the byte-compiled baseline (10000 rows, seconds, ~gc-cons-percentage~ 0.1):
+
+- Candidate construction (0.30 s, of which 0.26 s GC): per candidate one visible string was built from copies of every cell (~copy-sequence~ plus ~string-join~), a metadata plist was built, and three ~add-text-properties~ passes ran over the candidate. The garbage triggered about 8 collections per 10000 candidates because each one traverses the whole retained heap.
+- Presentation decode (0.16 s, 0.10 s GC): one ~mapcar~ list plus ~vconcat~ per row, a ~vector-value~ call with an extra validation per cell field, and ~intern~ for every role.
+- JSON parse (0.14 s): parse time is the same for alist, hash table and plist objects and for ~json-parse-buffer~ (0.10 to 0.12 s at 10000 rows, 0.5 to 0.6 s at 50000 rows). The cost is the C parser creating about 4.6 MB of strings, so nothing is changed there.
+
+Changes:
+
+- ~--visible-row~ concatenates the display texts once (~mapconcat~) and puts the faces on the result with ~put-text-property~, instead of copying and propertizing every segment. ~--search-row~ uses ~mapconcat~ and loops with ~while~.
+- ~--candidate~ adds the properties in two passes (body with its display text, hidden identity suffix with the empty display) that share one metadata plist, instead of three passes.
+- Rows and cells are decoded with preallocated vectors and without the intermediate list; cell fields are bounds-checked once per cell, and role symbols are interned once per schema role. All validation and error messages are unchanged.
+- ~gc-cons-threshold~ is let-bound to 64 MB (never lowered) during the synchronous JSON parse, ~--decode~ and ~--candidates~. The values are restored by the ~let~. In batch mode this lowers decode plus candidates at 10000 rows from 0.32 s to 0.10 s because the default threshold of 800000 bytes causes a collection every few hundred rows while the retained heap keeps growing.
+
+Candidate strings, text properties, display strings, search text, ordering, action records and errors are unchanged (the specs are the contract, and the candidates of the 10000 row payload were also compared before and after).
+
+** Before and after
+
+One-shot query, seconds, median of 3 runs. "Interpreted" is the original measurement from #27 (sources loaded as ~.el~), "compiled" is the same code byte-compiled, "after" is the result of #39.
+
+| Phase                        | 10000 interpreted | 10000 compiled | 10000 after | 50000 interpreted | 50000 compiled | 50000 after |
+|------------------------------+-------------------+----------------+-------------+-------------------+----------------+-------------|
+| orgfdb                       |             0.121 |          0.147 |       0.118 |             0.663 |          0.853 |       0.999 |
+| transfer                     |             0.059 |          0.099 |       0.130 |             0.259 |          0.308 |       0.300 |
+| JSON parse                   |             0.141 |          0.158 |       0.140 |             0.655 |          0.619 |       0.595 |
+| presentation decode          |             0.487 |          0.163 |       0.081 |             2.267 |          0.601 |       0.329 |
+| candidate construction       |             0.251 |          0.304 |       0.077 |             3.260 |          1.418 |       0.404 |
+| time until completion usable |             1.072 |          0.954 |       0.553 |             6.114 |          4.514 |       2.664 |
+| usable, GC runs              |                 4 |             29 |          10 |                 8 |             60 |          34 |
+
+Decode plus candidate construction falls from 0.47 s to 0.16 s at 10000 rows and from 2.0 s to 0.73 s at 50000 rows. The orgfdb time varies by run (0.85 to 1.0 s at 50000 rows) and is not affected by the Emacs changes.
 
 * Notes
 
 - The phases are measured in separate runs, so their sum differs from the total by GC timing noise. The candidate construction phase at 50000 rows varies the most because its GC share depends on the heap left by earlier phases.
 - The one-shot payload at 50000 rows (22.9 MB) is smaller than the 28.8 MB of the Rust baseline in #5 because the corpus generator and columns differ.
-- The numbers are from one machine in batch mode. Interactive Emacs with a larger ~gc-cons-threshold or a faster CPU will be quicker.
+- The numbers are from one machine in batch mode. Interactive Emacs with a faster CPU will be quicker.
+- The "usable" time includes the GC of the surrounding Emacs heap, which grows with the payload. The remaining 10 collections at 10000 rows come from the process output buffer, the stdout string and the parse, which run outside the 64 MB threshold of the decode phases.
 
 * Conclusion
 
-- *Rust and transfer are not the bottleneck.* At 50000 rows ~orgfdb~ takes 0.66 s one-shot and under 0.01 s for a cached read; moving 22.9 MB into Emacs costs 0.26 to 0.28 s. At 10000 rows both together stay under 0.25 s.
-- *The remaining bottleneck is on the Emacs side after the JSON arrives.* Presentation decode (2.3 s) plus candidate construction (1.8 to 3.3 s, of which 0.8 to 2.3 s is GC) make up 80 to 90 percent of the time until completion is usable: 6.1 s one-shot and 4.9 s cached at 50000 rows, 1.0 to 1.1 s at 10000 rows and about 0.1 s at 1000 rows. JSON parsing (0.62 to 0.66 s) is the next largest part.
-- *The Rust cache only removes about 1.2 s of 6.1 s* at 50000 rows (the query and part of the transfer), because everything the cache cannot skip happens in Emacs.
-- *An Emacs-side cache is not justified yet.* Up to 10000 rows the path is about one second, and at 50000 rows the cost is dominated by decode and candidate construction, which can likely be reduced directly (fewer allocations per row, less GC pressure) before keeping decoded candidates around. A client cache of decoded candidates would only make sense after that, and then needs invalidation against the watcher generation. Both are follow-up decisions and are not part of this measurement.
+- *10000 rows are now clearly under one second.* One-shot 0.55 s and cached 0.44 s until completion is usable (interpreted baseline: 1.07 s and 1.04 s). The remaining time is spread over orgfdb (0.12 s one-shot), moving the payload into Emacs (0.12 to 0.13 s), JSON parsing (0.13 to 0.14 s), decode (0.08 s) and candidates (0.08 s). No single Emacs phase dominates any more.
+- *At 50000 rows* the one-shot path takes 2.7 s and the cached path 1.7 s (from 6.1 s and 4.9 s). JSON parsing (0.6 s), transfer (0.3 to 0.4 s) and the orgfdb query (1.0 s one-shot) are now as large as decode and candidates together. Further gains need a smaller payload (Rust side, for example no padding in the transmitted ~display_text~) or a cache of decoded candidates; neither is part of this change.
+- *An Emacs-side cache is still not justified.* The cached path saves only the orgfdb part because Emacs parses, decodes and builds candidates from the full payload every time; with these costs at 10000 rows that is below 0.3 s.
