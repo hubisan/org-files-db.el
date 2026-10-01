@@ -2,6 +2,10 @@
 
 * Unreleased
 
+- =ADDED= Added open actions for headings, files, link sources, and link targets.
+  - ~org-files-db-actions-open-result~ is the default action and opens the source file at the stored byte position, falling back to the stored line.
+  - ~org-files-db-actions-open-link-target~ opens the resolved target of a link result and signals a user error for non-link results or unresolved targets.
+  - Neither action starts an ~orgfdb~ process.
 - =ADDED= Added structured CLI errors and reload by id.
   - Every ~orgfdb~ call passes ~--error-format json~; the single JSON line on stderr is decoded so error messages use the CLI ~message~, and the error data is ~(MESSAGE STATUS STDERR KIND)~ with ~KIND~ nil for plain text stderr.
   - Added the ~org-files-db-stale-index~ error (a child of ~org-files-db-cli-error~) for the ~stale-index~ kind.
