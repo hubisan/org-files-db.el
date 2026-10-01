@@ -203,6 +203,23 @@ Embark is optional and never required. Results complete in the ~org-files-db-res
 - ~RET~ runs the default action for the result on the current line
 - ~n~ and ~p~ move to the next and previous line
 - ~embark-act~ on a line offers the same actions as in the minibuffer
+- ~o~ exports the rows as an outline, see below
+
+** Outline export
+
+~org-files-db-embark-export-outline~ exports heading results as an Org outline of links in a read-only ~*org-files-db outline*~ buffer. Run ~embark-export~ (~E~) on the results first, then press ~o~ in the ~*org-files-db export*~ buffer to turn its rows into the outline. Other result kinds are refused with "Outline export needs heading results". ~org-files-db-outline-export~ does the same from Lisp for a list of heading records and their presentation.
+
+Every file becomes a top-level heading with a link to the file, and its headings sit one level deeper than in the file. Headlines keep the TODO keyword, priority and local tags (not inherited ones); the title is a link to the heading: ~file:PATH::#CUSTOM_ID~, else ~id:ID~, else ~file:PATH::LINE~. Matched headings are highlighted with the face ~org-files-db-outline-match~. ~C-x C-s~ in the buffer saves the text, without faces, to a file.
+
+The structure comes from ~orgfdb~, the content is read from the source files. If the index no longer matches a file, the export stops with "Index changed, run the query again" and exports nothing.
+
+- ~org-files-db-outline-export-ancestors~ (default ~t~) keeps the ancestors of matched headings. When ~nil~ only matched headings are listed, flat on level 2 under their file.
+- ~org-files-db-outline-export-children~ (default ~nil~) adds the direct child headings (~children~) or all descendant headings (~subtree~) of matched headings as links.
+- ~org-files-db-outline-export-planning~ (default ~t~) copies the planning line.
+- ~org-files-db-outline-export-properties~ (default ~nil~) copies the property drawer of matched headings.
+- ~org-files-db-outline-export-body~ (default ~nil~) copies the body text of matched headings.
+
+Ancestors and added children only get their headline, and ancestors also their planning line, never properties or body.
 
 * Development
 
@@ -229,6 +246,7 @@ lisp/org-files-db-actions.el       Result actions
 lisp/org-files-db-views.el         Predefined views
 lisp/org-files-db-watch.el         Watch mode
 lisp/org-files-db-cache.el         Cache mode
+lisp/org-files-db-outline.el       Outline export of matched headings
 lisp/org-files-db-embark.el        Optional Embark integration
 tests/                             Buttercup tests
 bench/                             Benchmark script

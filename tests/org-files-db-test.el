@@ -2805,6 +2805,296 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                                           embark-target-finders)
                                     :to-be-truthy))))))
 
+(defun org-files-db-test--outline-trim (node matched)
+  "Return outline NODE with MATCHED flags set and unmatched leaves removed.
+Return nil when nothing below NODE is matched and NODE is not a root."
+  (let* ((children (delq nil
+                         (mapcar (lambda (child)
+                                   (org-files-db-test--outline-trim child matched))
+                                 (append (alist-get 'children node) nil))))
+         (is-matched (and (memq (alist-get 'id node) matched) t)))
+    (when (or children is-matched (eq (alist-get 'kind node) 'root))
+      (setf (alist-get 'children node) (vconcat children))
+      (setf (alist-get 'matched node) (if is-matched t :false))
+      node)))
+
+(defun org-files-db-test--outline-json (corpus matched)
+  "Return the outline fixture for CORPUS with only the ids MATCHED matched."
+  (let ((data (json-parse-string
+               (org-files-db-test--corpus-fixture
+                "query-json-outline-by-ids.json" corpus)
+               :object-type 'alist)))
+    (setf (alist-get 'results data)
+          (vconcat (mapcar (lambda (root)
+                             (org-files-db-test--outline-trim root matched))
+                           (alist-get 'results data))))
+    (json-serialize data)))
+
+(defmacro org-files-db-test--outline-options (options &rest body)
+  "Run BODY with the outline export OPTIONS plist bound."
+  (declare (indent 1))
+  `(let ((org-files-db-outline-export-ancestors
+          (if (plist-member ,options :ancestors) (plist-get ,options :ancestors) t))
+         (org-files-db-outline-export-children (plist-get ,options :children))
+         (org-files-db-outline-export-planning
+          (if (plist-member ,options :planning) (plist-get ,options :planning) t))
+         (org-files-db-outline-export-properties (plist-get ,options :properties))
+         (org-files-db-outline-export-body (plist-get ,options :body)))
+     ,@body))
+
+(describe "outline export"
+          (let (corpus file)
+            (before-each
+             (setq org-files-db-test--actions-directory
+                   (make-temp-file "org-files-db-outline-" t)
+                   corpus (file-name-as-directory org-files-db-test--actions-directory)
+                   file (expand-file-name "outline.org" corpus))
+             (copy-file (expand-file-name "corpus/outline.org"
+                                          org-files-db-test--fixture-directory)
+                        file)
+             (spy-on 'org-files-db-process--run-process :and-throw-error 'error))
+
+            (after-each
+             (dolist (buffer (buffer-list))
+               (when-let* ((name (buffer-file-name buffer)))
+                 (when (string-prefix-p org-files-db-test--actions-directory name)
+                   (with-current-buffer buffer (set-buffer-modified-p nil))
+                   (kill-buffer buffer))))
+             (when (get-buffer "*org-files-db outline*")
+               (kill-buffer "*org-files-db outline*"))
+             (delete-directory org-files-db-test--actions-directory t))
+
+            (cl-flet*
+                ((record (id &optional (kind 'heading))
+                   (org-files-db-presentation--make-record
+                    :kind kind :id id :file file))
+                 (export (matched options &optional records)
+                   (spy-on 'org-files-db-process--run-process :and-return-value
+                           (list :status 0
+                                 :stdout (org-files-db-test--outline-json corpus matched)))
+                   (let* ((org-files-db-configs (org-files-db-test--actions-configs))
+                          (org-files-db-default-config "main")
+                          (records (or records (mapcar #'record matched)))
+                          (presentation (org-files-db-test--single-result-presentation
+                                         (car records) "main")))
+                     (org-files-db-test--outline-options options
+                                                         (with-current-buffer
+                                                             (org-files-db-outline-export records presentation)
+                                                           (buffer-substring-no-properties (point-min) (point-max))))))
+                 (expected (text)
+                   (string-replace "@P@" (abbreviate-file-name file) text)))
+
+              (it "exports the matched headings under their shared ancestors"
+                  (expect (export '(8 9 11) nil)
+                          :to-equal
+                          (expected "* [[file:@P@][Outline]]
+** [[file:@P@::#parent][Parent]] :proj:
+*** TODO [[id:b1b2c3d4-0000-4000-8000-000000000002][Child one]] :work:
+SCHEDULED: <2026-10-02 Fri>
+**** [[file:@P@::14][Grandchild]]
+*** [[file:@P@::16][Child two]]
+** [[file:@P@::17][Other]]
+*** [[file:@P@::18][Match in other]]
+"))
+                  (let ((arguments (car (spy-calls-args-for
+                                         'org-files-db-process--run-process 0))))
+                    (expect arguments :to-contain "--output")
+                    (expect (cadr (member "--output" arguments)) :to-equal "outline")
+                    (expect arguments :to-contain "--expect-generation")
+                    (expect (car (last arguments)) :to-equal "(headings (id 8 9 11))")))
+
+              (it "lists only the matched headings flat without ancestors"
+                  (expect (export '(8 9 11) '(:ancestors nil))
+                          :to-equal
+                          (expected "* [[file:@P@][Outline]]
+** [[file:@P@::14][Grandchild]]
+** [[file:@P@::16][Child two]]
+** [[file:@P@::18][Match in other]]
+")))
+
+              (it "adds children or the subtree of matched headings as links"
+                  (dolist (case
+                           `((nil . "* [[file:@P@][Outline]]
+** [[file:@P@::#parent][Parent]] :proj:
+")
+                             (children . "* [[file:@P@][Outline]]
+** [[file:@P@::#parent][Parent]] :proj:
+*** TODO [[id:b1b2c3d4-0000-4000-8000-000000000002][Child one]] :work:
+*** [[file:@P@::16][Child two]]
+")
+                             (subtree . "* [[file:@P@][Outline]]
+** [[file:@P@::#parent][Parent]] :proj:
+*** TODO [[id:b1b2c3d4-0000-4000-8000-000000000002][Child one]] :work:
+**** [[file:@P@::14][Grandchild]]
+*** [[file:@P@::16][Child two]]
+")))
+                    (expect (export '(6) (list :children (car case)))
+                            :to-equal (expected (cdr case)))))
+
+              (it "adds children below flat matched headings and skips other matches"
+                  (expect (export '(6 7) '(:ancestors nil :children subtree))
+                          :to-equal
+                          (expected "* [[file:@P@][Outline]]
+** [[file:@P@::#parent][Parent]] :proj:
+*** [[file:@P@::16][Child two]]
+** TODO [[id:b1b2c3d4-0000-4000-8000-000000000002][Child one]] :work:
+SCHEDULED: <2026-10-02 Fri>
+*** [[file:@P@::14][Grandchild]]
+")))
+
+              (it "copies planning, properties and body of matched headings only"
+                  (let ((child "*** TODO [[id:b1b2c3d4-0000-4000-8000-000000000002][Child one]] :work:\n")
+                        (planning "SCHEDULED: <2026-10-02 Fri>\n")
+                        (properties ":PROPERTIES:\n:ID:       b1b2c3d4-0000-4000-8000-000000000002\n:END:\n")
+                        (body "Child body.\n"))
+                    (dolist (case `((nil ,(concat child planning))
+                                    ((:planning nil) ,child)
+                                    ((:properties t) ,(concat child planning properties))
+                                    ((:body t) ,(concat child planning body))
+                                    ((:planning nil :properties t :body t)
+                                     ,(concat child properties body))))
+                      (expect (export '(7) (car case))
+                              :to-equal
+                              (expected (concat "* [[file:@P@][Outline]]\n"
+                                                "** [[file:@P@::#parent][Parent]] :proj:\n"
+                                                (cadr case)))))))
+
+              (it "marks matched headline lines with the match face only"
+                  (export '(8 9 11) nil)
+                  (with-current-buffer "*org-files-db outline*"
+                    (let (marked plain)
+                      (goto-char (point-min))
+                      (while (not (eobp))
+                        (let ((faces (delq nil
+                                           (mapcar (lambda (overlay)
+                                                     (overlay-get overlay 'face))
+                                                   (overlays-at (point)))))
+                              (line (buffer-substring-no-properties
+                                     (line-beginning-position) (line-end-position))))
+                          (if (memq 'org-files-db-outline-match faces)
+                              (push line marked)
+                            (push line plain)))
+                        (forward-line 1))
+                      (expect (length marked) :to-be 3)
+                      (expect (cl-every (lambda (line)
+                                          (string-match-p "Grandchild\\|Child two\\|Match in other" line))
+                                        marked)
+                              :to-be-truthy)
+                      (expect (cl-some (lambda (line)
+                                         (string-match-p "Grandchild\\|Child two\\|Match in other" line))
+                                       plain)
+                              :to-be nil))))
+
+              (it "shows a read-only outline buffer that saves without faces"
+                  (export '(8 9 11) nil)
+                  (with-current-buffer "*org-files-db outline*"
+                    (let ((target (expand-file-name "saved.org" corpus)))
+                      (expect major-mode :to-be 'org-mode)
+                      (expect buffer-read-only :to-be t)
+                      (expect (key-binding (kbd "C-x C-s"))
+                              :to-be 'org-files-db-outline-export-save)
+                      (expect (org-files-db-outline-export-save target) :to-equal target)
+                      (with-temp-buffer
+                        (insert-file-contents target)
+                        (expect (buffer-string) :to-equal
+                                (buffer-substring-no-properties
+                                 (with-current-buffer "*org-files-db outline*" (point-min))
+                                 (with-current-buffer "*org-files-db outline*" (point-max))))
+                        (expect (next-single-property-change (point-min) 'face nil (point-max))
+                                :to-equal (point-max))))))
+
+              (it "rejects results that are not headings without exporting"
+                  (dolist (kind '(file link root))
+                    (expect (export '(8) nil (list (record 8 kind)))
+                            :to-throw 'user-error '("Outline export needs heading results")))
+                  (expect 'org-files-db-process--run-process :not :to-have-been-called)
+                  (expect (get-buffer "*org-files-db outline*") :to-be nil))
+
+              (it "reports a stale index and exports nothing"
+                  (spy-on 'org-files-db-process--run-process :and-return-value
+                          (list :status 1 :stdout ""
+                                :stderr (org-files-db-test--fixture-text
+                                         "error-stale-index.stderr")))
+                  (let ((org-files-db-configs (org-files-db-test--actions-configs))
+                        (org-files-db-default-config "main"))
+                    (expect (org-files-db-outline-export
+                             (list (record 8))
+                             (org-files-db-test--single-result-presentation
+                              (record 8) "main"))
+                            :to-throw 'user-error '("Index changed, run the query again")))
+                  (expect (get-buffer "*org-files-db outline*") :to-be nil))
+
+              (it "reports a changed source file and exports nothing"
+                  (dolist (change '(("* Parent" . "* Renamed")
+                                    ("#+title: Outline\n" . "#+title: Outline\n\n")
+                                    ("** Match in other" . "*** Match in other")))
+                    (with-temp-file file
+                      (insert (string-replace
+                               (car change) (cdr change)
+                               (with-temp-buffer
+                                 (insert-file-contents
+                                  (expand-file-name "corpus/outline.org"
+                                                    org-files-db-test--fixture-directory))
+                                 (buffer-string)))))
+                    (expect (export '(8 9 11) nil)
+                            :to-throw 'user-error '("Index changed, run the query again"))
+                    (expect (get-buffer "*org-files-db outline*") :to-be nil)))
+
+              (it "reports a missing source file"
+                  (delete-file file)
+                  (expect (export '(8 9 11) nil)
+                          :to-throw 'user-error '("Index changed, run the query again"))))))
+
+(describe "outline export through Embark"
+          (let (presentation candidates)
+            (before-each
+             (let ((cell (lambda (text)
+                           (org-files-db-presentation--make-presentation-cell
+                            :search-text text :display-text text :role 'title))))
+               (setq presentation
+                     (org-files-db-presentation--make-presentation
+                      :version 3 :database-id "db" :generation 1
+                      :config "work" :schemas nil
+                      :results (vector
+                                (org-files-db-presentation--make-record
+                                 :kind 'heading :id 1 :file "/a.org" :line 1)
+                                (org-files-db-presentation--make-record
+                                 :kind 'heading :id 2 :file "/a.org" :line 2))
+                      :rows (vector
+                             (org-files-db-presentation--make-presentation-row
+                              :result-index 0 :cells (vector (funcall cell "One")))
+                             (org-files-db-presentation--make-presentation-row
+                              :result-index 1 :cells (vector (funcall cell "Two"))))))
+               (setq candidates (org-files-db-presentation--candidates presentation)))
+             (spy-on 'org-files-db-outline-export :and-return-value 'buffer))
+
+            (after-each
+             (when (get-buffer "*org-files-db export*")
+               (kill-buffer "*org-files-db export*")))
+
+            (it "exports the candidates as an outline"
+                (expect (org-files-db-embark-export-outline (reverse candidates))
+                        :to-be 'buffer)
+                (expect (spy-calls-args-for 'org-files-db-outline-export 0)
+                        :to-equal
+                        (list (list (aref (org-files-db-presentation-results presentation) 1)
+                                    (aref (org-files-db-presentation-results presentation) 0))
+                              presentation)))
+
+            (it "converts the rows of the flat export buffer with o"
+                (with-current-buffer (org-files-db-embark-export candidates)
+                  (expect (key-binding (kbd "o")) :to-be 'org-files-db-embark-export-outline)
+                  (execute-kbd-macro (kbd "o")))
+                (expect (length (car (spy-calls-args-for 'org-files-db-outline-export 0)))
+                        :to-be 2))
+
+            (it "rejects other buffers and empty candidates"
+                (with-temp-buffer
+                  (expect (org-files-db-embark--outline-candidates)
+                          :to-throw 'user-error))
+                (expect (org-files-db-embark-export-outline nil)
+                        :to-throw 'user-error))))
+
 (provide 'org-files-db-test)
 
 ;;; org-files-db-test.el ends here

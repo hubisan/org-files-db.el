@@ -40,6 +40,7 @@
 (require 'org-files-db-views)
 (require 'org-files-db-watch)
 (require 'org-files-db-cache)
+(require 'org-files-db-outline)
 (require 'org-files-db-embark)
 
 (provide 'org-files-db)

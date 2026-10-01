@@ -31,7 +31,9 @@
 ;;; Code:
 
 (require 'org-files-db-actions)
+(require 'cl-lib)
 (require 'org-files-db-presentation)
+(require 'org-files-db-outline)
 
 (defvar embark-keymap-alist)
 (defvar embark-exporters-alist)
@@ -148,6 +150,7 @@ DOC is the docstring."
 (defvar-keymap org-files-db-export-mode-map
   :doc "Keymap for `org-files-db-export-mode'."
   "RET" #'org-files-db-embark-export-run-default-action
+  "o" #'org-files-db-embark-export-outline
   "n" #'next-line
   "p" #'previous-line)
 
@@ -175,6 +178,36 @@ Insert one line per candidate in the given order in a new buffer in
                    'org-files-db-candidate candidate))))
         (goto-char (point-min))))
     (pop-to-buffer-same-window buffer)))
+
+;;; Outline export
+
+(defun org-files-db-embark--outline-candidates ()
+  "Return the candidates of the rows in the current export buffer."
+  (unless (derived-mode-p 'org-files-db-export-mode)
+    (user-error "Run this in an org-files-db export buffer"))
+  (let (candidates)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when-let* ((candidate (get-text-property (point) 'org-files-db-candidate)))
+          (push candidate candidates))
+        (forward-line 1)))
+    (nreverse candidates)))
+
+(defun org-files-db-embark-export-outline (candidates)
+  "Export the heading result CANDIDATES as an Org outline of links.
+Interactively use the rows of the `org-files-db-export-mode' buffer, which
+`embark-export' creates. See
+`org-files-db-outline-export' for the outline and its options."
+  (interactive (list (org-files-db-embark--outline-candidates)))
+  (let* ((resolved (mapcar #'org-files-db-embark--resolve candidates))
+         (presentation (cdar resolved))
+         (records (mapcar #'car resolved)))
+    (unless resolved
+      (user-error "No org-files-db results to export"))
+    (unless (cl-every (lambda (entry) (eq (cdr entry) presentation)) resolved)
+      (user-error "Results come from different queries"))
+    (org-files-db-outline-export records presentation)))
 
 (with-eval-after-load 'embark
   (add-to-list 'embark-keymap-alist

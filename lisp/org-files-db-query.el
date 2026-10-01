@@ -121,16 +121,18 @@ action record."
   "Query target names for reloading records by kind.")
 
 (cl-defun org-files-db-query--guarded-json
-    (query-string presentation &key includes config)
+    (query-string presentation &key includes config output)
   "Run QUERY-STRING guarded by the index state of PRESENTATION.
 Return the parsed JSON `results' vector. INCLUDES is a list of include
-names. CONFIG defaults to the configuration of PRESENTATION. Signal
+names. OUTPUT is an optional output shape name such as \"outline\".
+CONFIG defaults to the configuration of PRESENTATION. Signal
 `org-files-db-stale-index' when the index changed since PRESENTATION."
   (let* ((config-name (org-files-db-process--config-name
                        (or config (org-files-db-presentation-config presentation))))
          (arguments
           (append
            (list "query" "--format" "json")
+           (and output (list "--output" output))
            (apply #'append
                   (mapcar (lambda (include) (list "--include" include)) includes))
            (list "--expect-database-id"

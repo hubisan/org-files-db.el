@@ -127,6 +127,45 @@ Set this to nil to wait without a timeout."
   :type '(choice (const :tag "No timeout" nil) number)
   :group 'org-files-db)
 
+;;; Outline export
+
+(defcustom org-files-db-outline-export-ancestors t
+  "Whether the outline export includes the ancestors of matched headings.
+When non-nil the outline keeps the heading hierarchy of each file. When nil
+only the matched headings are exported, flat directly under their file."
+  :type 'boolean
+  :group 'org-files-db)
+
+(defcustom org-files-db-outline-export-children nil
+  "Which descendants of matched headings the outline export adds as links.
+Nil adds none, `children' adds the direct child headings and `subtree' adds
+all descendant headings."
+  :type '(choice (const :tag "None" nil)
+                 (const :tag "Direct children" children)
+                 (const :tag "Whole subtree" subtree))
+  :group 'org-files-db)
+
+(defcustom org-files-db-outline-export-planning t
+  "Whether the outline export copies the planning line of headings.
+Ancestors and matched headings both keep their planning line."
+  :type 'boolean
+  :group 'org-files-db)
+
+(defcustom org-files-db-outline-export-properties nil
+  "Whether the outline export copies the property drawer of matched headings."
+  :type 'boolean
+  :group 'org-files-db)
+
+(defcustom org-files-db-outline-export-body nil
+  "Whether the outline export copies the body text of matched headings."
+  :type 'boolean
+  :group 'org-files-db)
+
+(defface org-files-db-outline-match
+  '((t (:inherit highlight)))
+  "Face for matched headings in the org-files-db outline export."
+  :group 'org-files-db)
+
 (defface org-files-db-heading
   '((t (:inherit org-level-1 :height 1.0)))
   "Face for heading cells in org-files-db completion."
