@@ -17,17 +17,10 @@ jobs:
     name: Emacs ${{ matrix.emacs-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - emacs-version: "29.4"
-            experimental: false
-          - emacs-version: "30.2"
-            experimental: false
-          - emacs-version: snapshot
-            experimental: true
+        emacs-version: ["29.4", "30.2"]
 
     steps:
       - name: Check out repository
