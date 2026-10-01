@@ -5,7 +5,7 @@ ELISP_FILES := $(shell find lisp tests -type f -name '*.el' | sort)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help all setup ci compile fmt lint test package install clean emacs
+.PHONY: help all setup ci compile fmt lint test bench package install clean emacs
 
 help:
 	@printf '%s\n' \
@@ -15,6 +15,7 @@ help:
 		'make fmt      Format all Emacs Lisp files' \
 		'make lint     Run package and source linters' \
 		'make test     Run Buttercup tests' \
+		'make bench    Run the on-demand benchmark (needs orgfdb)' \
 		'make package  Build the package archive' \
 		'make install  Install the package' \
 		'make clean    Remove generated files' \
@@ -60,6 +61,11 @@ install:
 test:
 	@printf '\n\e[1;34m%-10s\e[0m\n\n' '>> TEST'
 	$(EASK) test buttercup
+
+bench:
+	@printf '\n\e[1;34m%-10s\e[0m\n\n' '>> BENCH'
+	$(EMACS) --batch -Q -L lisp -l bench/org-files-db-bench.el \
+		--eval '(org-files-db-bench-run)'
 
 package:
 	@printf '\n\e[1;34m%-10s\e[0m\n\n' '>> PACKAGING'

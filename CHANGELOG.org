@@ -2,6 +2,9 @@
 
 * Unreleased
 
+- =ADDED= Added an on-demand end-to-end benchmark, run with ~make bench~ (needs ~orgfdb~, not part of ~make ci~).
+  - ~bench/org-files-db-bench.el~ generates corpora of 100 to 50,000 headings and measures the one-shot query and the cached ~view read~ path: ~orgfdb~ time, payload size, transfer, JSON parsing, presentation decode, candidate construction and time until completion is usable.
+  - The results and the identified bottleneck are in ~docs/benchmark.org~.
 - =ADDED= Added ~org-files-db-actions-rename-file~, which renames a file result and updates incoming indexed ~file:~ links.
   - Incoming links are reloaded with the stale-index guard before anything changes; an existing target or a changed index leaves everything untouched.
   - Links keep their relative or absolute form, search option and description; links whose text no longer matches the index are skipped and counted.
