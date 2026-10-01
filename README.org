@@ -201,6 +201,8 @@ Actions that need more data than the list shows, such as the link and rename act
 - The command refuses an existing destination, a destination inside the directory, a missing destination parent and modified buffers visiting an affected file or a file inside the directory. Buffers visiting files inside the directory follow the move.
 - When a step fails, the edited files are restored, the directory is moved back, and the error lists anything that could not be undone. It does not check whether the directory is the root of a configured directory, so do not move a root.
 
+~M-x org-files-db-undo-rename-directory~ undoes the last rename or move of the session: it restores the original text of the edited files and moves the directory back. It shows the plan, asks for confirmation and refuses, changing nothing, when the new directory is gone, the old path exists again, an edited file changed since or a buffer visiting it is modified. It needs no ~orgfdb~ call; the record is forgotten after a successful undo.
+
 * Result buffer
 
 Instead of selecting one result in the minibuffer you can list every row in a read-only buffer.

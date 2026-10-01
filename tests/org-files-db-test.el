@@ -2993,7 +2993,103 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                                 (expect failed :to-be t)
                                 (expect (snapshot) :to-equal before)
                                 (expect (buffer-file-name buffer)
-                                        :to-equal (file "projekte/alt/notiz.org")))))))))
+                                        :to-equal (file "projekte/alt/notiz.org"))))))
+
+              (describe "undo"
+                        (before-each
+                         (setq org-files-db-directory--last-operation nil))
+
+                        (it "restores the corpus after a rename"
+                            (let ((before (snapshot))
+                                  (buffer (find-file-noselect
+                                           (file "projekte/alt/notiz.org"))))
+                              (rename)
+                              (setq messages nil)
+                              (expect (org-files-db-undo-rename-directory) :to-be nil)
+                              (expect (snapshot) :to-equal before)
+                              (expect (buffer-file-name buffer)
+                                      :to-equal (file "projekte/alt/notiz.org"))
+                              (expect (buffer-modified-p buffer) :to-be nil)
+                              (expect messages :to-equal
+                                      '("Directory rename undone, 1 files restored"))
+                              (expect 'yes-or-no-p :to-have-been-called-with
+                                      "Undo directory rename and restore 1 files? ")))
+
+                        (it "shows the undo plan"
+                            (rename)
+                            (org-files-db-undo-rename-directory)
+                            (with-current-buffer "*org-files-db rename directory*"
+                              (expect (buffer-string) :to-match "\\`Undo: .*neu → .*alt\n")
+                              (expect (buffer-string) :to-match "index\\.org")))
+
+                        (it "restores the corpus after a move to another parent"
+                            (setq new (file "archiv/2026/alt"))
+                            (make-directory (file "archiv/2026"))
+                            (let ((before (snapshot)))
+                              (rename)
+                              (org-files-db-undo-rename-directory)
+                              (expect (snapshot) :to-equal before)))
+
+                        (it "refuses when an edited file changed since"
+                            (rename)
+                            (with-temp-buffer
+                              (insert-file-contents (file "index.org"))
+                              (goto-char (point-max))
+                              (insert "more\n")
+                              (write-region nil nil (file "index.org") nil 'silent))
+                            (spy-calls-reset 'yes-or-no-p)
+                            (let ((before (snapshot)))
+                              (expect (condition-case err (org-files-db-undo-rename-directory)
+                                        (user-error (cadr err)))
+                                      :to-match "nothing was undone: .*index\\.org changed")
+                              (expect (snapshot) :to-equal before)
+                              (expect 'yes-or-no-p :not :to-have-been-called)))
+
+                        (it "refuses when a visiting buffer is modified"
+                            (rename)
+                            (with-current-buffer (find-file-noselect (file "index.org"))
+                              (insert "x"))
+                            (expect (org-files-db-undo-rename-directory) :to-throw 'user-error))
+
+                        (it "refuses when the old directory was recreated"
+                            (rename)
+                            (make-directory old)
+                            (let ((before (snapshot)))
+                              (expect (org-files-db-undo-rename-directory) :to-throw 'user-error)
+                              (expect (snapshot) :to-equal before)))
+
+                        (it "has nothing to undo without a rename"
+                            (expect (condition-case err (org-files-db-undo-rename-directory)
+                                      (user-error (cadr err)))
+                                    :to-equal "No directory rename to undo"))
+
+                        (it "changes nothing when the confirmation is declined"
+                            (rename)
+                            (spy-on 'yes-or-no-p :and-return-value nil)
+                            (let ((before (snapshot)))
+                              (expect (org-files-db-undo-rename-directory) :to-be nil)
+                              (expect (snapshot) :to-equal before)
+                              (expect org-files-db-directory--last-operation :to-be-truthy)))
+
+                        (it "has nothing to undo the second time"
+                            (rename)
+                            (org-files-db-undo-rename-directory)
+                            (expect (org-files-db-undo-rename-directory) :to-throw 'user-error))
+
+                        (it "restores the renamed state when a step fails"
+                            (rename)
+                            (let ((before (snapshot))
+                                  (failed nil)
+                                  (original (symbol-function 'rename-file)))
+                              (cl-letf (((symbol-function 'rename-file)
+                                         (lambda (&rest args)
+                                           (if failed (apply original args)
+                                             (setq failed t)
+                                             (error "Injected failure")))))
+                                (expect (org-files-db-undo-rename-directory)
+                                        :to-throw 'user-error))
+                              (expect (snapshot) :to-equal before)
+                              (expect org-files-db-directory--last-operation :to-be-truthy)))))))
 
 (describe "directory entry points"
           (let (root)
