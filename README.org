@@ -276,14 +276,11 @@ Disabling ~org-files-db-cache-mode~ terminates running work, clears queued rebui
 
 * Embark export
 
-Query and search candidates use the ~org-files-db-result~ completion category.  With Embark installed, ~embark-export~ creates an Org buffer containing exactly the candidates matching the current minibuffer filter.
+Query and search candidates use the ~org-files-db-result~ completion category.  With Embark installed, ~embark-export~ opens an ~*org-files-db export*~ buffer in ~org-files-db-export-mode~ (read-only) with one line per row that matches the current minibuffer filter, in the displayed order.  Rows of one result that is shown on several rows stay separate lines.
 
-Customize:
-
-- ~org-files-db-export-layout~ to ~flat~ or ~outline~
-- ~org-files-db-export-linked-heading-style~ to ~preserve~ or ~resolve~
-
-~preserve~ keeps authored links embedded in heading titles.  ~resolve~ follows those links and displays the effective target title.
+- ~RET~ runs the default action for the result kind (~org-files-db-heading-action~, ~org-files-db-file-action~ or ~org-files-db-link-action~)
+- ~n~ and ~p~ move between lines
+- ~embark-act~ on a line offers the same actions as in the minibuffer (~org-files-db-embark-result-map~)
 
 * Result actions
 
@@ -382,7 +379,6 @@ lisp/org-files-db.el          Package entry point
 lisp/org-files-db-core.el     Configuration, CLI, results, columns, completion
 lisp/org-files-db-query.el    Query command
 lisp/org-files-db-search.el   One-shot and live FTS5 search
-lisp/org-files-db-export.el   Org rendering and Embark exporter
 lisp/org-files-db-actions.el  Link, follow, rename, and backlink actions
 lisp/org-files-db-cache.el    Generation-aware prepared predefined-view caches
 lisp/org-files-db-views.el    Named query and search views

@@ -2665,7 +2665,116 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                 (let* ((table (org-files-db-presentation--completion-table nil))
                        (metadata (funcall table "" nil 'metadata)))
                   (expect (cdr (assq 'category (cdr metadata)))
-                          :to-be 'org-files-db-result)))))
+                          :to-be 'org-files-db-result)))
+
+            (describe "export"
+                      (let (presentation candidates)
+                        (before-each
+                         (let ((row
+                                (lambda (index text)
+                                  (org-files-db-presentation--make-presentation-row
+                                   :result-index index
+                                   :row-context nil
+                                   :cells
+                                   (vector
+                                    (org-files-db-presentation--make-presentation-cell
+                                     :search-text text
+                                     :display-text text
+                                     :role 'title))))))
+                           (setq presentation
+                                 (org-files-db-presentation--make-presentation
+                                  :version 3 :database-id "db" :generation 1
+                                  :config "work" :schemas nil
+                                  :results
+                                  (vector
+                                   (org-files-db-presentation--make-record
+                                    :kind 'heading :id 1 :file "/a.org" :line 1)
+                                   (org-files-db-presentation--make-record
+                                    :kind 'file :id 2 :file "/b.org" :line 1))
+                                  :rows
+                                  (vector (funcall row 0 "First tag a")
+                                          (funcall row 0 "First tag b")
+                                          (funcall row 1 "Second"))))
+                           (setq candidates
+                                 (org-files-db-presentation--candidates presentation))))
+
+                        (after-each
+                         (when (get-buffer "*org-files-db export*")
+                           (kill-buffer "*org-files-db export*")))
+
+                        (it "lists one line per filtered candidate in order"
+                            (with-current-buffer
+                                (org-files-db-embark-export
+                                 (list (nth 2 candidates) (nth 1 candidates)
+                                       (nth 0 candidates)))
+                              (expect major-mode :to-be 'org-files-db-export-mode)
+                              (expect buffer-read-only :to-be t)
+                              (expect (split-string (buffer-string) "\n" t)
+                                      :to-equal '("Second" "First tag b" "First tag a"))))
+
+                        (it "keeps rows of one result as separate lines with the same record"
+                            (with-current-buffer
+                                (org-files-db-embark-export (list (nth 0 candidates)
+                                                                  (nth 1 candidates)))
+                              (let ((first (get-text-property 1 'org-files-db-result))
+                                    (second (progn (forward-line 1)
+                                                   (get-text-property
+                                                    (point) 'org-files-db-result))))
+                                (expect (count-lines (point-min) (point-max)) :to-be 2)
+                                (expect first :to-be second)
+                                (expect (get-text-property (point) 'org-files-db-candidate)
+                                        :to-equal (nth 1 candidates))
+                                (expect (get-text-property (point) 'org-files-db-presentation)
+                                        :to-be presentation))))
+
+                        (it "runs the default action for the record kind on RET"
+                            (let (seen)
+                              (spy-on 'org-files-db-actions-open-result
+                                      :and-call-fake
+                                      (lambda (record)
+                                        (push (list record
+                                                    org-files-db-actions--current-presentation
+                                                    org-files-db-actions--current-action-config)
+                                              seen)))
+                              (let ((org-files-db-heading-action #'org-files-db-actions-open-result)
+                                    (org-files-db-file-action #'org-files-db-actions-open-result))
+                                (with-current-buffer
+                                    (org-files-db-embark-export (list (nth 1 candidates)
+                                                                      (nth 2 candidates)))
+                                  (execute-kbd-macro (kbd "RET"))
+                                  (execute-kbd-macro (kbd "n"))
+                                  (execute-kbd-macro (kbd "RET"))))
+                              (expect (mapcar #'car (reverse seen))
+                                      :to-equal
+                                      (list (aref (org-files-db-presentation-results presentation) 0)
+                                            (aref (org-files-db-presentation-results presentation) 1)))
+                              (expect (nth 1 (car seen)) :to-be presentation)
+                              (expect (nth 2 (car seen)) :to-equal "work")))
+
+                        (it "finds the candidate at point as Embark target"
+                            (with-current-buffer
+                                (org-files-db-embark-export (list (nth 0 candidates)
+                                                                  (nth 2 candidates)))
+                              (forward-line 1)
+                              (forward-char 2)
+                              (let ((target (org-files-db-embark--export-target)))
+                                (expect (car target) :to-be 'org-files-db-result)
+                                (expect (cadr target) :to-equal (nth 2 candidates))
+                                (expect (caddr target) :to-be (line-beginning-position))
+                                (expect (cdddr target) :to-be (line-end-position)))))
+
+                        (it "finds no target outside the export mode"
+                            (with-temp-buffer
+                              (expect (org-files-db-embark--export-target) :to-be nil)))
+
+                        (it "registers the exporter and target finder"
+                            (unless (require 'embark nil t)
+                              (buttercup-skip "Embark is not available"))
+                            (expect (cdr (assq 'org-files-db-result embark-exporters-alist))
+                                    :to-be 'org-files-db-embark-export)
+                            (expect (memq #'org-files-db-embark--export-target
+                                          embark-target-finders)
+                                    :to-be-truthy))))))
 
 (provide 'org-files-db-test)
 
