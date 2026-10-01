@@ -6,6 +6,8 @@
   - Guarded by the index state, shown as a plan in ~*org-files-db rename directory*~ and confirmed before anything changes; failures restore the previous state.
   - Updates incoming links and, when moving to another parent, outgoing relative links of files inside the directory; the destination parent must exist.
   - Dired uses the directory at point as the default source and is reverted afterwards; with Embark, ~M~ in ~embark-file-map~ runs ~org-files-db-embark-rename-directory~ on a directory.
+- =ADDED= Added ~org-files-db-undo-rename-directory~ to undo the last directory rename or move of the session.
+  - Restores the original bytes of the edited files and moves the directory back after confirmation; refuses and changes nothing when the new directory, the old path or an edited file changed since.
 - =ADDED= Added result buffers for queries and views.
   - ~org-files-db-show-view~ and ~org-files-db-show-query~ list every row in a read-only ~org-files-db-export-mode~ buffer (~RET~ action, ~o~ outline, ~g~ refresh); a view with ~:display buffer~ is shown this way by ~org-files-db-view~.
   - The buffer code moved from ~org-files-db-embark.el~ to ~org-files-db-results.el~ and no longer depends on Embark.

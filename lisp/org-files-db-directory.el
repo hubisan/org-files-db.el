@@ -36,6 +36,12 @@
 (defconst org-files-db-directory--plan-buffer "*org-files-db rename directory*"
   "Name of the buffer showing the planned directory rename or move.")
 
+(defvar org-files-db-directory--last-operation nil
+  "The last successful directory rename or move, or nil.
+A plist with `:old' and `:new', the directory before and after, and `:files',
+a list of (FILE ORIGINAL WRITTEN) for each edited file, FILE being its path
+after the move and ORIGINAL and WRITTEN its bytes before and after the edit.")
+
 (defun org-files-db-directory--inside-p (file directory)
   "Return non-nil when FILE is inside DIRECTORY, which has no trailing slash."
   (string-prefix-p (file-name-as-directory directory) file))
@@ -288,7 +294,7 @@ Restore the previous state and signal a user error when a step fails."
          (retargeted (mapcar (lambda (buffer)
                                (cons buffer (buffer-file-name buffer)))
                              visiting))
-         originals renamed)
+         originals renamed written)
     (condition-case err
         (progn
           (dolist (entry (append outside inside))
@@ -298,11 +304,28 @@ Restore the previous state and signal a user error when a step fails."
           (dolist (entry (append outside inside))
             (org-files-db-directory--edit-file
              (car entry) (cdr entry) old new))
+          (dolist (entry (append outside inside))
+            (push (cons (car entry)
+                        (org-files-db-directory--read-bytes (car entry)))
+                  written))
           (rename-file old new)
           (setq renamed t)
           (dolist (entry retargeted)
             (org-files-db-actions--rename-visiting-buffer
-             (cdr entry) (org-files-db-directory--moved (cdr entry) old new))))
+             (cdr entry) (org-files-db-directory--moved (cdr entry) old new)))
+          (setq org-files-db-directory--last-operation
+                (list :old old :new new
+                      :files (mapcar
+                              (lambda (entry)
+                                (let ((file (car entry)))
+                                  (list (if (org-files-db-directory--inside-p
+                                             file old)
+                                            (org-files-db-directory--moved
+                                             file old new)
+                                          file)
+                                        (cdr entry)
+                                        (cdr (assoc file written)))))
+                              (reverse originals)))))
       (error
        (let ((result (org-files-db-directory--restore
                       (nreverse originals) old new renamed retargeted)))
@@ -404,6 +427,103 @@ With an interactive prefix argument, select the configuration."
         (message "Directory %s, %d links updated%s"
                  (if moving "moved" "renamed") (length changes)
                  (if (> skipped 0) (format ", %d skipped" skipped) "")))
+      nil)))
+
+(defun org-files-db-directory--undo-problems (operation)
+  "Return the problems that prevent undoing OPERATION, as strings."
+  (let ((old (plist-get operation :old))
+        (new (plist-get operation :new))
+        (files (plist-get operation :files))
+        problems)
+    (unless (file-directory-p new)
+      (push (format "%s no longer exists" (abbreviate-file-name new)) problems))
+    (when (file-exists-p old)
+      (push (format "%s exists again" (abbreviate-file-name old)) problems))
+    (dolist (entry files)
+      (let ((file (car entry)))
+        (cond
+         ((not (file-readable-p file))
+          (push (format "%s is missing" (abbreviate-file-name file)) problems))
+         ((not (equal (org-files-db-directory--read-bytes file) (nth 2 entry)))
+          (push (format "%s changed" (abbreviate-file-name file)) problems))
+         ((when-let* ((buffer (find-buffer-visiting file)))
+            (buffer-modified-p buffer))
+          (push (format "%s has unsaved changes" (abbreviate-file-name file))
+                problems)))))
+    (nreverse problems)))
+
+(defun org-files-db-directory--show-undo-plan (operation)
+  "Display the plan to undo OPERATION."
+  (with-current-buffer (get-buffer-create org-files-db-directory--plan-buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (format "Undo: %s → %s\n\nRestore:\n"
+                      (abbreviate-file-name (plist-get operation :new))
+                      (abbreviate-file-name (plist-get operation :old))))
+      (dolist (entry (plist-get operation :files))
+        (insert (format "%s\n" (abbreviate-file-name (car entry)))))
+      (goto-char (point-min))
+      (special-mode))
+    (display-buffer (current-buffer))))
+
+(defun org-files-db-directory--apply-undo (operation)
+  "Restore the files of OPERATION, then move its directory back.
+Restore the state before the undo and signal a user error when a step fails."
+  (let* ((old (plist-get operation :old))
+         (new (plist-get operation :new))
+         (files (plist-get operation :files))
+         (retargeted (mapcar (lambda (buffer)
+                               (cons buffer (buffer-file-name buffer)))
+                             (seq-filter
+                              (lambda (buffer)
+                                (when-let* ((name (buffer-file-name buffer)))
+                                  (org-files-db-directory--inside-p name new)))
+                              (buffer-list))))
+         renamed)
+    (condition-case err
+        (progn
+          (dolist (entry files)
+            (org-files-db-directory--write-bytes (nth 1 entry) (car entry))
+            (when-let* ((buffer (find-buffer-visiting (car entry))))
+              (with-current-buffer buffer
+                (revert-buffer t t t))))
+          (rename-file new old)
+          (setq renamed t)
+          (dolist (entry retargeted)
+            (org-files-db-actions--rename-visiting-buffer
+             (cdr entry) (org-files-db-directory--moved (cdr entry) new old))))
+      (error
+       (let ((result (org-files-db-directory--restore
+                      (mapcar (lambda (entry) (cons (car entry) (nth 2 entry)))
+                              files)
+                      new old renamed retargeted)))
+         (user-error "Undo failed: %s; restored: %s; not restored: %s"
+                     (error-message-string err)
+                     (if (car result) (string-join (car result) ", ") "nothing")
+                     (if (cdr result) (string-join (cdr result) ", ")
+                       "nothing")))))))
+
+;;;###autoload
+(defun org-files-db-undo-rename-directory ()
+  "Undo the last directory rename or move of this session.
+Restore the link text of the edited files and move the directory back. Refuse
+and change nothing when the new directory is gone, the old one exists again or
+an edited file changed since. Ask for confirmation after showing the plan."
+  (interactive)
+  (let ((operation org-files-db-directory--last-operation))
+    (unless operation
+      (user-error "No directory rename to undo"))
+    (when-let* ((problems (org-files-db-directory--undo-problems operation)))
+      (user-error "Cannot undo the directory rename, nothing was undone: %s"
+                  (string-join problems "; ")))
+    (org-files-db-directory--show-undo-plan operation)
+    (let ((count (length (plist-get operation :files))))
+      (if (not (yes-or-no-p
+                (format "Undo directory rename and restore %d files? " count)))
+          (message "Directory rename not undone")
+        (org-files-db-directory--apply-undo operation)
+        (setq org-files-db-directory--last-operation nil)
+        (message "Directory rename undone, %d files restored" count))
       nil)))
 
 (provide 'org-files-db-directory)
