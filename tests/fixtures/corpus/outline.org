@@ -1,0 +1,18 @@
+#+title: Outline
+
+* Parent :proj:
+:PROPERTIES:
+:CUSTOM_ID: parent
+:END:
+Parent body.
+** TODO Child one :work:
+SCHEDULED: <2026-10-02 Fri>
+:PROPERTIES:
+:ID:       b1b2c3d4-0000-4000-8000-000000000002
+:END:
+Child body.
+*** Grandchild
+Grandchild body.
+** Child two
+* Other
+** Match in other

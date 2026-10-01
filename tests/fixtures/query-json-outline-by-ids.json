@@ -1,0 +1,219 @@
+{
+  "target": "headings",
+  "output": "outline",
+  "includes": [],
+  "results": [
+    {
+      "kind": "root",
+      "matched": false,
+      "id": 2,
+      "level": 0,
+      "path": "@CORPUS@/outline.org",
+      "name": "outline.org",
+      "dir": "@CORPUS@",
+      "title": "Outline",
+      "title_raw": "Outline",
+      "root_heading_id": 5,
+      "mtime_ns": 1790876935085049379,
+      "size": 288,
+      "content_hash": "sha256:33c263ab981842cba1628d85135c52d6636a777a04497ac5e38315031e554d05",
+      "indexed_at": 1790876935,
+      "location": {
+        "file_path": "@CORPUS@/outline.org",
+        "line": 1,
+        "byte_start": null,
+        "byte_end": null
+      },
+      "tags": [],
+      "children": [
+        {
+          "kind": "heading",
+          "matched": false,
+          "id": 6,
+          "file_id": 2,
+          "parent_id": 5,
+          "level": 1,
+          "title": "Parent",
+          "title_raw": "Parent",
+          "todo_keyword": null,
+          "todo_type": null,
+          "priority": null,
+          "scheduled_raw": null,
+          "scheduled_ts": null,
+          "deadline_raw": null,
+          "deadline_ts": null,
+          "closed_raw": null,
+          "closed_ts": null,
+          "archivedp": false,
+          "footnote_section_p": false,
+          "all_tags": [
+            "proj"
+          ],
+          "location": {
+            "file_path": "@CORPUS@/outline.org",
+            "line": 3,
+            "byte_start": 18,
+            "byte_end": 262
+          },
+          "children": [
+            {
+              "kind": "heading",
+              "matched": false,
+              "id": 7,
+              "file_id": 2,
+              "parent_id": 6,
+              "level": 2,
+              "title": "Child one",
+              "title_raw": "TODO Child one",
+              "todo_keyword": "TODO",
+              "todo_type": "open",
+              "priority": null,
+              "scheduled_raw": "<2026-10-02 Fri>",
+              "scheduled_ts": 1790899200,
+              "deadline_raw": null,
+              "deadline_ts": null,
+              "closed_raw": null,
+              "closed_ts": null,
+              "archivedp": false,
+              "footnote_section_p": false,
+              "all_tags": [
+                "proj",
+                "work"
+              ],
+              "location": {
+                "file_path": "@CORPUS@/outline.org",
+                "line": 8,
+                "byte_start": 85,
+                "byte_end": 249
+              },
+              "children": [
+                {
+                  "kind": "heading",
+                  "matched": true,
+                  "id": 8,
+                  "file_id": 2,
+                  "parent_id": 7,
+                  "level": 3,
+                  "title": "Grandchild",
+                  "title_raw": "Grandchild",
+                  "todo_keyword": null,
+                  "todo_type": null,
+                  "priority": null,
+                  "scheduled_raw": null,
+                  "scheduled_ts": null,
+                  "deadline_raw": null,
+                  "deadline_ts": null,
+                  "closed_raw": null,
+                  "closed_ts": null,
+                  "archivedp": false,
+                  "footnote_section_p": false,
+                  "all_tags": [
+                    "proj",
+                    "work"
+                  ],
+                  "location": {
+                    "file_path": "@CORPUS@/outline.org",
+                    "line": 14,
+                    "byte_start": 217,
+                    "byte_end": 249
+                  },
+                  "children": []
+                }
+              ]
+            },
+            {
+              "kind": "heading",
+              "matched": true,
+              "id": 9,
+              "file_id": 2,
+              "parent_id": 6,
+              "level": 2,
+              "title": "Child two",
+              "title_raw": "Child two",
+              "todo_keyword": null,
+              "todo_type": null,
+              "priority": null,
+              "scheduled_raw": null,
+              "scheduled_ts": null,
+              "deadline_raw": null,
+              "deadline_ts": null,
+              "closed_raw": null,
+              "closed_ts": null,
+              "archivedp": false,
+              "footnote_section_p": false,
+              "all_tags": [
+                "proj"
+              ],
+              "location": {
+                "file_path": "@CORPUS@/outline.org",
+                "line": 16,
+                "byte_start": 249,
+                "byte_end": 262
+              },
+              "children": []
+            }
+          ]
+        },
+        {
+          "kind": "heading",
+          "matched": false,
+          "id": 10,
+          "file_id": 2,
+          "parent_id": 5,
+          "level": 1,
+          "title": "Other",
+          "title_raw": "Other",
+          "todo_keyword": null,
+          "todo_type": null,
+          "priority": null,
+          "scheduled_raw": null,
+          "scheduled_ts": null,
+          "deadline_raw": null,
+          "deadline_ts": null,
+          "closed_raw": null,
+          "closed_ts": null,
+          "archivedp": false,
+          "footnote_section_p": false,
+          "all_tags": [],
+          "location": {
+            "file_path": "@CORPUS@/outline.org",
+            "line": 17,
+            "byte_start": 262,
+            "byte_end": 288
+          },
+          "children": [
+            {
+              "kind": "heading",
+              "matched": true,
+              "id": 11,
+              "file_id": 2,
+              "parent_id": 10,
+              "level": 2,
+              "title": "Match in other",
+              "title_raw": "Match in other",
+              "todo_keyword": null,
+              "todo_type": null,
+              "priority": null,
+              "scheduled_raw": null,
+              "scheduled_ts": null,
+              "deadline_raw": null,
+              "deadline_ts": null,
+              "closed_raw": null,
+              "closed_ts": null,
+              "archivedp": false,
+              "footnote_section_p": false,
+              "all_tags": [],
+              "location": {
+                "file_path": "@CORPUS@/outline.org",
+                "line": 18,
+                "byte_start": 270,
+                "byte_end": 288
+              },
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
