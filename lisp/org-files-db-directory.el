@@ -225,6 +225,18 @@ position first. Links whose text differs from the index are skipped."
   (let ((coding-system-for-write 'no-conversion))
     (write-region bytes nil file nil 'silent)))
 
+(defun org-files-db-directory--save-file (file buffer)
+  "Save the edited text of FILE from BUFFER.
+BUFFER is the buffer visiting FILE, or a temporary buffer holding its text."
+  (with-current-buffer buffer
+    (if (equal (buffer-file-name) (expand-file-name file))
+        (save-buffer)
+      (write-region nil nil file nil 'silent))))
+
+(defun org-files-db-directory--rename (from to)
+  "Rename directory FROM to TO."
+  (rename-file from to))
+
 (defun org-files-db-directory--edit-file (file links old new)
   "Rewrite LINKS in FILE, which are sorted by descending position, and save it.
 OLD and NEW are the moved directory before and after."
@@ -242,9 +254,7 @@ OLD and NEW are the moved directory before and after."
                     (delete-region (car region) (cdr region))
                     (insert (org-files-db-directory--replacement
                              link old new))))))
-            (if buffer
-                (save-buffer)
-              (write-region nil nil file nil 'silent)))
+            (org-files-db-directory--save-file file (current-buffer)))
         (unless buffer (kill-buffer))))))
 
 (defun org-files-db-directory--restore (originals old new renamed retargeted)
@@ -259,7 +269,7 @@ the directory was moved. RETARGETED maps buffers to their original file."
                                        (error-message-string err))
                                failed)))))
       (when renamed
-        (attempt (abbreviate-file-name old) (lambda () (rename-file new old))))
+        (attempt (abbreviate-file-name old) (lambda () (org-files-db-directory--rename new old))))
       (dolist (entry retargeted)
         (when (buffer-live-p (car entry))
           (with-current-buffer (car entry)
@@ -308,7 +318,7 @@ Restore the previous state and signal a user error when a step fails."
             (push (cons (car entry)
                         (org-files-db-directory--read-bytes (car entry)))
                   written))
-          (rename-file old new)
+          (org-files-db-directory--rename old new)
           (setq renamed t)
           (dolist (entry retargeted)
             (org-files-db-actions--rename-visiting-buffer
@@ -487,7 +497,7 @@ Restore the state before the undo and signal a user error when a step fails."
             (when-let* ((buffer (find-buffer-visiting (car entry))))
               (with-current-buffer buffer
                 (revert-buffer t t t))))
-          (rename-file new old)
+          (org-files-db-directory--rename new old)
           (setq renamed t)
           (dolist (entry retargeted)
             (org-files-db-actions--rename-visiting-buffer
