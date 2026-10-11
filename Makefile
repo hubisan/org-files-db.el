@@ -35,12 +35,7 @@ compile:
 
 fmt:
 	@printf '\n\e[1;34m%-10s\e[0m\n\n' '>> FORMAT'
-	@for file in $(ELISP_FILES); do \
-		printf '%s\n' "Formatting $$file"; \
-		$(EMACS) --batch -Q "$$file" \
-			--eval '(progn (emacs-lisp-mode) (indent-region (point-min) (point-max)) (save-buffer))' \
-			>/dev/null; \
-	done
+	$(EASK) emacs --batch -L lisp -L tests -l scripts/format.el $(ELISP_FILES)
 
 lint:
 	@printf '\n\e[1;34m%-10s\e[0m\n\n' '>> LINT'
