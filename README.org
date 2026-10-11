@@ -160,7 +160,7 @@ Cache mode snapshots the view definitions when it starts. Restart it after chang
 
 ** Candidate cache
 
-Emacs keeps the built completion candidates of the most recently used views, so opening the same view again is instant. The candidates are reused until the index changes, the view definition changes or the date changes; the index state is checked with one quick ~orgfdb status~ call. ~org-files-db-view-candidate-cache-size~ sets how many views are kept (default 5, 0 disables). Toggling ~org-files-db-cache-mode~ clears it.
+While ~org-files-db-cache-mode~ is active, Emacs also keeps the built completion candidates of every view with ~:cache t~ (one entry per view), so opening the same view again is instant: ~:cache t~ means the Emacs candidate cache plus the ~orgfdb~ prepared view. Views without ~:cache t~ and all views while the mode is off are never kept. The candidates are reused until the index changes, the view definition changes or the date changes; the index state is checked with one quick ~orgfdb status~ call. There is no size limit. Toggling ~org-files-db-cache-mode~ clears it. ~M-x org-files-db-cache-report~ lists the kept views with their rows, approximate memory, index generation and build time in ~*org-files-db cache*~.
 
 ** Watch mode
 

@@ -34,6 +34,8 @@
 (require 'seq)
 (require 'subr-x)
 
+(declare-function memory-report-object-size "memory-report" (object))
+
 (defvar org-files-db-cache-mode)
 
 (defvar org-files-db-cache--session-id
@@ -311,6 +313,50 @@ When RETRIED is non-nil, do not attempt another missing-view recovery."
         (when (org-files-db-views--resolved-cache resolved)
           (org-files-db-cache--definition-error name))
         (org-files-db-views--one-shot-presentation resolved)))))
+
+;;;###autoload
+(defun org-files-db-cache-report ()
+  "Show the views whose candidates are kept in Emacs in a report buffer."
+  (interactive)
+  (require 'memory-report)
+  (let ((buffer (get-buffer-create "*org-files-db cache*"))
+        (total 0.0))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (special-mode)
+        (erase-buffer)
+        (if (null org-files-db-views--candidate-entries)
+            (insert "No views cached"
+                    (if org-files-db-cache-mode
+                        ""
+                      " (org-files-db-cache-mode is off)")
+                    "\n")
+          (insert (format "%-30s %8s %10s %10s  %s\n"
+                          "View" "Rows" "Size" "Generation" "Built at"))
+          (dolist (entry (reverse org-files-db-views--candidate-entries))
+            (let ((megabytes
+                   (/ (memory-report-object-size
+                       (list (org-files-db-views--candidate-entry-candidates
+                              entry)
+                             (org-files-db-views--candidate-entry-presentation
+                              entry)))
+                      1048576.0)))
+              (setq total (+ total megabytes))
+              (insert
+               (format "%-30s %8d %10s %10s  %s\n"
+                       (org-files-db-views--candidate-entry-name entry)
+                       (length (org-files-db-views--candidate-entry-candidates
+                                entry))
+                       (format "%.1f MB" megabytes)
+                       (or (nth 1 (org-files-db-views--candidate-entry-key
+                                   entry))
+                           "")
+                       (format-time-string
+                        "%F %T"
+                        (org-files-db-views--candidate-entry-time entry))))))
+          (insert (format "Total: %.1f MB\n" total))))
+      (goto-char (point-min)))
+    (pop-to-buffer buffer)))
 
 ;;;###autoload
 (define-minor-mode org-files-db-cache-mode

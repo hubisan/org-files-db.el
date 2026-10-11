@@ -1791,7 +1791,9 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
 
 (describe "predefined views and Rust cache integration"
   (before-each
-    (setq org-files-db-view-candidate-cache-size 0)
+    (org-files-db-views--candidate-cache-clear)
+    (spy-on 'org-files-db-views--candidate-key
+            :and-return-value '("db" 1 "signature" "2026-01-01"))
     (setq org-files-db-test--directory
           (make-temp-file "org-files-db-views-test-" t)
           org-files-db-cache-mode nil
@@ -3638,7 +3640,6 @@ SCHEDULED: <2026-10-02 Fri>
                   (setf (org-files-db-presentation-config value) "main")
                   value)))
       (before-each
-        (setq org-files-db-view-candidate-cache-size 0)
         (setq org-files-db-test--directory
               (make-temp-file "org-files-db-results-test-" t)
               org-files-db-cache-mode nil
@@ -3776,8 +3777,7 @@ SCHEDULED: <2026-10-02 Fri>
     (before-each
       (setq org-files-db-test--directory
             (make-temp-file "org-files-db-vcache-test-" t)
-            org-files-db-view-candidate-cache-size 5
-            org-files-db-cache-mode nil
+            org-files-db-cache-mode t
             status-calls 0
             presentation-calls 0
             generation 1
@@ -3790,17 +3790,25 @@ SCHEDULED: <2026-10-02 Fri>
                 (setq status-calls (1+ status-calls))
                 `((database_id . "db") (generation . ,generation))))
       (spy-on 'org-files-db-views--date :and-call-fake (lambda () date))
-      (spy-on 'org-files-db-views--presentation
-              :and-call-fake
-              (lambda (name)
-                (setq presentation-calls (1+ presentation-calls))
-                (let ((value (org-files-db-presentation--decode
-                              (org-files-db-test--fixture "headings"))))
-                  (setf (org-files-db-presentation-config value) "main")
-                  (push (cons name value) presentations)
-                  value))))
+      (let ((build
+             (lambda (name)
+               (setq presentation-calls (1+ presentation-calls))
+               (let ((value (org-files-db-presentation--decode
+                             (org-files-db-test--fixture "headings"))))
+                 (setf (org-files-db-presentation-config value) "main")
+                 (push (cons name value) presentations)
+                 value))))
+        (spy-on 'org-files-db-cache--view-presentation
+                :and-call-fake build)
+        (spy-on 'org-files-db-views--presentation
+                :and-call-fake
+                (lambda (name)
+                  (if org-files-db-cache-mode
+                      (org-files-db-cache--view-presentation name)
+                    (funcall build name))))))
 
     (after-each
+      (setq org-files-db-cache-mode nil)
       (org-files-db-views--candidate-cache-clear)
       (when (file-directory-p org-files-db-test--directory)
         (delete-directory org-files-db-test--directory t)))
@@ -3809,7 +3817,7 @@ SCHEDULED: <2026-10-02 Fri>
       (let* ((main (org-files-db-test--config-file "main.toml"))
              (org-files-db-configs `(("main" . ,main)))
              (org-files-db-default-config "main")
-             (org-files-db-views '(("tasks" :query (headings))))
+             (org-files-db-views '(("tasks" :query (headings) :cache t)))
              (first (org-files-db-views--candidates "tasks"))
              (second (org-files-db-views--candidates "tasks")))
         (expect presentation-calls :to-be 1)
@@ -3821,7 +3829,7 @@ SCHEDULED: <2026-10-02 Fri>
       (let* ((main (org-files-db-test--config-file "main.toml"))
              (org-files-db-configs `(("main" . ,main)))
              (org-files-db-default-config "main")
-             (org-files-db-views '(("tasks" :query (headings))))
+             (org-files-db-views '(("tasks" :query (headings) :cache t)))
              (first (org-files-db-views--candidates "tasks")))
         (setq generation 2)
         (expect (cdr (org-files-db-views--candidates "tasks"))
@@ -3832,7 +3840,7 @@ SCHEDULED: <2026-10-02 Fri>
       (let* ((main (org-files-db-test--config-file "main.toml"))
              (org-files-db-configs `(("main" . ,main)))
              (org-files-db-default-config "main")
-             (org-files-db-views '(("tasks" :query (headings)))))
+             (org-files-db-views '(("tasks" :query (headings) :cache t))))
         (org-files-db-views--candidates "tasks")
         (setq date "2026-01-02")
         (org-files-db-views--candidates "tasks")
@@ -3842,46 +3850,100 @@ SCHEDULED: <2026-10-02 Fri>
       (let* ((main (org-files-db-test--config-file "main.toml"))
              (org-files-db-configs `(("main" . ,main)))
              (org-files-db-default-config "main")
-             (org-files-db-views '(("tasks" :query (headings)))))
+             (org-files-db-views '(("tasks" :query (headings) :cache t))))
         (org-files-db-views--candidates "tasks")
-        (setq org-files-db-views '(("tasks" :query (headings (todo "NEXT")))))
+        (setq org-files-db-views '(("tasks" :query (headings (todo "NEXT")) :cache t)))
         (org-files-db-views--candidates "tasks")
         (expect presentation-calls :to-be 2)))
 
-    (it "never caches and never asks for status when the size is 0"
+    (it "never asks for status or caches a view without :cache t"
       (let* ((main (org-files-db-test--config-file "main.toml"))
              (org-files-db-configs `(("main" . ,main)))
              (org-files-db-default-config "main")
-             (org-files-db-view-candidate-cache-size 0)
-             (org-files-db-views '(("tasks" :query (headings)))))
+             (org-files-db-views '(("tasks" :query (headings) :cache nil))))
         (org-files-db-views--candidates "tasks")
         (org-files-db-views--candidates "tasks")
         (expect presentation-calls :to-be 2)
-        (expect status-calls :to-be 0)))
+        (expect status-calls :to-be 0)
+        (expect org-files-db-views--candidate-entries :to-be nil)))
 
-    (it "evicts the least recently used view beyond the size"
+    (it "never asks for status or caches while cache mode is off"
       (let* ((main (org-files-db-test--config-file "main.toml"))
              (org-files-db-configs `(("main" . ,main)))
              (org-files-db-default-config "main")
-             (org-files-db-view-candidate-cache-size 2)
-             (org-files-db-views '(("a" :query (headings))
-                                   ("b" :query (headings))
-                                   ("c" :query (headings)))))
-        (org-files-db-views--candidates "a")
-        (org-files-db-views--candidates "b")
-        (org-files-db-views--candidates "a")
-        (org-files-db-views--candidates "c")
-        (expect presentation-calls :to-be 3)
-        (org-files-db-views--candidates "a")
-        (expect presentation-calls :to-be 3)
-        (org-files-db-views--candidates "b")
-        (expect presentation-calls :to-be 4)))
+             (org-files-db-cache-mode nil)
+             (org-files-db-views '(("tasks" :query (headings) :cache t))))
+        (org-files-db-views--candidates "tasks")
+        (org-files-db-views--candidates "tasks")
+        (expect presentation-calls :to-be 2)
+        (expect status-calls :to-be 0)
+        (expect org-files-db-views--candidate-entries :to-be nil)))
+
+    (it "reads a miss through the Rust view path"
+      (let* ((main (org-files-db-test--config-file "main.toml"))
+             (org-files-db-configs `(("main" . ,main)))
+             (org-files-db-default-config "main")
+             (org-files-db-views '(("tasks" :query (headings) :cache t)))
+             (value (org-files-db-presentation--decode
+                     (org-files-db-test--fixture "headings"))))
+        (spy-on 'org-files-db-cache--view-presentation
+                :and-return-value value)
+        (expect (car (org-files-db-views--candidates "tasks"))
+                :to-be value)
+        (expect 'org-files-db-cache--view-presentation
+                :to-have-been-called-with "tasks")))
+
+    (it "keeps every view without eviction"
+      (let* ((main (org-files-db-test--config-file "main.toml"))
+             (org-files-db-configs `(("main" . ,main)))
+             (org-files-db-default-config "main")
+             (names (mapcar (lambda (index) (format "v%d" index))
+                            (number-sequence 1 12)))
+             (org-files-db-views
+              (mapcar (lambda (name) (list name :query '(headings) :cache t))
+                      names)))
+        (dolist (name names)
+          (org-files-db-views--candidates name))
+        (dolist (name names)
+          (org-files-db-views--candidates name))
+        (expect presentation-calls :to-be 12)
+        (expect (length org-files-db-views--candidate-entries) :to-be 12)))
+
+    (it "reports cached views"
+      (let* (rows (main (org-files-db-test--config-file "main.toml"))
+                  (org-files-db-configs `(("main" . ,main)))
+                  (org-files-db-default-config "main")
+                  (org-files-db-views '(("tasks" :query (headings) :cache t))))
+        (setq generation 7)
+        (setq rows (length (cdr (org-files-db-views--candidates "tasks"))))
+        (save-window-excursion
+          (org-files-db-cache-report))
+        (with-current-buffer "*org-files-db cache*"
+          (expect (derived-mode-p 'special-mode) :to-be-truthy)
+          (expect (buffer-string) :to-match "tasks")
+          (expect (buffer-string) :to-match (format " %d " rows))
+          (expect (buffer-string) :to-match "[0-9]+\\.[0-9] MB")
+          (expect (buffer-string) :to-match " 7 ")
+          (expect (buffer-string) :to-match "Total: "))
+        (kill-buffer "*org-files-db cache*")))
+
+    (it "reports an empty cache"
+      (save-window-excursion
+        (org-files-db-cache-report))
+      (with-current-buffer "*org-files-db cache*"
+        (expect (buffer-string) :to-match "No views cached")
+        (expect (buffer-string) :not :to-match "cache-mode is off")
+        (setq org-files-db-cache-mode nil)
+        (save-window-excursion
+          (org-files-db-cache-report))
+        (expect (buffer-string) :to-match "cache-mode is off"))
+      (kill-buffer "*org-files-db cache*"))
 
     (it "is cleared when the cache mode is toggled"
       (let* ((main (org-files-db-test--config-file "main.toml"))
              (org-files-db-configs `(("main" . ,main)))
              (org-files-db-default-config "main")
-             (org-files-db-views '(("tasks" :query (headings)))))
+             (org-files-db-views '(("tasks" :query (headings) :cache t))))
         (org-files-db-views--candidates "tasks")
         (org-files-db-cache-mode -1)
         (expect org-files-db-views--candidate-entries :to-be nil)))
@@ -3890,7 +3952,7 @@ SCHEDULED: <2026-10-02 Fri>
       (let* ((main (org-files-db-test--config-file "main.toml"))
              (org-files-db-configs `(("main" . ,main)))
              (org-files-db-default-config "main")
-             (org-files-db-views '(("tasks" :query (headings) :action ignore))))
+             (org-files-db-views '(("tasks" :query (headings) :cache t :action ignore))))
         (spy-on 'org-files-db-presentation--read :and-return-value 'record)
         (spy-on 'pop-to-buffer-same-window :and-call-fake #'identity)
         (expect (org-files-db-view "tasks") :to-be 'record)
@@ -3904,7 +3966,7 @@ SCHEDULED: <2026-10-02 Fri>
       (let* ((main (org-files-db-test--config-file "main.toml"))
              (org-files-db-configs `(("main" . ,main)))
              (org-files-db-default-config "main")
-             (org-files-db-views '(("tasks" :query (headings))))
+             (org-files-db-views '(("tasks" :query (headings) :cache t)))
              (entry (org-files-db-views--candidates "tasks")))
         (expect (org-files-db-presentation-database-id (car entry))
                 :to-equal
