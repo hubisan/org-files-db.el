@@ -41,7 +41,7 @@
    (secure-hash
     'sha256
     (format "%s:%s:%s:%s"
-            (emacs-pid) (float-time) (random) system-name))
+            (emacs-pid) (float-time) (random) (system-name)))
    0 16)
   "Private identifier for Rust view names created by this Emacs session.")
 
