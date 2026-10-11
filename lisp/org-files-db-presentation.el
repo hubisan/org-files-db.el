@@ -861,9 +861,12 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
 Used by integrations that act on a candidate whose text properties were
 stripped.")
 
-(defun org-files-db-presentation--read (presentation &optional prompt)
-  "Read one action record from PRESENTATION with standard completion and PROMPT."
-  (let ((candidates (org-files-db-presentation--candidates presentation)))
+(defun org-files-db-presentation--read (presentation &optional prompt candidates)
+  "Read one action record from PRESENTATION with PROMPT.
+Use CANDIDATES, the built candidates of PRESENTATION, when given. They are
+never modified."
+  (let ((candidates (or candidates
+                        (org-files-db-presentation--candidates presentation))))
     (unless candidates
       (user-error "The query returned no results"))
     (let ((selected

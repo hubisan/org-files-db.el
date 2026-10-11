@@ -318,6 +318,7 @@ When RETRIED is non-nil, do not attempt another missing-view recovery."
   :global t
   :group 'org-files-db
   :lighter nil
+  (org-files-db-views--candidate-cache-clear)
   (if org-files-db-cache-mode
       (unless org-files-db-cache--activation
         (let (success)

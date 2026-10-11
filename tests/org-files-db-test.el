@@ -1791,6 +1791,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
 
 (describe "predefined views and Rust cache integration"
   (before-each
+    (setq org-files-db-view-candidate-cache-size 0)
     (setq org-files-db-test--directory
           (make-temp-file "org-files-db-views-test-" t)
           org-files-db-cache-mode nil
@@ -3637,6 +3638,7 @@ SCHEDULED: <2026-10-02 Fri>
                   (setf (org-files-db-presentation-config value) "main")
                   value)))
       (before-each
+        (setq org-files-db-view-candidate-cache-size 0)
         (setq org-files-db-test--directory
               (make-temp-file "org-files-db-results-test-" t)
               org-files-db-cache-mode nil
@@ -3768,5 +3770,149 @@ SCHEDULED: <2026-10-02 Fri>
                   :to-be 1))))))
 
 (provide 'org-files-db-test)
+
+(describe "view candidate cache"
+  (let (status-calls presentation-calls generation date presentations)
+    (before-each
+      (setq org-files-db-test--directory
+            (make-temp-file "org-files-db-vcache-test-" t)
+            org-files-db-view-candidate-cache-size 5
+            org-files-db-cache-mode nil
+            status-calls 0
+            presentation-calls 0
+            generation 1
+            date "2026-01-01"
+            presentations nil)
+      (org-files-db-views--candidate-cache-clear)
+      (spy-on 'org-files-db-process--call-json
+              :and-call-fake
+              (lambda (&rest _args)
+                (setq status-calls (1+ status-calls))
+                `((database_id . "db") (generation . ,generation))))
+      (spy-on 'org-files-db-views--date :and-call-fake (lambda () date))
+      (spy-on 'org-files-db-views--presentation
+              :and-call-fake
+              (lambda (name)
+                (setq presentation-calls (1+ presentation-calls))
+                (let ((value (org-files-db-presentation--decode
+                              (org-files-db-test--fixture "headings"))))
+                  (setf (org-files-db-presentation-config value) "main")
+                  (push (cons name value) presentations)
+                  value))))
+
+    (after-each
+      (org-files-db-views--candidate-cache-clear)
+      (when (file-directory-p org-files-db-test--directory)
+        (delete-directory org-files-db-test--directory t)))
+
+    (it "reuses candidates while index, definition and date are unchanged"
+      (let* ((main (org-files-db-test--config-file "main.toml"))
+             (org-files-db-configs `(("main" . ,main)))
+             (org-files-db-default-config "main")
+             (org-files-db-views '(("tasks" :query (headings))))
+             (first (org-files-db-views--candidates "tasks"))
+             (second (org-files-db-views--candidates "tasks")))
+        (expect presentation-calls :to-be 1)
+        (expect status-calls :to-be 2)
+        (expect (car second) :to-be (car first))
+        (expect (cdr second) :to-be (cdr first))))
+
+    (it "rebuilds when the generation changes"
+      (let* ((main (org-files-db-test--config-file "main.toml"))
+             (org-files-db-configs `(("main" . ,main)))
+             (org-files-db-default-config "main")
+             (org-files-db-views '(("tasks" :query (headings))))
+             (first (org-files-db-views--candidates "tasks")))
+        (setq generation 2)
+        (expect (cdr (org-files-db-views--candidates "tasks"))
+                :not :to-be (cdr first))
+        (expect presentation-calls :to-be 2)))
+
+    (it "rebuilds when the date changes"
+      (let* ((main (org-files-db-test--config-file "main.toml"))
+             (org-files-db-configs `(("main" . ,main)))
+             (org-files-db-default-config "main")
+             (org-files-db-views '(("tasks" :query (headings)))))
+        (org-files-db-views--candidates "tasks")
+        (setq date "2026-01-02")
+        (org-files-db-views--candidates "tasks")
+        (expect presentation-calls :to-be 2)))
+
+    (it "rebuilds when the view definition changes"
+      (let* ((main (org-files-db-test--config-file "main.toml"))
+             (org-files-db-configs `(("main" . ,main)))
+             (org-files-db-default-config "main")
+             (org-files-db-views '(("tasks" :query (headings)))))
+        (org-files-db-views--candidates "tasks")
+        (setq org-files-db-views '(("tasks" :query (headings (todo "NEXT")))))
+        (org-files-db-views--candidates "tasks")
+        (expect presentation-calls :to-be 2)))
+
+    (it "never caches and never asks for status when the size is 0"
+      (let* ((main (org-files-db-test--config-file "main.toml"))
+             (org-files-db-configs `(("main" . ,main)))
+             (org-files-db-default-config "main")
+             (org-files-db-view-candidate-cache-size 0)
+             (org-files-db-views '(("tasks" :query (headings)))))
+        (org-files-db-views--candidates "tasks")
+        (org-files-db-views--candidates "tasks")
+        (expect presentation-calls :to-be 2)
+        (expect status-calls :to-be 0)))
+
+    (it "evicts the least recently used view beyond the size"
+      (let* ((main (org-files-db-test--config-file "main.toml"))
+             (org-files-db-configs `(("main" . ,main)))
+             (org-files-db-default-config "main")
+             (org-files-db-view-candidate-cache-size 2)
+             (org-files-db-views '(("a" :query (headings))
+                                   ("b" :query (headings))
+                                   ("c" :query (headings)))))
+        (org-files-db-views--candidates "a")
+        (org-files-db-views--candidates "b")
+        (org-files-db-views--candidates "a")
+        (org-files-db-views--candidates "c")
+        (expect presentation-calls :to-be 3)
+        (org-files-db-views--candidates "a")
+        (expect presentation-calls :to-be 3)
+        (org-files-db-views--candidates "b")
+        (expect presentation-calls :to-be 4)))
+
+    (it "is cleared when the cache mode is toggled"
+      (let* ((main (org-files-db-test--config-file "main.toml"))
+             (org-files-db-configs `(("main" . ,main)))
+             (org-files-db-default-config "main")
+             (org-files-db-views '(("tasks" :query (headings)))))
+        (org-files-db-views--candidates "tasks")
+        (org-files-db-cache-mode -1)
+        (expect org-files-db-views--candidate-entries :to-be nil)))
+
+    (it "is used by org-files-db-view and org-files-db-show-view"
+      (let* ((main (org-files-db-test--config-file "main.toml"))
+             (org-files-db-configs `(("main" . ,main)))
+             (org-files-db-default-config "main")
+             (org-files-db-views '(("tasks" :query (headings) :action ignore))))
+        (spy-on 'org-files-db-presentation--read :and-return-value 'record)
+        (spy-on 'pop-to-buffer-same-window :and-call-fake #'identity)
+        (expect (org-files-db-view "tasks") :to-be 'record)
+        (expect (org-files-db-view "tasks") :to-be 'record)
+        (expect (nth 2 (spy-calls-args-for 'org-files-db-presentation--read 1))
+                :to-be (cdr (org-files-db-views--candidates "tasks")))
+        (kill-buffer (org-files-db-show-view "tasks"))
+        (expect presentation-calls :to-be 1)))
+
+    (it "still guards stale indexes with the stored identifiers"
+      (let* ((main (org-files-db-test--config-file "main.toml"))
+             (org-files-db-configs `(("main" . ,main)))
+             (org-files-db-default-config "main")
+             (org-files-db-views '(("tasks" :query (headings))))
+             (entry (org-files-db-views--candidates "tasks")))
+        (expect (org-files-db-presentation-database-id (car entry))
+                :to-equal
+                (org-files-db-presentation-database-id
+                 (cdr (car presentations))))
+        (expect (org-files-db-presentation-generation (car entry))
+                :to-equal
+                (org-files-db-presentation-generation
+                 (cdr (car presentations))))))))
 
 ;;; org-files-db-test.el ends here
