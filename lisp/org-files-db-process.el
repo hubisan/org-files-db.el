@@ -129,45 +129,30 @@ Otherwise, return `org-files-db-default-config'."
       (org-files-db-process--read-config-name)
     (org-files-db-process--config-name)))
 
-(defun org-files-db-process--buffer-string (buffer)
-  "Return BUFFER contents without text properties."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (buffer-substring-no-properties (point-min) (point-max)))))
-
 (defun org-files-db-process--run-process (arguments &optional input)
   "Run orgfdb synchronously with ARGUMENTS and optional standard INPUT.
-Return a plist with :status, :stdout, and :stderr."
+Return a plist with :status, :stdout, and :stderr. The call blocks Emacs
+with `call-process', so no redisplay or timer runs while orgfdb works."
   (let* ((program (org-files-db-process--resolve-executable))
-         (stdout (generate-new-buffer " *org-files-db-stdout*"))
-         (stderr (generate-new-buffer " *org-files-db-stderr*"))
-         process)
+         (stderr-file (make-temp-file "org-files-db-stderr-"))
+         (coding-system-for-read 'utf-8-unix)
+         (coding-system-for-write 'utf-8-unix))
     (unwind-protect
-        (progn
-          (setq process
-                (make-process
-                 :name "org-files-db"
-                 :command (cons program arguments)
-                 :buffer stdout
-                 :stderr stderr
-                 :connection-type 'pipe
-                 :coding '(utf-8-unix . utf-8-unix)
-                 :noquery t
-                 :sentinel #'ignore))
-          (when (and input (process-live-p process))
-            (process-send-string process input)
-            (process-send-eof process))
-          (while (process-live-p process)
-            (accept-process-output process 0.05))
-          (list :status (process-exit-status process)
-                :stdout (org-files-db-process--buffer-string stdout)
-                :stderr (org-files-db-process--buffer-string stderr)))
-      (when (and process (process-live-p process))
-        (delete-process process))
-      (when (buffer-live-p stdout)
-        (kill-buffer stdout))
-      (when (buffer-live-p stderr)
-        (kill-buffer stderr)))))
+        (with-temp-buffer
+          (let ((status
+                 (if input
+                     (progn
+                       (insert input)
+                       (apply #'call-process-region (point-min) (point-max)
+                              program t (list t stderr-file) nil arguments))
+                   (apply #'call-process program nil (list t stderr-file) nil
+                          arguments))))
+            (list :status (if (integerp status) status 1)
+                  :stdout (buffer-substring-no-properties (point-min) (point-max))
+                  :stderr (with-temp-buffer
+                            (insert-file-contents stderr-file)
+                            (buffer-string)))))
+      (delete-file stderr-file))))
 
 (defun org-files-db-process--decode-error (stderr)
   "Return the structured error object decoded from STDERR, or nil.

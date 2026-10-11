@@ -374,32 +374,28 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                 :to-throw 'user-error))))
 
   (it "passes every process argument separately and captures UTF-8 output"
-    (let (command coding)
-      (cl-letf (((symbol-function 'org-files-db-process--resolve-executable)
-                 (lambda () "/opt/bin/orgfdb"))
-                ((symbol-function 'make-process)
-                 (lambda (&rest properties)
-                   (setq command (plist-get properties :command)
-                         coding (plist-get properties :coding))
-                   (with-current-buffer (plist-get properties :buffer)
-                     (insert "Grüezi\n"))
-                   (with-current-buffer (plist-get properties :stderr)
-                     (insert "Fehler ä\n"))
-                   'org-files-db-test-process))
-                ((symbol-function 'process-live-p) (lambda (_process) nil))
-                ((symbol-function 'process-exit-status) (lambda (_process) 0)))
-        (let ((result
-               (org-files-db-process--run-process
-                '("query" "value with spaces" "$(not-a-shell-command)"))))
-          (expect command
-                  :to-equal
-                  '("/opt/bin/orgfdb"
-                    "query"
-                    "value with spaces"
-                    "$(not-a-shell-command)"))
-          (expect coding :to-equal '(utf-8-unix . utf-8-unix))
-          (expect (plist-get result :stdout) :to-equal "Grüezi\n")
-          (expect (plist-get result :stderr) :to-equal "Fehler ä\n")))))
+    (let ((script (make-temp-file "org-files-db-test-orgfdb-")))
+      (unwind-protect
+          (progn
+            (with-temp-file script
+              (insert "#!/bin/sh\n"
+                      "for a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"
+                      "printf 'Grüezi\\n'\n"
+                      "cat\n"
+                      "printf 'Fehler ä\\n' >&2\n"
+                      "exit 3\n"))
+            (set-file-modes script #o755)
+            (let* ((org-files-db-executable script)
+                   (result (org-files-db-process--run-process
+                            '("query" "value with spaces" "$(not-a-shell-command)")
+                            "Eingabe ö\n")))
+              (expect (plist-get result :status) :to-equal 3)
+              (expect (plist-get result :stdout)
+                      :to-equal
+                      (concat "query\nvalue with spaces\n$(not-a-shell-command)\n"
+                              "Grüezi\nEingabe ö\n"))
+              (expect (plist-get result :stderr) :to-equal "Fehler ä\n")))
+        (delete-file script))))
 
   (it "reports runtime stderr in CLI errors"
     (cl-letf (((symbol-function 'org-files-db-process--run-process)
