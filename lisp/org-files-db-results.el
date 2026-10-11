@@ -134,10 +134,14 @@ Keep point on the same line number where possible."
   (setq truncate-lines t))
 
 (defun org-files-db-results--fill (presentation)
-  "Replace the rows of the current buffer with those of PRESENTATION."
-  (let ((line (line-number-at-pos))
-        (inhibit-read-only t)
-        (candidates (org-files-db-presentation--candidates presentation)))
+  "Replace the rows of the current buffer with those of PRESENTATION.
+PRESENTATION may also be a cons (PRESENTATION . CANDIDATES) with built
+candidates."
+  (let* ((line (line-number-at-pos))
+         (inhibit-read-only t)
+         (candidates (if (consp presentation)
+                         (cdr presentation)
+                       (org-files-db-presentation--candidates presentation))))
     (erase-buffer)
     (if candidates
         (org-files-db-results--insert candidates)
@@ -149,6 +153,7 @@ Keep point on the same line number where possible."
 
 (defun org-files-db-results--show (buffer-name refresh action)
   "Show the presentation returned by REFRESH in buffer BUFFER-NAME.
+REFRESH may return a cons (PRESENTATION . CANDIDATES) to reuse candidates.
 REFRESH is called again to update the buffer. ACTION is the effective
 action for RET. Reuse an existing buffer of that name and return it."
   (let ((presentation (funcall refresh))

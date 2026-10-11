@@ -104,12 +104,14 @@ presentation forms.  This function does not open completion or run an action."
       (user-error "Org-files-db action is not callable: %S" effective-action))
     effective-action))
 
-(defun org-files-db-query--run-presentation-action (presentation target &optional action)
+(defun org-files-db-query--run-presentation-action
+    (presentation target &optional action candidates)
   "Select one row from PRESENTATION and run ACTION for TARGET.
-Use the configured default action when ACTION is nil.  Return the selected
-action record."
+Use the configured default action when ACTION is nil. CANDIDATES are
+already built candidates of PRESENTATION. Return the selected action
+record."
   (let* ((effective-action (org-files-db-query--effective-action target action))
-         (result (org-files-db-presentation--read presentation))
+         (result (org-files-db-presentation--read presentation nil candidates))
          (org-files-db-actions--current-presentation presentation)
          (org-files-db-actions--current-action-config
           (org-files-db-presentation-config presentation)))

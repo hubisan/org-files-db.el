@@ -121,6 +121,13 @@ Caching is disabled for a view unless :cache is t."
   :type '(repeat sexp)
   :group 'org-files-db)
 
+(defcustom org-files-db-view-candidate-cache-size 5
+  "Number of views whose built candidates are kept in Emacs.
+The candidates of a view are reused until the index changes, the view
+definition changes or the date changes. Set this to 0 to disable."
+  :type 'natnum
+  :group 'org-files-db)
+
 (defcustom org-files-db-watch-startup-timeout 60
   "Maximum seconds to wait for an orgfdb watcher to become ready.
 Set this to nil to wait without a timeout."

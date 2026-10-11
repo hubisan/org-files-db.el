@@ -158,6 +158,10 @@ A view with ~:cache t~ is prepared by ~orgfdb~ and kept up to date, so large res
 
 Cache mode snapshots the view definitions when it starts. Restart it after changing ~org-files-db-views~, ~org-files-db-configs~ or the default configuration. Views prepared by Emacs are private to the running Emacs session and are removed when you stop cache mode or exit Emacs.
 
+** Candidate cache
+
+Emacs keeps the built completion candidates of the most recently used views, so opening the same view again is instant. The candidates are reused until the index changes, the view definition changes or the date changes; the index state is checked with one quick ~orgfdb status~ call. ~org-files-db-view-candidate-cache-size~ sets how many views are kept (default 5, 0 disables). Toggling ~org-files-db-cache-mode~ clears it.
+
 ** Watch mode
 
 ~orgfdb~ keeps the index current while a watcher process runs. ~org-files-db-watch-mode~ makes sure there is one for every configuration in ~org-files-db-configs~. A watcher that is already running outside Emacs is reused and left alone; watchers started by Emacs are stopped when you stop the mode or exit Emacs.

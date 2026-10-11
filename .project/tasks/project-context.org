@@ -26,7 +26,8 @@ The rebuild does not preserve the old internal architecture or compatibility ali
 - Use synchronous query and view commands. A user starts a query because they want the result immediately.
 - Do not add asynchronous query completion that can appear after the user starts other work.
 - The watcher is the only long-running child process that Emacs can start.
-- Do not use Child Emacs, ~async.el~, presentation dumps, or an Emacs presentation cache.
+- Do not use Child Emacs, ~async.el~ or presentation dumps.
+- Emacs keeps built candidates for recent views (~org-files-db-view-candidate-cache-size~), keyed by index identity and generation, view definition and date. Rust still owns presentation.
 - Search, backlinks and Org dynamic blocks are not part of the rebuilt client. Dynamic blocks are dropped without replacement (#4).
 - Use standard Emacs completion through ~completing-read~.
 - Keep Embark optional. Result actions and export of the filtered rows are implemented in ~org-files-db-embark.el~ and registered only once Embark is loaded.
