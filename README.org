@@ -111,7 +111,20 @@ Without ~:sort~, the defaults ~org-files-db-heading-sort~, ~org-files-db-file-so
 
 ** Row sources
 
-A row source selects how ~orgfdb~ expands each matching object into table rows. Pass its name as ~:row-source~ (a symbol or a string). The available row sources are listed in the presentation reference linked above.
+Normally each matching heading or file is one row. A row source turns each match into one row per entry of a list instead. Pass it as ~:row-source~ (a symbol or a string); it works for heading and file queries.
+
+- ~tags~: one row per tag. ~* BJJ :sport:kampf:~ becomes two rows, one for ~sport~ and one for ~kampf~. Show the tag of each row with the ~tag~ column.
+- ~effective-properties~: one row per property, including inherited ones. Show them with the ~property-name~ and ~property-value~ columns.
+- ~keywords~: one row per file keyword such as ~#+title~. Show them with the ~keyword-name~ and ~keyword-value~ columns.
+
+A match whose list is empty produces no row at all: with ~:row-source tags~, headings without tags disappear from the result. Every row still points to its heading or file, so actions open the same place.
+
+#+begin_src emacs-lisp
+(org-files-db-query '(headings (todo))
+                    :row-source 'tags
+                    :columns '((tag :width (max 20))
+                               (outline-path :width (max 80))))
+#+end_src
 
 ** Faces
 
