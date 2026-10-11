@@ -57,28 +57,28 @@ DOC is the docstring."
      (org-files-db-embark--call #',action candidate)))
 
 (org-files-db-embark--define-action org-files-db-embark-open-result
-                                    org-files-db-actions-open-result
-                                    "Open the result CANDIDATE.")
+    org-files-db-actions-open-result
+  "Open the result CANDIDATE.")
 
 (org-files-db-embark--define-action org-files-db-embark-open-link-target
-                                    org-files-db-actions-open-link-target
-                                    "Open the target of the link result CANDIDATE.")
+    org-files-db-actions-open-link-target
+  "Open the target of the link result CANDIDATE.")
 
 (org-files-db-embark--define-action org-files-db-embark-insert-file-link
-                                    org-files-db-actions-insert-file-link
-                                    "Insert a file link to the result CANDIDATE at point.")
+    org-files-db-actions-insert-file-link
+  "Insert a file link to the result CANDIDATE at point.")
 
 (org-files-db-embark--define-action org-files-db-embark-insert-heading-link
-                                    org-files-db-actions-insert-heading-link
-                                    "Insert a link to the heading result CANDIDATE at point.")
+    org-files-db-actions-insert-heading-link
+  "Insert a link to the heading result CANDIDATE at point.")
 
 (org-files-db-embark--define-action org-files-db-embark-follow-heading-link
-                                    org-files-db-actions-follow-heading-link
-                                    "Follow the first link in the heading result CANDIDATE.")
+    org-files-db-actions-follow-heading-link
+  "Follow the first link in the heading result CANDIDATE.")
 
 (org-files-db-embark--define-action org-files-db-embark-rename-file
-                                    org-files-db-actions-rename-file
-                                    "Rename the file of the result CANDIDATE.")
+    org-files-db-actions-rename-file
+  "Rename the file of the result CANDIDATE.")
 
 (defvar-keymap org-files-db-embark-result-map
   :doc "Embark actions for org-files-db results."
