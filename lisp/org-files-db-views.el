@@ -218,7 +218,7 @@ returned."
     (cond
      ((eq (org-files-db-views--resolved-display resolved) 'buffer)
       (org-files-db-show-view name))
-     ((org-files-db-views--candidate-cache-enabled-p)
+     ((org-files-db-views--candidate-cache-applies-p resolved)
       (let ((entry (org-files-db-views--candidates name)))
         (org-files-db-query--run-presentation-action
          (car entry)
@@ -254,15 +254,18 @@ Use the Rust cache when `org-files-db-cache-mode' is active."
   name
   key
   presentation
-  candidates)
+  candidates
+  time)
 
 (defvar org-files-db-views--candidate-entries nil
-  "Most recently used first list of `org-files-db-views--candidate-entry'.")
+  "List of `org-files-db-views--candidate-entry', one per view name.")
 
-(defun org-files-db-views--candidate-cache-enabled-p ()
-  "Return non-nil when built view candidates are kept."
-  (and (integerp org-files-db-view-candidate-cache-size)
-       (> org-files-db-view-candidate-cache-size 0)))
+(defun org-files-db-views--candidate-cache-applies-p (resolved)
+  "Return non-nil when RESOLVED has its candidates kept in Emacs.
+That is the case for a view with :cache t while `org-files-db-cache-mode' is
+active."
+  (and (bound-and-true-p org-files-db-cache-mode)
+       (eq (org-files-db-views--resolved-cache resolved) t)))
 
 (defun org-files-db-views--candidate-cache-clear ()
   "Forget all kept view candidates."
@@ -285,45 +288,44 @@ Use the Rust cache when `org-files-db-cache-mode' is active."
 
 (defun org-files-db-views--candidates (name)
   "Return the cons (PRESENTATION . CANDIDATES) of predefined view NAME.
-Reuse kept candidates while the index, the view definition and the date are
+For a view with :cache t while `org-files-db-cache-mode' is active, reuse
+kept candidates while the index, the view definition and the date are
 unchanged. Do not modify the returned candidates."
-  (if (not (org-files-db-views--candidate-cache-enabled-p))
-      (let ((presentation (org-files-db-views--presentation name)))
-        (cons presentation
-              (org-files-db-presentation--candidates presentation)))
-    (let* ((resolved (org-files-db-views--resolve
-                      (org-files-db-views--get name)))
-           (key (org-files-db-views--candidate-key resolved))
-           (entry (seq-find
-                   (lambda (candidate-entry)
-                     (equal (org-files-db-views--candidate-entry-name
-                             candidate-entry)
-                            name))
-                   org-files-db-views--candidate-entries)))
-      (unless (and entry
-                   (equal (org-files-db-views--candidate-entry-key entry) key))
+  (let ((resolved (org-files-db-views--resolve
+                   (org-files-db-views--get name))))
+    (if (not (org-files-db-views--candidate-cache-applies-p resolved))
         (let ((presentation (org-files-db-views--presentation name)))
-          (setq entry
-                (org-files-db-views--candidate-entry-create
-                 :name name
-                 :key key
-                 :presentation presentation
-                 :candidates
-                 (org-files-db-presentation--candidates presentation)))))
-      (setq org-files-db-views--candidate-entries
-            (cons entry
-                  (seq-remove
-                   (lambda (other)
-                     (equal (org-files-db-views--candidate-entry-name other)
+          (cons presentation
+                (org-files-db-presentation--candidates presentation)))
+      (let* ((key (org-files-db-views--candidate-key resolved))
+             (entry (seq-find
+                     (lambda (candidate-entry)
+                       (equal (org-files-db-views--candidate-entry-name
+                               candidate-entry)
+                              name))
+                     org-files-db-views--candidate-entries)))
+        (unless (and entry
+                     (equal (org-files-db-views--candidate-entry-key entry)
+                            key))
+          (let ((presentation (org-files-db-views--presentation name)))
+            (setq entry
+                  (org-files-db-views--candidate-entry-create
+                   :name name
+                   :key key
+                   :presentation presentation
+                   :candidates
+                   (org-files-db-presentation--candidates presentation)
+                   :time (current-time)))
+            (setq org-files-db-views--candidate-entries
+                  (cons entry
+                        (seq-remove
+                         (lambda (other)
+                           (equal
+                            (org-files-db-views--candidate-entry-name other)
                             name))
-                   org-files-db-views--candidate-entries)))
-      (when (> (length org-files-db-views--candidate-entries)
-               org-files-db-view-candidate-cache-size)
-        (setq org-files-db-views--candidate-entries
-              (seq-take org-files-db-views--candidate-entries
-                        org-files-db-view-candidate-cache-size)))
-      (cons (org-files-db-views--candidate-entry-presentation entry)
-            (org-files-db-views--candidate-entry-candidates entry)))))
+                         org-files-db-views--candidate-entries)))))
+        (cons (org-files-db-views--candidate-entry-presentation entry)
+              (org-files-db-views--candidate-entry-candidates entry))))))
 
 ;;;###autoload
 (defun org-files-db-show-view (&optional name)
@@ -337,7 +339,7 @@ view again."
                     (org-files-db-views--get name))))
     (org-files-db-results--show
      (format "*org-files-db: %s*" name)
-     (if (org-files-db-views--candidate-cache-enabled-p)
+     (if (org-files-db-views--candidate-cache-applies-p resolved)
          (lambda () (org-files-db-views--candidates name))
        (lambda () (org-files-db-views--presentation name)))
      (org-files-db-views--resolved-action resolved))))
