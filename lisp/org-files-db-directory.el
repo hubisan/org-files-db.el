@@ -62,42 +62,65 @@ after the move and ORIGINAL and WRITTEN its bytes before and after the edit.")
           (org-files-db-directory--quote
            (concat "^" (regexp-quote (file-name-as-directory old))))))
 
-(defun org-files-db-directory--affected-links (old config)
-  "Return the indexed file links that must change for moving OLD.
-CONFIG is the configuration name. Keep incoming links from files outside OLD
-and from files inside OLD with an absolute path, and outgoing relative links
-to targets outside OLD. Signal a user error when the index changed between the
-status check and a query."
+(defun org-files-db-directory--named-query (old)
+  "Return the query for file links whose target text names directory OLD.
+This finds links to OLD itself and to directories inside it, which do not
+resolve to an indexed file."
+  (format "(links (and (link-type \"file\") (link-target \"%s\")))"
+          (org-files-db-directory--quote (file-name-nondirectory old))))
+
+(defun org-files-db-directory--relocate (path old new)
+  "Return PATH with directory OLD replaced by NEW when PATH is OLD or inside it."
+  (let ((path (directory-file-name path)))
+    (if (or (equal path old) (org-files-db-directory--inside-p path old))
+        (org-files-db-directory--moved path old new)
+      path)))
+
+(defun org-files-db-directory--affected-p (link old new)
+  "Return non-nil when file LINK must change for moving directory OLD to NEW.
+A relative link must change when it no longer reaches its target from the
+moved source file. Other links must change when their target moves."
+  (let ((path (alist-get 'link_path link))
+        (target (alist-get 'path_absolute link))
+        (source (org-files-db-directory--link-file link)))
+    (and (equal (alist-get 'link_type link) "file")
+         target
+         (if (or (file-name-absolute-p path) (string-prefix-p "~" path))
+             (not (equal (org-files-db-directory--relocate target old new)
+                         (directory-file-name target)))
+           (not (equal (directory-file-name
+                        (expand-file-name
+                         path (file-name-directory
+                               (org-files-db-directory--relocate
+                                source old new))))
+                       (org-files-db-directory--relocate target old new)))))))
+
+(defun org-files-db-directory--affected-links (old new config)
+  "Return the indexed file links that must change for moving OLD to NEW.
+CONFIG is the configuration name. Collect links to files inside OLD, links
+from files inside OLD and file links naming OLD, and keep those that
+`org-files-db-directory--affected-p' accepts. Signal a user error when the
+index changed between the status check and a query."
   (condition-case nil
       (let* ((status (org-files-db-process--call-json
                       (append '("status" "--format" "json")
                               (org-files-db-process--config-arguments config))))
              (query (lambda (string)
-                      (org-files-db-query--guarded-json
-                       string nil
-                       :config config
-                       :database-id (alist-get 'database_id status)
-                       :generation (alist-get 'generation status))))
-             (incoming (funcall query (org-files-db-directory--incoming-query old)))
-             (outgoing (funcall query (org-files-db-directory--outgoing-query old))))
-        (append
-         (seq-filter
-          (lambda (link)
-            (and (equal (alist-get 'link_type link) "file")
-                 (alist-get 'path_absolute link)
-                 (or (not (org-files-db-directory--inside-p
-                           (org-files-db-directory--link-file link) old))
-                     (file-name-absolute-p (alist-get 'link_path link)))))
-          incoming)
-         (seq-filter
-          (lambda (link)
-            (and (equal (alist-get 'link_type link) "file")
-                 (alist-get 'path_absolute link)
-                 (not (file-name-absolute-p (alist-get 'link_path link)))
-                 (not (string-prefix-p "~" (alist-get 'link_path link)))
-                 (not (org-files-db-directory--inside-p
-                       (alist-get 'path_absolute link) old))))
-          outgoing)))
+                      (append
+                       (org-files-db-query--guarded-json
+                        string nil
+                        :config config
+                        :database-id (alist-get 'database_id status)
+                        :generation (alist-get 'generation status))
+                       nil)))
+             (links (append
+                     (funcall query (org-files-db-directory--incoming-query old))
+                     (funcall query (org-files-db-directory--outgoing-query old))
+                     (funcall query (org-files-db-directory--named-query old)))))
+        (seq-filter
+         (lambda (link) (org-files-db-directory--affected-p link old new))
+         (cl-remove-duplicates
+          links :key (lambda (link) (alist-get 'id link)) :from-end t)))
     (org-files-db-stale-index
      (user-error "Index changed, run the query again"))))
 
@@ -107,15 +130,17 @@ status check and a query."
 
 (defun org-files-db-directory--replacement (link old new)
   "Return the new text of LINK when directory OLD becomes NEW.
-An incoming link follows its moved target. An outgoing link keeps its target
-and is made relative to the moved source file."
-  (let ((file (alist-get 'file_path (alist-get 'location link)))
-        (target (alist-get 'path_absolute link)))
-    (if (org-files-db-directory--inside-p target old)
-        (org-files-db-actions--link-replacement
-         link file (org-files-db-directory--moved target old new))
-      (org-files-db-actions--link-replacement
-       link (org-files-db-directory--moved file old new) target))))
+The link follows its target and is made relative to its source file, both
+taken after the move."
+  (org-files-db-actions--link-replacement
+   link
+   (org-files-db-directory--relocate
+    (org-files-db-directory--link-file link) old new)
+   (let ((target (org-files-db-directory--relocate
+                  (alist-get 'path_absolute link) old new)))
+     (if (string-suffix-p "/" (alist-get 'link_path link))
+         (file-name-as-directory target)
+       target))))
 
 (defun org-files-db-directory--link-start (link)
   "Return the byte start of LINK."
@@ -417,7 +442,7 @@ With an interactive prefix argument, select the configuration."
     (unless (file-directory-p (file-name-directory new))
       (user-error "Destination parent does not exist: %s"
                   (file-name-directory new)))
-    (let* ((links (org-files-db-directory--affected-links old config-name))
+    (let* ((links (org-files-db-directory--affected-links old new config-name))
            (plan (org-files-db-directory--plan links old new))
            (changes (alist-get 'changes plan))
            (skipped (length (alist-get 'skipped plan)))

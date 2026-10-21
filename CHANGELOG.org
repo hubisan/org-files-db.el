@@ -2,6 +2,9 @@
 
 * Unreleased
 
+- =FIXED= ~org-files-db-rename-directory~ also rewrites links to the directory itself or a directory inside it, and relative links between files inside the directory that pass through its name (~../dir/file.org~).
+- =FIXED= Embark actions on a row of a result buffer no longer fail with "No presentation available for this result".
+- =FIXED= The Embark result actions keep the general Embark actions, so ~E~ exports from the query minibuffer.
 - =CHANGED= README explains row sources with examples and notes that matches with an empty list produce no rows.
 - =CHANGED= Emacs keeps the built candidates only of views with ~:cache t~ while ~org-files-db-cache-mode~ is active, until the index, the view definition or the date changes.
   - ~:cache t~ now means the Emacs candidate cache plus the ~orgfdb~ prepared view; other views and a stopped cache mode never keep candidates or call ~orgfdb status~.

@@ -2691,7 +2691,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
     (json-serialize data)))
 
 (describe "renaming a directory"
-  (let (corpus old new json outgoing-json messages)
+  (let (corpus old new json outgoing-json named-json messages)
     (before-each
       (setq org-files-db-test--actions-directory
             (make-temp-file "org-files-db-dir-" t)
@@ -2705,7 +2705,8 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
       (setq json (org-files-db-test--corpus-fixture
                   "dir-incoming-links.json" corpus)
             outgoing-json (org-files-db-test--corpus-fixture
-                           "dir-outgoing-links.json" corpus))
+                           "dir-outgoing-links.json" corpus)
+            named-json "{\"results\": []}")
       (spy-on 'message :and-call-fake
               (lambda (format &rest args)
                 (push (apply #'format format args) messages)))
@@ -2745,6 +2746,10 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                                          (format "(links (target (files (file-path \"^%s/\" :regexp t))))"
                                                  (regexp-quote old)))
                                  (list :status 0 :stdout query-json))
+                                ((string-prefix-p "(links (and" query)
+                                 (expect query :to-equal
+                                         "(links (and (link-type \"file\") (link-target \"alt\")))")
+                                 (list :status 0 :stdout named-json))
                                 (t
                                  (expect query :to-equal
                                          (format "(links (source (files (file-path \"^%s/\" :regexp t))))"
@@ -2796,6 +2801,18 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
           (expect messages :to-equal '("Directory renamed, 2 links updated"))
           (expect 'yes-or-no-p :to-have-been-called-with
                   "Rename directory and update 2 links in 1 files? ")))
+
+      (it "rewrites links to the directory and relative links through it"
+        (setq named-json (org-files-db-test--corpus-fixture
+                          "dir-named-links.json" corpus))
+        (rename)
+        (expect (text "index.org") :to-match
+                (regexp-quote "[[file:projekte/neu][Alt]] [[file:projekte/neu/][Alt2]]"))
+        (expect (text "projekte/neu/notiz.org") :to-match
+                (regexp-quote "[[file:notiz2.org][loop]]"))
+        (expect (text "projekte/neu/notiz.org") :to-match
+                (regexp-quote "[[file:../../index.org][index]]"))
+        (expect messages :to-equal '("Directory renamed, 5 links updated")))
 
       (it "shows the plan before changing anything"
         (rename)
@@ -3219,6 +3236,27 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
         (let ((org-files-db-presentation--current-read-presentation presentation))
           (org-files-db-embark-open-result candidate))
         (expect seen :to-equal (list result presentation))))
+
+    (it "resolves a candidate without properties from the result buffer line"
+      (let* ((result '((kind . "heading") (id . 1)))
+             (presentation
+              (org-files-db-test--single-result-presentation result "work"))
+             (candidate (car (org-files-db-presentation--candidates presentation)))
+             seen)
+        (spy-on 'org-files-db-actions-open-result :and-call-fake
+                (lambda (record) (setq seen (list record
+                                                  org-files-db-actions--current-presentation))))
+        (with-temp-buffer
+          (org-files-db-export-mode)
+          (org-files-db-results--insert (list candidate))
+          (org-files-db-embark-open-result (substring-no-properties candidate)))
+        (expect seen :to-equal (list result presentation))))
+
+    (it "keeps the general Embark actions such as export"
+      (unless (require 'embark nil t)
+        (buttercup-skip "Embark is not available"))
+      (expect (lookup-key org-files-db-embark-result-map "E")
+              :to-be 'embark-export))
 
     (it "signals a user error without any presentation"
       (expect (org-files-db-embark-open-result "plain") :to-throw 'user-error))

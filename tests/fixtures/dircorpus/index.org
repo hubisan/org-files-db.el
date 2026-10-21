@@ -4,3 +4,5 @@
 [[file:projekte/alt/notiz.org][Notiz]] and [[file:projekte/alt/notiz.org::*Teil][Teil]].
 * Elsewhere
 [[file:archiv/old.org][Old]]
+* Dir
+[[file:projekte/alt][Alt]] [[file:projekte/alt/][Alt2]]
