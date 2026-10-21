@@ -39,6 +39,7 @@
 (defvar embark-exporters-alist)
 (defvar embark-target-finders)
 (defvar embark-file-map)
+(defvar embark-general-map)
 
 (defun org-files-db-embark--call (action candidate)
   "Call ACTION with the record of completion CANDIDATE.
@@ -122,6 +123,8 @@ Insert one line per candidate in the given order in a new buffer in
     (pop-to-buffer-same-window buffer)))
 
 (with-eval-after-load 'embark
+  ;; Keep the general actions such as `embark-export' on E.
+  (set-keymap-parent org-files-db-embark-result-map embark-general-map)
   (unless (lookup-key embark-file-map "M")
     (define-key embark-file-map "M" #'org-files-db-embark-rename-directory))
   (add-to-list 'embark-keymap-alist

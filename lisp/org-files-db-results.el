@@ -50,6 +50,10 @@
            (> (length candidate) 0)
            (get-text-property 0 'org-files-db-presentation candidate))
       org-files-db-presentation--current-read-presentation
+      ;; Embark strips the properties of a target in a result buffer.
+      (and (derived-mode-p 'org-files-db-export-mode)
+           (get-text-property (line-beginning-position)
+                              'org-files-db-presentation))
       (user-error "No presentation available for this result")))
 
 (defun org-files-db-results--resolve (candidate)
