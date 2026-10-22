@@ -197,28 +197,28 @@ All three default to ~org-files-db-actions-open-result~. A view overrides them w
 Built-in actions:
 
 - ~org-files-db-actions-open-result~ opens a heading, a file or the source of a link at its position.
-- ~org-files-db-actions-open-link-target~ opens the resolved target of a link result, either the target heading or the target file.
-- ~org-files-db-actions-follow-heading-link~ opens the first link found in a heading, in its headline first and then in its section, directly at its target (a file, a heading, or Dired for a directory). The heading's own buffer is not displayed and is closed again when it was not open before.
+- ~org-files-db-actions-open-link-target~ opens the target of a link result: a resolved target at the target heading or file, any other link (a web link, a directory, an unresolved file) as Org would open it from its source file.
+- ~org-files-db-actions-follow-heading-link~ opens the first link found in a heading, in its headline first and then in its section, directly at its target (a file, a heading, or Dired for a directory). For a file result it uses the first link before the first heading. The heading's own buffer is not displayed and is closed again when it was not open before.
 - ~org-files-db-actions-insert-file-link~ inserts a ~file:~ link to a file result at point, relative to the current buffer when it visits a file.
-- ~org-files-db-actions-insert-heading-link~ inserts a link to a heading result at point: an ~id:~ link if the heading has an ~ID~, else a file link with the ~CUSTOM_ID~, else a file link with the heading title.
+- ~org-files-db-actions-insert-heading-link~ inserts a link to a heading result at point: an ~id:~ link if the heading has an ~ID~, else a file link with the ~CUSTOM_ID~. A heading with neither gets a new ~ID~ (saved in its file) when ~org-files-db-create-heading-id~ is non-nil, the default, and otherwise a file link with the heading title. For a file result it inserts a file link.
 - ~org-files-db-actions-rename-file~ renames a file result and updates the ~file:~ links that point to it in other files. Links whose text no longer matches the index are skipped and counted in the message. The change spans several files and is not atomic, so use version control.
 
 Actions that need more data than the list shows, such as the link and rename actions, ask ~orgfdb~ for it when you run them. If the files were indexed again since the result list was built, they stop with the message "Index changed, run the query again" and change nothing. Run the query again and select the result once more.
 
 * Renaming or moving a directory
 
-~M-x org-files-db-rename-directory~ renames a directory or moves it to another parent and updates the indexed ~file:~ links. It asks for the directory and the new path (a bare name stays in the same parent); the parent of the destination must exist. With a prefix argument it asks for the configuration.
+~M-x org-files-db-rename-directory~ renames a directory or moves it to another parent and updates the indexed ~file:~ links. It asks for the directory and the new path (a bare name stays in the same parent); a missing parent of the destination is created. With a prefix argument it asks for the configuration.
 
 - In Dired the directory at point (or the current Dired directory on a file line) is the default source, and the Dired buffer showing the parent is reverted after the change.
 - With Embark, ~M~ in the file action map (~embark-file-map~) runs ~org-files-db-embark-rename-directory~ on the directory at point or in the minibuffer and asks only for the destination. An existing ~M~ binding is kept.
-- Incoming links from files outside the directory are rewritten, keeping their format, description, search option and relative or absolute form. Relative links between files inside the directory stay unchanged, absolute ones inside it are rewritten.
+- Incoming links from files outside the directory are rewritten, keeping their format, description, search option and relative or absolute form. Links to the directory itself are rewritten too. Relative links between files inside the directory stay unchanged unless they pass through the directory name (~../dir/file.org~), absolute ones inside it are rewritten.
 - When moving to another parent, relative ~file:~ links in files inside the directory that point outside it are rewritten relative to the new location. Absolute links stay unchanged, and a pure rename leaves relative links as they are.
 - The links come from ~orgfdb~ and are guarded by the index state, so a changed index stops with "Index changed, run the query again" before anything changes.
-- The plan is shown in ~*org-files-db rename directory*~ (old and new text of each link, then skipped links) and nothing changes until you confirm. Links whose text no longer matches the index are skipped and counted in the message.
-- The command refuses an existing destination, a destination inside the directory, a missing destination parent and modified buffers visiting an affected file or a file inside the directory. Buffers visiting files inside the directory follow the move.
+- The plan is shown in ~*org-files-db rename directory*~ like a diff: per file, each link with its line number, the old text as a removed and the new text as an added line, then the skipped links and nothing changes until you confirm. Links whose text no longer matches the index are skipped and counted in the message.
+- The command refuses an existing destination, a destination inside the directory and modified buffers visiting an affected file or a file inside the directory. Buffers visiting files inside the directory follow the move.
 - When a step fails, the edited files are restored, the directory is moved back, and the error lists anything that could not be undone. It does not check whether the directory is the root of a configured directory, so do not move a root.
 
-~M-x org-files-db-undo-rename-directory~ undoes the last rename or move of the session: it restores the original text of the edited files and moves the directory back. It shows the plan, asks for confirmation and refuses, changing nothing, when the new directory is gone, the old path exists again, an edited file changed since or a buffer visiting it is modified. It needs no ~orgfdb~ call; the record is forgotten after a successful undo.
+~M-x org-files-db-undo-rename-directory~ undoes the last rename or move of the session: it restores the original text of the edited files and moves the directory back. It shows the files whose links it restores, asks for confirmation and refuses, changing nothing, when the new directory is gone, the old path exists again, an edited file changed since or a buffer visiting it is modified. It needs no ~orgfdb~ call; the record is forgotten after a successful undo.
 
 * Result buffer
 

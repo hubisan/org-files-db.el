@@ -2346,13 +2346,35 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
       (dolist (case `((,(org-files-db-test--actions-record 'heading file :line 3)
                        . "Result is not a link")
                       (,(org-files-db-test--actions-record 'link file :line 3)
-                       . "Link target is not resolved")))
+                       . "Link not found, run the query again")))
         (expect (org-files-db-actions-open-link-target (car case))
                 :to-throw 'user-error (list (cdr case))))
       (expect messages :to-equal nil))
 
+    (it "opens an unresolved link with Org from its source file"
+      (let ((source (expand-file-name "web.org"
+                                      org-files-db-test--actions-directory))
+            opened)
+        (with-temp-file source
+          (insert "* Web\nSee [[https://example.org][Example]].\n"))
+        (spy-on 'org-link-open :and-call-fake
+                (lambda (link &rest _)
+                  (setq opened (list (org-element-property :raw-link link)
+                                     default-directory))))
+        (expect (org-files-db-actions-open-link-target
+                 (org-files-db-test--actions-record 'link source
+                                                    :line 2 :byte-start 10))
+                :to-be nil)
+        (expect opened :to-equal
+                (list "https://example.org"
+                      (file-name-as-directory
+                       org-files-db-test--actions-directory)))
+        (expect (find-buffer-visiting source) :to-be nil)
+        (expect messages :to-equal '("Link target opened"))))
+
     (it "inserts file and heading links built from a reloaded result"
-      (let* ((org-files-db-configs (org-files-db-test--actions-configs))
+      (let* ((org-files-db-create-heading-id nil)
+             (org-files-db-configs (org-files-db-test--actions-configs))
              (org-files-db-default-config "main")
              (corpus (file-name-as-directory
                       org-files-db-test--actions-directory)))
@@ -2420,7 +2442,8 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
              (org-files-db-actions--current-presentation nil))
         (expect (org-files-db-actions-insert-file-link heading)
                 :to-throw 'user-error '("Result is not a file"))
-        (expect (org-files-db-actions-insert-heading-link file-record)
+        (expect (org-files-db-actions-insert-heading-link
+                 (org-files-db-test--actions-record 'link file))
                 :to-throw 'user-error '("Result is not a heading"))
         (expect (org-files-db-actions-insert-file-link file-record)
                 :to-throw 'user-error '("No query context for this action"))
@@ -2519,7 +2542,52 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
         (expect (find-buffer-visiting source) :to-be nil)
         (expect (org-files-db-actions-follow-heading-link
                  (org-files-db-test--actions-record 'file source))
+                :to-throw 'user-error
+                '("File has no link before the first heading"))
+        (expect (org-files-db-actions-follow-heading-link
+                 (org-files-db-test--actions-record 'link source))
                 :to-throw 'user-error '("Result is not a heading"))))
+
+    (it "follows the first link before the first heading of a file result"
+      (let ((source (expand-file-name "index.org"
+                                      org-files-db-test--actions-directory))
+            opened)
+        (with-temp-file source
+          (insert "#+title: Index\n[[file:sub][Sub]]\n* H [[file:x.org]]\n"))
+        (spy-on 'org-link-open :and-call-fake
+                (lambda (link &rest _)
+                  (setq opened (org-element-property :path link))))
+        (org-files-db-actions-follow-heading-link
+         (org-files-db-test--actions-record 'root source))
+        (expect opened :to-equal "sub")))
+
+    (it "creates an ID for a heading link when the heading has none"
+      (let* ((org-files-db-configs (org-files-db-test--actions-configs))
+             (org-files-db-default-config "main")
+             (org-id-locations-file (expand-file-name
+                                     "ids" org-files-db-test--actions-directory))
+             (corpus (file-name-as-directory
+                      org-files-db-test--actions-directory))
+             (target (expand-file-name "notes.org" corpus))
+             (record (org-files-db-presentation--make-record
+                      :kind 'heading :id 4 :file target :line 1))
+             (org-files-db-actions--current-presentation
+              (org-files-db-test--single-result-presentation record "main")))
+        (with-temp-file target (insert "* No ids\nText\n"))
+        (spy-on 'org-files-db-process--run-process :and-return-value
+                (list :status 0
+                      :stdout (org-files-db-test--corpus-fixture
+                               "query-json-headings-by-ids.json" corpus)))
+        (with-temp-buffer
+          (org-files-db-actions-insert-heading-link record)
+          (let ((id (with-temp-buffer
+                      (insert-file-contents target)
+                      (and (re-search-forward ":ID: +\\(.+\\)" nil t)
+                           (match-string 1)))))
+            (expect id :to-be-truthy)
+            (expect (buffer-string) :to-equal
+                    (format "[[id:%s][No ids]]" id))))
+        (expect (find-buffer-visiting target) :to-be nil)))
 
     (it "runs the default open action from a query"
       (let* ((record (org-files-db-test--actions-record
@@ -2820,10 +2888,12 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
           (expect (derived-mode-p 'special-mode) :to-be-truthy)
           (expect (buffer-string) :to-match "\\`Rename .*alt → .*neu\n")
           (expect (buffer-string) :to-match
-                  (concat "index\\.org:4  "
-                          (regexp-quote "[[file:projekte/alt/notiz.org][Notiz]] → ")
-                          (regexp-quote "[[file:projekte/neu/notiz.org][Notiz]]")))
-          (expect (buffer-string) :not :to-match "Skipped:")))
+                  (concat "\n.*index\\.org\n    4 "
+                          (regexp-quote "- [[file:projekte/alt/notiz.org][Notiz]]\n")
+                          " +"
+                          (regexp-quote "+ [[file:projekte/neu/notiz.org][Notiz]]")))
+          (expect (buffer-string) :not :to-match "Create ")
+          (expect (buffer-string) :not :to-match "Skipped")))
 
       (it "retargets a visiting buffer without marking it modified"
         (let ((buffer (find-file-noselect (file "projekte/alt/notiz.org"))))
@@ -2851,7 +2921,10 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
         (expect messages :to-equal
                 '("Directory renamed, 1 links updated, 1 skipped"))
         (with-current-buffer "*org-files-db rename directory*"
-          (expect (buffer-string) :to-match "Skipped:\n.*index\\.org:4")))
+          (expect (buffer-string) :to-match
+                  (concat "Skipped, .*:\n\n.*index\\.org\n    4 "
+                          (regexp-quote "- [[file:projekte/alt/notiz.org][NOTIZ]]\n")
+                          "\\'"))))
 
       (it "refuses a source that is not a directory"
         (expect (rename new (file "index.org")) :to-throw 'user-error))
@@ -2871,14 +2944,16 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
           (expect (text "projekte/neu/notiz2.org") :to-match
                   (regexp-quote "[[file:notiz.org::*Teil][Teil]]"))))
 
-      (it "refuses a destination whose parent does not exist"
-        (let ((before (snapshot)))
-          (expect (rename (file "archiv/2026/alt")) :to-throw 'user-error)
-          (expect (condition-case err (rename (file "archiv/2026/alt"))
-                    (user-error (cadr err)))
-                  :to-match "\\`Destination parent does not exist: ")
-          (expect 'yes-or-no-p :not :to-have-been-called)
-          (expect (snapshot) :to-equal before)))
+      (it "creates a missing destination parent"
+        (rename (file "archiv/2026/alt"))
+        (expect (file-exists-p (file "archiv/2026/alt/notiz.org")) :to-be t)
+        (with-current-buffer "*org-files-db rename directory*"
+          (expect (buffer-string) :to-match "\nCreate .*archiv/2026/\n")))
+
+      (it "creates no parent when the move is declined"
+        (spy-on 'yes-or-no-p :and-return-value nil)
+        (rename (file "archiv/2026/alt"))
+        (expect (file-exists-p (file "archiv/2026")) :to-be nil))
 
       (describe "moving to another parent"
         (before-each
@@ -2909,9 +2984,10 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
           (with-current-buffer "*org-files-db rename directory*"
             (expect (buffer-string) :to-match "\\`Move .*alt → .*2026/alt\n")
             (expect (buffer-string) :to-match
-                    (concat "notiz\\.org:4  "
-                            (regexp-quote "[[file:../../index.org][index]] → ")
-                            (regexp-quote "[[file:../../../index.org][index]]")))))
+                    (concat "notiz\\.org\n    4 "
+                            (regexp-quote "- [[file:../../index.org][index]]\n")
+                            " +"
+                            (regexp-quote "+ [[file:../../../index.org][index]]")))))
 
         (it "keeps absolute outgoing links unchanged"
           (let ((absolute (file "index.org")))
@@ -3035,7 +3111,8 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
           (rename)
           (org-files-db-undo-rename-directory)
           (with-current-buffer "*org-files-db rename directory*"
-            (expect (buffer-string) :to-match "\\`Undo: .*neu → .*alt\n")
+            (expect (buffer-string) :to-match "\\`Undo: move .*neu back to .*alt\n")
+            (expect (buffer-string) :to-match "Restore the original links in these files:\n")
             (expect (buffer-string) :to-match "index\\.org")))
 
         (it "restores the corpus after a move to another parent"

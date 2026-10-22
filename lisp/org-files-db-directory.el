@@ -28,6 +28,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'diff-mode)
 (require 'org-files-db-core)
 (require 'org-files-db-process)
 (require 'org-files-db-actions)
@@ -207,33 +208,53 @@ position first. Links whose text differs from the index are skipped."
                 (org-files-db-directory--inside-p name old)))))
    (buffer-list)))
 
-(defun org-files-db-directory--line (entry)
-  "Return the FILE:LINE prefix for plan ENTRY."
-  (format "%s:%s" (abbreviate-file-name (car entry))
-          (alist-get 'line (alist-get 'location (nth 1 entry)))))
+(defun org-files-db-directory--line-number (entry)
+  "Return the line number of the link of plan ENTRY."
+  (alist-get 'line (alist-get 'location (nth 1 entry))))
 
 (defun org-files-db-directory--moving-p (old new)
   "Return non-nil when renaming OLD to NEW changes the parent directory."
   (not (equal (file-name-directory old) (file-name-directory new))))
+
+(defun org-files-db-directory--missing-parent (new)
+  "Return the parent directory of NEW when it does not exist yet, else nil."
+  (let ((parent (file-name-directory new)))
+    (unless (file-directory-p parent) parent)))
+
+(defun org-files-db-directory--insert-entries (entries)
+  "Insert plan ENTRIES grouped by file, each change as a removed and added line."
+  (let ((file nil))
+    (dolist (entry entries)
+      (unless (equal file (car entry))
+        (setq file (car entry))
+        (insert "\n" (propertize (abbreviate-file-name file)
+                                 'face 'diff-file-header)
+                "\n"))
+      (let ((prefix (format "%5s " (org-files-db-directory--line-number entry))))
+        (insert prefix (propertize (concat "- " (alist-get 'raw (nth 1 entry)))
+                                   'face 'diff-removed)
+                "\n")
+        (when (nth 2 entry)
+          (insert (make-string (length prefix) ?\s)
+                  (propertize (concat "+ " (nth 2 entry)) 'face 'diff-added)
+                  "\n"))))))
 
 (defun org-files-db-directory--show-plan (old new plan)
   "Display the PLAN to rename or move directory OLD to NEW."
   (with-current-buffer (get-buffer-create org-files-db-directory--plan-buffer)
     (let ((inhibit-read-only t))
       (erase-buffer)
-      (insert (format "%s %s → %s\n\n"
+      (insert (format "%s %s → %s\n"
                       (if (org-files-db-directory--moving-p old new)
                           "Move" "Rename")
                       (abbreviate-file-name old)
                       (abbreviate-file-name new)))
-      (dolist (entry (alist-get 'changes plan))
-        (insert (format "%s  %s → %s\n" (org-files-db-directory--line entry)
-                        (alist-get 'raw (nth 1 entry)) (nth 2 entry))))
+      (when-let* ((parent (org-files-db-directory--missing-parent new)))
+        (insert (format "Create %s\n" (abbreviate-file-name parent))))
+      (org-files-db-directory--insert-entries (alist-get 'changes plan))
       (when-let* ((skipped (alist-get 'skipped plan)))
-        (insert "\nSkipped:\n")
-        (dolist (entry skipped)
-          (insert (format "%s  %s\n" (org-files-db-directory--line entry)
-                          (alist-get 'raw (nth 1 entry))))))
+        (insert "\nSkipped, the file no longer matches the index:\n")
+        (org-files-db-directory--insert-entries skipped))
       (goto-char (point-min))
       (special-mode))
     (display-buffer (current-buffer))))
@@ -343,6 +364,7 @@ Restore the previous state and signal a user error when a step fails."
             (push (cons (car entry)
                         (org-files-db-directory--read-bytes (car entry)))
                   written))
+          (make-directory (file-name-directory new) t)
           (org-files-db-directory--rename old new)
           (setq renamed t)
           (dolist (entry retargeted)
@@ -419,12 +441,13 @@ with a prefix argument, the configuration."
 ;;;###autoload
 (defun org-files-db-rename-directory (directory new-name &optional config)
   "Rename or move DIRECTORY to NEW-NAME and update file links.
-NEW-NAME is a path, relative to the parent of DIRECTORY when not absolute. Its
-parent directory must exist. Update the indexed incoming links to files inside
-DIRECTORY and the outgoing relative links of files inside it that point
-outside, using the configuration CONFIG, the default one when nil. Show the
-planned changes and ask for confirmation before anything changes. When a step
-fails, restore the previous state. Return nil.
+NEW-NAME is a path, relative to the parent of DIRECTORY when not absolute. A
+missing parent directory of NEW-NAME is created. Update the indexed incoming
+links to files inside DIRECTORY, links to DIRECTORY itself and relative links
+of files inside it that no longer reach their target, using the configuration
+CONFIG, the default one when nil. Show the planned changes and ask for
+confirmation before anything changes. When a step fails, restore the previous
+state. Return nil.
 
 With an interactive prefix argument, select the configuration."
   (interactive (org-files-db-directory--read-arguments))
@@ -439,9 +462,6 @@ With an interactive prefix argument, select the configuration."
       (user-error "Destination is inside the directory: %s" new))
     (when (file-exists-p new)
       (user-error "Destination already exists: %s" new))
-    (unless (file-directory-p (file-name-directory new))
-      (user-error "Destination parent does not exist: %s"
-                  (file-name-directory new)))
     (let* ((links (org-files-db-directory--affected-links old new config-name))
            (plan (org-files-db-directory--plan links old new))
            (changes (alist-get 'changes plan))
@@ -492,11 +512,12 @@ With an interactive prefix argument, select the configuration."
   (with-current-buffer (get-buffer-create org-files-db-directory--plan-buffer)
     (let ((inhibit-read-only t))
       (erase-buffer)
-      (insert (format "Undo: %s → %s\n\nRestore:\n"
+      (insert (format "Undo: move %s back to %s\n"
                       (abbreviate-file-name (plist-get operation :new))
                       (abbreviate-file-name (plist-get operation :old))))
+      (insert "\nRestore the original links in these files:\n")
       (dolist (entry (plist-get operation :files))
-        (insert (format "%s\n" (abbreviate-file-name (car entry)))))
+        (insert (format "  %s\n" (abbreviate-file-name (car entry)))))
       (goto-char (point-min))
       (special-mode))
     (display-buffer (current-buffer))))
