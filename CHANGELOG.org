@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =CHANGED= README shows a view that lists headings with a link in the headline and follows it.
 - =ADDED= Added ~org-files-db-actions-follow-or-open-heading~, which follows a link in the headline itself or else opens the heading; Embark binds it to ~j~.
 - =FIXED= Embark actions on a candidate whose properties were stripped after the minibuffer exited, as with Ivy, no longer fail with "No presentation available for this result".
 - =CHANGED= ~org-files-db-actions-open-link-target~ opens links without a resolved target, such as web links or directories, as Org would open them from their source file.
