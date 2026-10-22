@@ -112,6 +112,15 @@ FILE is the configuration file for that name."
   :type 'function
   :group 'org-files-db)
 
+(defcustom org-files-db-create-heading-id t
+  "Whether inserting a heading link creates an ID for the heading.
+When non-nil, `org-files-db-actions-insert-heading-link' gives a heading that
+has neither an ID nor a CUSTOM_ID property a new ID with `org-id-get-create'
+and inserts an `id:' link. When nil, it inserts a file link with the heading
+title as search option."
+  :type 'boolean
+  :group 'org-files-db)
+
 (defcustom org-files-db-views nil
   "Named org-files-db query views.
 Each entry starts with a unique view name and a flat property list.

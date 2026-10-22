@@ -32,6 +32,7 @@
 (require 'seq)
 
 (declare-function org-fold-show-context "org-fold" (&optional key))
+(declare-function org-id-get-create "org-id" (&optional force))
 (declare-function org-files-db-reload-results "org-files-db-query"
                   (records presentation &rest args))
 (declare-function org-files-db-query--guarded-json "org-files-db-query"
@@ -95,18 +96,59 @@ RECORD opens its file at the start. No orgfdb process is started."
                (_ "File opened")))
     nil))
 
+(defun org-files-db-actions--open-link-in (file find)
+  "Open the link that FIND returns in a buffer visiting FILE.
+FIND is called without arguments in that buffer and returns a link element
+or nil. The buffer is not displayed unless the link points into it, and it
+is killed afterwards when it was not open before and is unmodified. Relative
+file links resolve against the directory of FILE. Return non-nil when a link
+was opened."
+  (let* ((existing (find-buffer-visiting file))
+         (buffer (or existing (find-file-noselect file))))
+    (unwind-protect
+        (when-let* ((link (with-current-buffer buffer (funcall find))))
+          (let ((default-directory (file-name-directory
+                                    (expand-file-name file))))
+            ;; Links without a file resolve in the current buffer.
+            (when (member (org-element-property :type link)
+                          '("fuzzy" "custom-id" "coderef"))
+              (pop-to-buffer-same-window buffer))
+            (org-link-open link))
+          t)
+      (when (and (not existing)
+                 (buffer-live-p buffer)
+                 (not (eq buffer (current-buffer)))
+                 (not (get-buffer-window buffer t))
+                 (not (buffer-modified-p buffer)))
+        (kill-buffer buffer)))))
+
+(defun org-files-db-actions--link-at (line byte-start)
+  "Return the link at BYTE-START or LINE in the current buffer, or nil."
+  (save-excursion
+    (save-restriction
+      (org-files-db-actions--move-to line byte-start)
+      (when (looking-at org-link-any-re)
+        (org-element-link-parser)))))
+
 (defun org-files-db-actions-open-link-target (record)
   "Open the target of link RECORD and return nil.
-A heading target opens at its position, a file target at the start of the
-file. Signal a user error for a non-link RECORD or an unresolved target. No
-orgfdb process is started."
+A resolved heading target opens at its position, a resolved file target at
+the start of the file. Any other link, such as a web link or a link to a
+directory, is opened by Org as if followed in its source file. Signal a user
+error for a non-link RECORD. No orgfdb process is started."
   (unless (eq (org-files-db-record-kind record) 'link)
     (user-error "Result is not a link"))
-  (unless (org-files-db-record-target-resolved-p record)
-    (user-error "Link target is not resolved"))
-  (org-files-db-actions--goto (org-files-db-record-target-file record)
-                              (org-files-db-record-target-line record)
-                              (org-files-db-record-target-byte-start record))
+  (if (org-files-db-record-target-resolved-p record)
+      (org-files-db-actions--goto (org-files-db-record-target-file record)
+                                  (org-files-db-record-target-line record)
+                                  (org-files-db-record-target-byte-start record))
+    (unless (org-files-db-actions--open-link-in
+             (org-files-db-record-file record)
+             (lambda ()
+               (org-files-db-actions--link-at
+                (org-files-db-record-line record)
+                (org-files-db-record-byte-start record))))
+      (user-error "Link not found, run the query again")))
   (message "Link target opened")
   nil)
 
@@ -157,16 +199,52 @@ or the file name when there is no title."
               (value (alist-get 'value entry)))
     (and (stringp value) (not (string-empty-p value)) value)))
 
+(defun org-files-db-actions--create-id (record)
+  "Give the heading of RECORD a new ID, save its file and return the ID.
+A buffer that already visits the file and has unsaved changes is left
+unsaved. Signal a user error when the heading is no longer at its indexed
+position."
+  (require 'org-id)
+  (let* ((file (org-files-db-record-file record))
+         (existing (find-buffer-visiting file))
+         (buffer (or existing (find-file-noselect file))))
+    (unwind-protect
+        (with-current-buffer buffer
+          (let ((modified (buffer-modified-p)))
+            (prog1 (save-excursion
+                     (save-restriction
+                       (org-files-db-actions--move-to
+                        (org-files-db-record-line record)
+                        (org-files-db-record-byte-start record))
+                       (unless (org-at-heading-p)
+                         (user-error "Heading moved, run the query again"))
+                       (org-id-get-create)))
+              (unless modified
+                (save-buffer)))))
+      (unless (or existing (buffer-modified-p buffer))
+        (kill-buffer buffer)))))
+
 (defun org-files-db-actions-insert-heading-link (record)
   "Insert an Org link to the heading of RECORD at point and return nil.
-Prefer an `id:' link, then a file link with the custom ID, and otherwise a
-file link with the heading title as search option."
-  (unless (eq (org-files-db-record-kind record) 'heading)
+Prefer an `id:' link, then a file link with the custom ID. Without both,
+create an ID when `org-files-db-create-heading-id' is non-nil, and otherwise
+insert a file link with the heading title as search option. A file or root
+RECORD inserts a file link as `org-files-db-actions-insert-file-link' does."
+  (unless (memq (org-files-db-record-kind record) '(heading file root))
     (user-error "Result is not a heading"))
+  (if (memq (org-files-db-record-kind record) '(file root))
+      (org-files-db-actions-insert-file-link record)
+    (org-files-db-actions--insert-heading-link record)))
+
+(defun org-files-db-actions--insert-heading-link (record)
+  "Insert an Org link to the heading RECORD at point and return nil."
   (let* ((result (org-files-db-actions--reload-record record '("properties")))
          (title (alist-get 'title result))
-         (id (org-files-db-actions--property result "ID"))
          (custom-id (org-files-db-actions--property result "CUSTOM_ID"))
+         (id (or (org-files-db-actions--property result "ID")
+                 (and (not custom-id)
+                      org-files-db-create-heading-id
+                      (org-files-db-actions--create-id record))))
          (path (org-files-db-actions--link-path
                 (org-files-db-record-file record)))
          (target (cond
@@ -179,19 +257,21 @@ file link with the heading title as search option."
 
 (defun org-files-db-actions--first-link (line byte-start)
   "Return the first link of the heading at BYTE-START or LINE.
-Search the headline first, then the section body, in the current buffer. Point
-and restriction are preserved. Return nil when the heading has no link."
+Search the headline first, then the section body, in the current buffer.
+Without LINE and BYTE-START, search the text before the first heading.
+Return nil when there is no link."
   (save-excursion
     (save-restriction
       (org-files-db-actions--move-to line byte-start)
       (goto-char (line-beginning-position))
-      (let ((start (point))
-            (headline-end (line-end-position))
-            (section-end (save-excursion
-                           (forward-line 1)
-                           (if (re-search-forward org-heading-regexp nil t)
-                               (match-beginning 0)
-                             (point-max)))))
+      (let* ((start (point))
+             (root (not (or line byte-start)))
+             (headline-end (if root start (line-end-position)))
+             (section-end (save-excursion
+                            (unless root (forward-line 1))
+                            (if (re-search-forward org-heading-regexp nil t)
+                                (match-beginning 0)
+                              (point-max)))))
         (when (or (re-search-forward org-link-any-re headline-end t)
                   (progn (goto-char start)
                          (re-search-forward org-link-any-re section-end t)))
@@ -200,38 +280,27 @@ and restriction are preserved. Return nil when the heading has no link."
 
 (defun org-files-db-actions-follow-heading-link (record)
   "Open the first link in the heading of RECORD and return nil.
-Search the headline first, then the section body. The heading buffer is not
-displayed and is killed afterwards when it was not open before and is
-unmodified. Relative file links resolve against the directory of the heading
-file. No orgfdb process is started. Signal a user error when the heading has
-no link."
-  (unless (eq (org-files-db-record-kind record) 'heading)
-    (user-error "Result is not a heading"))
-  (let* ((file (org-files-db-record-file record))
-         (existing (find-buffer-visiting file))
-         (buffer (or existing (find-file-noselect file))))
-    (unwind-protect
-        (let ((link (with-current-buffer buffer
-                      (org-files-db-actions--first-link
-                       (org-files-db-record-line record)
-                       (org-files-db-record-byte-start record)))))
-          (unless link
-            (user-error "Heading has no link"))
-          (let ((default-directory (file-name-directory
-                                    (expand-file-name file))))
-            ;; Links without a file resolve in the current buffer.
-            (when (member (org-element-property :type link)
-                          '("fuzzy" "custom-id" "coderef"))
-              (pop-to-buffer-same-window buffer))
-            (org-link-open link))
-          (message "Heading link followed")
-          nil)
-      (when (and (not existing)
-                 (buffer-live-p buffer)
-                 (not (eq buffer (current-buffer)))
-                 (not (get-buffer-window buffer t))
-                 (not (buffer-modified-p buffer)))
-        (kill-buffer buffer)))))
+Search the headline first, then the section body. For a file or root RECORD
+search the text before the first heading. The file buffer is not displayed
+and is killed afterwards when it was not open before and is unmodified.
+Relative file links resolve against the directory of the file. No orgfdb
+process is started. Signal a user error when there is no link."
+  (let ((kind (org-files-db-record-kind record)))
+    (unless (memq kind '(heading file root))
+      (user-error "Result is not a heading"))
+    (unless (org-files-db-actions--open-link-in
+             (org-files-db-record-file record)
+             (lambda ()
+               (if (eq kind 'heading)
+                   (org-files-db-actions--first-link
+                    (org-files-db-record-line record)
+                    (org-files-db-record-byte-start record))
+                 (org-files-db-actions--first-link nil nil))))
+      (user-error (if (eq kind 'heading)
+                      "Heading has no link"
+                    "File has no link before the first heading")))
+    (message "Heading link followed")
+    nil))
 
 ;; Renaming a file rewrites the indexed incoming links, so the index is
 ;; queried and guarded before anything on disk changes.
