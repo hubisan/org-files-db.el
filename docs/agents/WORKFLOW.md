@@ -107,6 +107,10 @@ change is.
   `cl-letf`, returning recorded presentation-json or error payloads. Unit tests never start a
   real `orgfdb` process. An integration test that needs the real binary must be explicitly
   marked as such and skip cleanly when `orgfdb` is not installed.
+- To check a change against the real `orgfdb` by hand, `scripts/e2e-index.sh [CORPUS]`
+  indexes a copy of a directory and prints the `org-files-db-configs` setup. The directory
+  rename fixtures come from `scripts/regen-dir-fixtures.sh`; regenerate them instead of
+  editing ids or byte offsets by hand.
 - Use temporary files and buffers for file and buffer actions and clean them up; never touch
   the user's Org files or configuration.
 - Test-only helpers use the `org-files-db-test--` prefix. Reuse existing helpers in

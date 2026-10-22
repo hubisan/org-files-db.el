@@ -28,6 +28,17 @@
 ;; `org-files-db-export-mode' buffer (see `org-files-db-results'). Embark is
 ;; never required here: everything is registered only once Embark has been
 ;; loaded.
+;;
+;; Two Embark behaviours shape this file:
+;;
+;; - An action receives the candidate as a plain string. Embark strips the
+;;   text properties when it injects a target found outside the minibuffer
+;;   (a row of a result buffer), and Ivy strips them too and runs the action
+;;   after the minibuffer exited. `org-files-db-results--resolve' therefore
+;;   finds the presentation from the row or from the last read.
+;; - A type keymap in `embark-keymap-alist' does not include the general
+;;   actions; `org-files-db-embark-result-map' gets `embark-general-map' as
+;;   parent so `E' (export) and the others stay available.
 
 ;;; Code:
 
