@@ -1,0 +1,2 @@
+# Every PR adds a line under "* Unreleased"; keep both sides on merge.
+CHANGELOG.org merge=union
