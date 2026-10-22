@@ -123,3 +123,7 @@ change is.
 - Before declaring a ticket complete: review the diff against the issue, run `make ci`,
   update docs and `CHANGELOG.org` as `AGENTS.md` requires, and state what was
   implemented, what was tested and what remains untested.
+- `make ci` needs Eask and the package archives. In Claude Code on the web, where those are
+  blocked, run `make check-offline`: the same compile, lint and Buttercup checks on the
+  container's Emacs 29.3 (the minimum version, also in the CI matrix) with packages cloned
+  by `.claude/hooks/session-start.sh`.
