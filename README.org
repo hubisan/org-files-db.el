@@ -8,7 +8,7 @@ Emacs client for [[https://github.com/hubisan/org-files-db][org-files-db]]. The 
 
 * Requirements
 
-- Emacs 29.4 or newer
+- Emacs 29.3 or newer
 - The ~orgfdb~ executable, installed or available through an explicit path
 - Optional: [[https://github.com/oantolin/embark][Embark]] for result actions and exporting the filtered results
 

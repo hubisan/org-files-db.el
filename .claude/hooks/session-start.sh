@@ -1,6 +1,6 @@
 #!/bin/bash
-# Prepare Claude Code on the web sessions for scripts/check-offline.sh: build
-# Emacs from the GitHub mirror and clone the development packages, since the
+# Prepare Claude Code on the web sessions for scripts/check-offline.sh: install
+# Emacs from Ubuntu and clone the development packages from GitHub, since the
 # sandbox blocks the GNU and MELPA package archives that Eask needs.
 set -euo pipefail
 
@@ -8,24 +8,13 @@ if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
 
-EMACS_VERSION=30.2
 PREFIX="$HOME/.cache/org-files-db-dev"
-EMACS_DIR="$PREFIX/emacs-$EMACS_VERSION"
 DEPS="$PREFIX/deps"
 
-if [ ! -x "$EMACS_DIR/bin/emacs" ]; then
-  src="$PREFIX/src/emacs-$EMACS_VERSION"
-  rm -rf "$src"
-  mkdir -p "$PREFIX/src"
-  git clone -q --depth 1 --branch "emacs-$EMACS_VERSION" \
-    https://github.com/emacs-mirror/emacs.git "$src"
-  (cd "$src" &&
-     ./autogen.sh >/dev/null &&
-     ./configure -q --prefix="$EMACS_DIR" --without-all --without-x \
-       --without-native-compilation --with-gnutls=no >/dev/null &&
-     make -s -j"$(nproc)" >/dev/null &&
-     make -s install >/dev/null)
-  rm -rf "$src"
+# Ubuntu 24.04 ships Emacs 29.3, the oldest version the package supports.
+if ! command -v emacs >/dev/null; then
+  apt-get update -qq >/dev/null
+  apt-get install -y -qq emacs-nox >/dev/null
 fi
 
 mkdir -p "$DEPS"
@@ -40,6 +29,5 @@ for repo in jorgenschaefer/emacs-buttercup oantolin/embark emacs-compat/compat \
 done
 
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
-  echo "export PATH=\"$EMACS_DIR/bin:\$PATH\"" >> "$CLAUDE_ENV_FILE"
   echo "export ORG_FILES_DB_DEPS=\"$DEPS\"" >> "$CLAUDE_ENV_FILE"
 fi

@@ -21,7 +21,7 @@
 ;; Maintainer: Daniel Hubmann <hubisan@gmail.com>
 ;; URL: https://github.com/hubisan/org-files-db.el
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.4"))
+;; Package-Requires: ((emacs "29.3"))
 ;; Keywords: outlines, tools, convenience
 
 ;;; Commentary:

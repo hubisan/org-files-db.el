@@ -92,18 +92,21 @@ file target."
   display-text
   role)
 
-(cl-defstruct (org-files-db-presentation--wire-schema
-               (:constructor org-files-db-presentation--make-wire-schema))
-  "Compiled positional indexes for one presentation wire schema."
-  row-result-index
-  row-context
-  row-cells
-  cell-search-text
-  cell-display-text
-  cell-role
-  row-context-shapes
-  role-values
-  role-symbols)
+;; Emacs 29.3 warns about the generated constructor docstring, whose usage
+;; line lists every slot; `with-suppressed-warnings' does not reach it there.
+(with-no-warnings
+  (cl-defstruct (org-files-db-presentation--wire-schema
+                 (:constructor org-files-db-presentation--make-wire-schema))
+    "Compiled positional indexes for one presentation wire schema."
+    row-result-index
+    row-context
+    row-cells
+    cell-search-text
+    cell-display-text
+    cell-role
+    row-context-shapes
+    role-values
+    role-symbols))
 
 (defun org-files-db-presentation--default-columns (target)
   "Return the configured default columns for TARGET."
