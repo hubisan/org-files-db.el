@@ -33,6 +33,7 @@
 
 (declare-function org-fold-show-context "org-fold" (&optional key))
 (declare-function org-id-get-create "org-id" (&optional force))
+(declare-function org-id-new "org-id" (&optional prefix))
 (declare-function org-files-db-reload-results "org-files-db-query"
                   (records presentation &rest args))
 (declare-function org-files-db-query--guarded-json "org-files-db-query"
@@ -199,8 +200,10 @@ or the file name when there is no title."
               (value (alist-get 'value entry)))
     (and (stringp value) (not (string-empty-p value)) value)))
 
-(defun org-files-db-actions--create-id (record)
-  "Give the heading of RECORD a new ID, save its file and return the ID.
+(defun org-files-db-actions--create-id (record property)
+  "Give the heading of RECORD a new PROPERTY, save its file and return it.
+PROPERTY is \"ID\", created with `org-id-get-create', or \"CUSTOM_ID\",
+set to a value from `org-id-new'.
 A buffer that already visits the file and has unsaved changes is left
 unsaved. Signal a user error when the heading is no longer at its indexed
 position."
@@ -218,7 +221,11 @@ position."
                         (org-files-db-record-byte-start record))
                        (unless (org-at-heading-p)
                          (user-error "Heading moved, run the query again"))
-                       (org-id-get-create)))
+                       (if (equal property "ID")
+                           (org-id-get-create)
+                         (let ((value (org-id-new)))
+                           (org-entry-put nil property value)
+                           value))))
               (unless modified
                 (save-buffer)))))
       (unless (or existing (buffer-modified-p buffer))
@@ -227,7 +234,7 @@ position."
 (defun org-files-db-actions-insert-heading-link (record)
   "Insert an Org link to the heading of RECORD at point and return nil.
 Prefer an `id:' link, then a file link with the custom ID. Without both,
-create an ID when `org-files-db-create-heading-id' is non-nil, and otherwise
+create the identifier `org-files-db-create-heading-id' names, and otherwise
 insert a file link with the heading title as search option. A file or root
 RECORD inserts a file link as `org-files-db-actions-insert-file-link' does."
   (unless (memq (org-files-db-record-kind record) '(heading file root))
@@ -240,11 +247,15 @@ RECORD inserts a file link as `org-files-db-actions-insert-file-link' does."
   "Insert an Org link to the heading RECORD at point and return nil."
   (let* ((result (org-files-db-actions--reload-record record '("properties")))
          (title (alist-get 'title result))
+         (id (org-files-db-actions--property result "ID"))
          (custom-id (org-files-db-actions--property result "CUSTOM_ID"))
-         (id (or (org-files-db-actions--property result "ID")
-                 (and (not custom-id)
-                      org-files-db-create-heading-id
-                      (org-files-db-actions--create-id record))))
+         (create (and (not id) (not custom-id) org-files-db-create-heading-id))
+         (id (or id (and (eq create 'id)
+                         (org-files-db-actions--create-id record "ID"))))
+         (custom-id (or custom-id
+                        (and (eq create 'custom-id)
+                             (org-files-db-actions--create-id
+                              record "CUSTOM_ID"))))
          (path (org-files-db-actions--link-path
                 (org-files-db-record-file record)))
          (target (cond
@@ -301,6 +312,32 @@ process is started. Signal a user error when there is no link."
                     "File has no link before the first heading")))
     (message "Heading link followed")
     nil))
+
+(defun org-files-db-actions--headline-link (line byte-start)
+  "Return the first link in the headline at BYTE-START or LINE, or nil."
+  (save-excursion
+    (save-restriction
+      (org-files-db-actions--move-to line byte-start)
+      (goto-char (line-beginning-position))
+      (when (re-search-forward org-link-any-re (line-end-position) t)
+        (goto-char (match-beginning 0))
+        (org-element-link-parser)))))
+
+(defun org-files-db-actions-follow-or-open-heading (record)
+  "Follow the link in the headline of RECORD, or else open the heading.
+Only a link in the headline itself counts, of any type and resolved or not;
+it opens as `org-files-db-actions-follow-heading-link' opens it. A heading
+without one, and a file or root RECORD, opens as
+`org-files-db-actions-open-result' opens it. Return nil."
+  (if (and (eq (org-files-db-record-kind record) 'heading)
+           (org-files-db-actions--open-link-in
+            (org-files-db-record-file record)
+            (lambda ()
+              (org-files-db-actions--headline-link
+               (org-files-db-record-line record)
+               (org-files-db-record-byte-start record)))))
+      (progn (message "Heading link followed") nil)
+    (org-files-db-actions-open-result record)))
 
 ;; Renaming a file rewrites the indexed incoming links, so the index is
 ;; queried and guarded before anything on disk changes.

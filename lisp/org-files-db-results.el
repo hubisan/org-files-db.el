@@ -54,6 +54,7 @@
       (and (derived-mode-p 'org-files-db-export-mode)
            (get-text-property (line-beginning-position)
                               'org-files-db-presentation))
+      (org-files-db-presentation--last-read-presentation candidate)
       (user-error "No presentation available for this result")))
 
 (defun org-files-db-results--resolve (candidate)

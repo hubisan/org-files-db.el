@@ -2561,8 +2561,58 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
          (org-files-db-test--actions-record 'root source))
         (expect opened :to-equal "sub")))
 
+    (it "creates a CUSTOM_ID for a heading link when configured"
+      (let* ((org-files-db-create-heading-id 'custom-id)
+             (org-files-db-configs (org-files-db-test--actions-configs))
+             (org-files-db-default-config "main")
+             (corpus (file-name-as-directory
+                      org-files-db-test--actions-directory))
+             (target (expand-file-name "notes.org" corpus))
+             (record (org-files-db-presentation--make-record
+                      :kind 'heading :id 4 :file target :line 1))
+             (org-files-db-actions--current-presentation
+              (org-files-db-test--single-result-presentation record "main")))
+        (with-temp-file target (insert "* No ids\nText\n"))
+        (spy-on 'org-files-db-process--run-process :and-return-value
+                (list :status 0
+                      :stdout (org-files-db-test--corpus-fixture
+                               "query-json-headings-by-ids.json" corpus)))
+        (spy-on 'org-id-new :and-return-value "abc-123")
+        (with-temp-buffer
+          (set-visited-file-name (expand-file-name "here.org" corpus) t)
+          (org-files-db-actions-insert-heading-link record)
+          (expect (buffer-string) :to-equal
+                  "[[file:notes.org::#abc-123][No ids]]")
+          (set-buffer-modified-p nil))
+        (expect (with-temp-buffer
+                  (insert-file-contents target)
+                  (buffer-string))
+                :to-match ":CUSTOM_ID: +abc-123")))
+
+    (it "follows a headline link or else opens the heading"
+      (let ((source (expand-file-name "paths.org"
+                                      org-files-db-test--actions-directory))
+            opened)
+        (with-temp-file source
+          (insert "* [[file:sub][Sub]]\n* Plain\n[[file:body.org]]\n"))
+        (spy-on 'org-link-open :and-call-fake
+                (lambda (link &rest _)
+                  (setq opened (org-element-property :path link))))
+        (org-files-db-actions-follow-or-open-heading
+         (org-files-db-test--actions-record 'heading source :line 1))
+        (expect opened :to-equal "sub")
+        (expect (find-buffer-visiting source) :to-be nil)
+        (setq opened nil messages nil)
+        (org-files-db-actions-follow-or-open-heading
+         (org-files-db-test--actions-record 'heading source :line 2))
+        (expect opened :to-be nil)
+        (expect (buffer-file-name) :to-equal source)
+        (expect (line-number-at-pos) :to-equal 2)
+        (expect messages :to-equal '("Heading opened"))))
+
     (it "creates an ID for a heading link when the heading has none"
-      (let* ((org-files-db-configs (org-files-db-test--actions-configs))
+      (let* ((org-files-db-create-heading-id 'id)
+             (org-files-db-configs (org-files-db-test--actions-configs))
              (org-files-db-default-config "main")
              (org-id-locations-file (expand-file-name
                                      "ids" org-files-db-test--actions-directory))
@@ -3260,6 +3310,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
            (org-files-db-embark-insert-file-link org-files-db-actions-insert-file-link "f")
            (org-files-db-embark-insert-heading-link org-files-db-actions-insert-heading-link "h")
            (org-files-db-embark-follow-heading-link org-files-db-actions-follow-heading-link "l")
+           (org-files-db-embark-follow-or-open-heading org-files-db-actions-follow-or-open-heading "j")
            (org-files-db-embark-rename-file org-files-db-actions-rename-file "r"))))
 
     (it "loads the package without loading embark"
@@ -3328,6 +3379,19 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
           (org-files-db-results--insert (list candidate))
           (org-files-db-embark-open-result (substring-no-properties candidate)))
         (expect seen :to-equal (list result presentation))))
+
+    (it "resolves a stripped candidate of the last read after the minibuffer exited"
+      (let* ((result '((kind . "heading") (id . 1)))
+             (presentation
+              (org-files-db-test--single-result-presentation result "work"))
+             (candidates (org-files-db-presentation--candidates presentation))
+             (org-files-db-presentation--last-read (cons presentation candidates))
+             seen)
+        (spy-on 'org-files-db-actions-open-result :and-call-fake
+                (lambda (record) (setq seen record)))
+        (org-files-db-embark-open-result
+         (substring-no-properties (car candidates)))
+        (expect seen :to-equal result)))
 
     (it "keeps the general Embark actions such as export"
       (unless (require 'embark nil t)

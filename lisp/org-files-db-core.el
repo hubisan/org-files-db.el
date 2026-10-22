@@ -112,13 +112,16 @@ FILE is the configuration file for that name."
   :type 'function
   :group 'org-files-db)
 
-(defcustom org-files-db-create-heading-id t
-  "Whether inserting a heading link creates an ID for the heading.
-When non-nil, `org-files-db-actions-insert-heading-link' gives a heading that
-has neither an ID nor a CUSTOM_ID property a new ID with `org-id-get-create'
-and inserts an `id:' link. When nil, it inserts a file link with the heading
-title as search option."
-  :type 'boolean
+(defcustom org-files-db-create-heading-id nil
+  "Which identifier inserting a heading link creates for a heading without one.
+`org-files-db-actions-insert-heading-link' uses this for a heading that has
+neither an ID nor a CUSTOM_ID property. With `custom-id' it sets CUSTOM_ID to
+a value from `org-id-new' and inserts a file link to it. With `id' it creates
+an ID with `org-id-get-create' and inserts an `id:' link. With nil it creates
+nothing and inserts a file link with the heading title as search option."
+  :type '(choice (const :tag "Create nothing" nil)
+                 (const :tag "Create CUSTOM_ID" custom-id)
+                 (const :tag "Create ID" id))
   :group 'org-files-db)
 
 (defcustom org-files-db-views nil
