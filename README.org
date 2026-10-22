@@ -4,17 +4,17 @@
 [[https://www.gnu.org/licenses/gpl-3.0][https://img.shields.io/badge/License-GPL%20v3-blue.svg]]
 [[https://github.com/hubisan/org-files-db.el/actions/workflows/ci.yml][https://github.com/hubisan/org-files-db.el/actions/workflows/ci.yml/badge.svg]]
 
-Emacs client for [[https://github.com/hubisan/org-files-db][org-files-db]]. The ~orgfdb~ command line tool indexes your Org files into a database and answers structural queries over them. This package lets you run those queries from Emacs, pick a result with standard completion, and act on it: open it, insert a link to it, follow its link, or rename its file.
+This package is the Emacs client for [[https://github.com/hubisan/org-files-db][org-files-db]]. The ~orgfdb~ command line tool puts your Org files into a database (the index) and answers queries about their structure. With this package you run these queries from Emacs and select a result with the normal completion. Then you act on the result: you open it, insert a link to it, follow its link, or rename its file.
 
 * Requirements
 
 - Emacs 29.3 or newer
-- The ~orgfdb~ executable, installed or available through an explicit path
-- Optional: [[https://github.com/oantolin/embark][Embark]] for result actions and exporting the filtered results
+- The ~orgfdb~ executable, on your ~PATH~ or with an explicit path
+- Optional: [[https://github.com/oantolin/embark][Embark]], for actions on results and for the export of the filtered results
 
 * Quick start
 
-Tell Emacs where ~orgfdb~ and your configuration file are. A configuration has a name and points to an ~orgfdb~ configuration file. The default configuration is used whenever you do not select one.
+Tell Emacs where ~orgfdb~ and your configuration file are. A configuration has a name and points to an ~orgfdb~ configuration file. If you do not select a configuration, Emacs uses the default configuration.
 
 #+begin_src emacs-lisp
 (require 'org-files-db)
@@ -23,15 +23,15 @@ Tell Emacs where ~orgfdb~ and your configuration file are. A configuration has a
 (setq org-files-db-default-config "main")
 #+end_src
 
-Run ~M-x org-files-db-check-setup~ to verify the executable, the configuration file, the version and read access to the database.
+Run ~M-x org-files-db-check-setup~. It makes sure that the executable and the configuration file exist, shows the version, and makes sure that Emacs can read the database.
 
-Run a query with ~M-x org-files-db-query~ and enter a structural query at the prompt, for example:
+Run ~M-x org-files-db-query~ and type a query at the prompt, for example:
 
 #+begin_example
 (headings (not (done)))
 #+end_example
 
-This lists all headings that are not done. Pick one with the usual completion interface (default UI, Vertico, Icomplete, Fido, ...) and press ~RET~ to open it. The same query from Lisp:
+This query lists all headings that are not done. Select one heading with your completion interface (the default interface, Vertico, Icomplete or Fido) and press ~RET~ to open it. This is the same query from Lisp:
 
 #+begin_src emacs-lisp
 (org-files-db-query '(headings (not (done))))
@@ -39,11 +39,11 @@ This lists all headings that are not done. Pick one with the usual completion in
 
 * Configuration
 
-~org-files-db-executable~ is the command name or path of ~orgfdb~ (default ~"orgfdb"~).
+~org-files-db-executable~ is the command name or the path of ~orgfdb~. The default is ~"orgfdb"~.
 
-~org-files-db-configs~ is an alist of named configurations. Each entry is ~(NAME . FILE)~ with a unique non-empty name and the path of an ~orgfdb~ configuration file. Use several entries when you keep separate indexes, for example for work and private notes.
+~org-files-db-configs~ is an alist of named configurations. Each entry is ~(NAME . FILE)~. NAME is a unique name that is not empty. FILE is the path of an ~orgfdb~ configuration file. Use more than one entry if you keep separate indexes, for example one for work notes and one for private notes.
 
-~org-files-db-default-config~ is the name of the entry that is used when none is selected. It is required as soon as ~org-files-db-configs~ is not empty.
+~org-files-db-default-config~ is the name of the entry that Emacs uses when you select none. You must set it when ~org-files-db-configs~ is not empty.
 
 #+begin_src emacs-lisp
 (setq org-files-db-configs
@@ -52,17 +52,17 @@ This lists all headings that are not done. Pick one with the usual completion in
 (setq org-files-db-default-config "main")
 #+end_src
 
-Select a configuration for one call in one of these ways:
+You can select a configuration for one call in three ways:
 
-- Interactively, call ~org-files-db-query~ or ~org-files-db-check-setup~ with a prefix argument (~C-u~) to choose from ~org-files-db-configs~.
-- From Lisp, pass ~:config "work"~ to ~org-files-db-query~.
+- Call ~org-files-db-query~ or ~org-files-db-check-setup~ with a prefix argument (~C-u~). Emacs then asks for a name from ~org-files-db-configs~.
+- From Lisp, give ~:config "work"~ to ~org-files-db-query~.
 - In a predefined view, set ~:config "work"~.
 
-The configuration files must exist and be readable. Invalid entries, duplicate names and an unknown default configuration are reported as errors.
+The configuration files must exist and Emacs must be able to read them. Emacs shows an error for an entry that is not valid, for two entries with the same name, and for a default configuration that does not exist.
 
 * Queries
 
-~M-x org-files-db-query~ reads a structural query as an Emacs Lisp form, runs it and lets you select one result. The query language is described in the [[https://github.com/hubisan/org-files-db/blob/main/docs/reference/query-language.org][query language reference]]. A query starts with a target, one of ~headings~, ~files~ or ~links~, followed by conditions.
+~M-x org-files-db-query~ reads a query as an Emacs Lisp form, runs it, and lets you select one result. The [[https://github.com/hubisan/org-files-db/blob/main/docs/reference/query-language.org][query language reference]] describes the query language. A query starts with a target, which is ~headings~, ~files~ or ~links~. Conditions follow the target.
 
 #+begin_src emacs-lisp
 (org-files-db-query '(headings (tags "public")))
@@ -70,17 +70,17 @@ The configuration files must exist and be readable. Invalid entries, duplicate n
 (org-files-db-query '(files))
 #+end_src
 
-The query can be a quoted form or a string. The command returns the selected result to Lisp callers. Keyword arguments:
+The query can be a quoted form or a string. When you call the command from Lisp, it returns the selected result. The command takes these keyword arguments:
 
-- ~:config~: name from ~org-files-db-configs~ (default: ~org-files-db-default-config~)
-- ~:columns~: columns to display
-- ~:sort~: sort order
-- ~:row-source~: row source
-- ~:action~: function to call with the selected result instead of the default action
+- ~:config~: a name from ~org-files-db-configs~. The default is ~org-files-db-default-config~.
+- ~:columns~: the columns to show
+- ~:sort~: the sort order
+- ~:row-source~: the row source, see [[*Row sources][Row sources]]
+- ~:action~: a function that Emacs calls with the selected result instead of the default action
 
 ** Columns
 
-Rust formats the result table, so the available column names are those of the [[https://github.com/hubisan/org-files-db/blob/main/docs/reference/presentation.org][presentation reference]]. A column is a list with the column name followed by options:
+~orgfdb~ formats the table of results. The [[https://github.com/hubisan/org-files-db/blob/main/docs/reference/presentation.org][presentation reference]] lists the column names that you can use. A column is a list with the column name and its options:
 
 #+begin_src emacs-lisp
 (org-files-db-query
@@ -90,15 +90,15 @@ Rust formats the result table, so the available column names are those of the [[
             (file-name :width (max 30))))
 #+end_src
 
-- ~:width~ is ~auto~ (widest value), ~(max N)~ (automatic, capped at N) or ~(fixed N)~.
-- ~:truncate~ is ~(:position left|middle|right :marker STRING)~ and controls how too long values are shortened.
-- ~:separator~, ~:include-root~ and ~:include-match~ tune outline path columns such as ~outline-path~, ~source-outline-path~ and ~target-outline-path~.
+- ~:width~ is ~auto~ (the width of the widest value), ~(max N)~ (automatic, but N characters at most) or ~(fixed N)~.
+- ~:truncate~ is ~(:position left|middle|right :marker STRING)~. It sets how ~orgfdb~ shortens a value that is too long.
+- ~:separator~, ~:include-root~ and ~:include-match~ change the outline path columns ~outline-path~, ~source-outline-path~ and ~target-outline-path~.
 
-Without ~:columns~, the defaults for the query target are used. Customize them with ~org-files-db-heading-columns~, ~org-files-db-file-columns~ and ~org-files-db-link-columns~.
+If you do not give ~:columns~, Emacs uses the default columns for the query target. You can change them with ~org-files-db-heading-columns~, ~org-files-db-file-columns~ and ~org-files-db-link-columns~.
 
 ** Sorting
 
-~:sort~ is a list of columns, each optionally followed by ~:direction asc~ or ~:direction desc~. A sort column does not have to be displayed.
+~:sort~ is a list of columns. Each column can have ~:direction asc~ or ~:direction desc~. A sort column does not have to be a shown column.
 
 #+begin_src emacs-lisp
 (org-files-db-query
@@ -107,17 +107,17 @@ Without ~:columns~, the defaults for the query target are used. Customize them w
          (outline-path :direction asc)))
 #+end_src
 
-Without ~:sort~, the defaults ~org-files-db-heading-sort~, ~org-files-db-file-sort~ and ~org-files-db-link-sort~ apply (all ~nil~ by default, which keeps the order returned by ~orgfdb~). An explicit ~:sort nil~ keeps the ~orgfdb~ order even if a default is configured.
+If you do not give ~:sort~, Emacs uses ~org-files-db-heading-sort~, ~org-files-db-file-sort~ or ~org-files-db-link-sort~. All three are ~nil~ by default, and ~nil~ keeps the order that ~orgfdb~ returns. An explicit ~:sort nil~ keeps the ~orgfdb~ order, also when you set a default.
 
 ** Row sources
 
-Normally each matching heading or file is one row. A row source turns each match into one row per entry of a list instead. Pass it as ~:row-source~ (a symbol or a string); it works for heading and file queries.
+Usually each heading or file that matches is one row. A row source makes one row for each entry of a list in the match. Give it as ~:row-source~, as a symbol or a string. It works for heading queries and for file queries.
 
-- ~tags~: one row per tag. ~* BJJ :sport:kampf:~ becomes two rows, one for ~sport~ and one for ~kampf~. Show the tag of each row with the ~tag~ column.
-- ~effective-properties~: one row per property, including inherited ones. Show them with the ~property-name~ and ~property-value~ columns.
-- ~keywords~: one row per file keyword such as ~#+title~. Show them with the ~keyword-name~ and ~keyword-value~ columns.
+- ~tags~: one row for each tag. The heading ~* BJJ :sport:kampf:~ becomes two rows, one for ~sport~ and one for ~kampf~. The ~tag~ column shows the tag of each row.
+- ~effective-properties~: one row for each property, also for inherited properties. The ~property-name~ and ~property-value~ columns show them.
+- ~keywords~: one row for each file keyword, for example ~#+title~. The ~keyword-name~ and ~keyword-value~ columns show them.
 
-A match whose list is empty produces no row at all: with ~:row-source tags~, headings without tags disappear from the result. Every row still points to its heading or file, so actions open the same place.
+A match with an empty list gives no row. For example, with ~:row-source tags~, headings without tags are not in the result. Each row points to its heading or file, so an action opens the same place for all rows of one match.
 
 #+begin_src emacs-lisp
 (org-files-db-query '(headings (todo))
@@ -128,11 +128,11 @@ A match whose list is empty produces no row at all: with ~:row-source tags~, hea
 
 ** Faces
 
-Cells are shown with the faces of the ~org-files-db~ customization group (for example ~org-files-db-todo~, ~org-files-db-tag~ or ~org-files-db-file-name~). They inherit from the matching Org faces.
+Emacs shows the cells with the faces of the ~org-files-db~ customization group, for example ~org-files-db-todo~, ~org-files-db-tag~ or ~org-files-db-file-name~. These faces inherit from the related Org faces.
 
 * Predefined views
 
-A view is a named query with its own presentation and behaviour. Define views in ~org-files-db-views~ and run one with ~M-x org-files-db-view~, or ~(org-files-db-view "open-tasks")~ from Lisp.
+A view is a query with a name and its own columns, sort order and action. Define views in ~org-files-db-views~. Run a view with ~M-x org-files-db-view~, or from Lisp with ~(org-files-db-view "open-tasks")~.
 
 #+begin_src emacs-lisp
 (setq org-files-db-views
@@ -151,91 +151,98 @@ A view is a named query with its own presentation and behaviour. Define views in
          :cache t)))
 #+end_src
 
-A view is a name followed by these keys, each at most once:
+A view is a name and these keys. Each key can occur one time:
 
-- ~:query~ (required): the structural query
-- ~:config~: configuration name (default: ~org-files-db-default-config~)
-- ~:columns~, ~:sort~, ~:row-source~: same as for ~org-files-db-query~, with the same defaults
-- ~:action~: action for this view, see [[*Result actions][Result actions]]
-- ~:cache~: ~t~ to use the cache described below
-- ~:display~: ~buffer~ to show the view in a result buffer instead of completion, see [[*Result buffer][Result buffer]]
+- ~:query~ (required): the query
+- ~:config~: the configuration name. The default is ~org-files-db-default-config~.
+- ~:columns~, ~:sort~, ~:row-source~: the same as for ~org-files-db-query~, with the same defaults
+- ~:action~: the action for this view, see [[*Result actions][Result actions]]
+- ~:cache~: ~t~ to use the cache, see [[*Cache][Cache]]
+- ~:display~: ~buffer~ to show the view in a result buffer instead of in the minibuffer, see [[*Result buffer][Result buffer]]
 
-View names must be unique. Invalid views are reported when they are validated.
+Each view name must be unique. Emacs shows an error for a view that is not valid.
 
 ** Cache
 
-A view with ~:cache t~ is prepared by ~orgfdb~ and kept up to date, so large result sets open faster. This only takes effect while ~org-files-db-cache-mode~ is active. Without the mode every view simply runs as an ordinary query.
+~orgfdb~ prepares a view with ~:cache t~ in advance and keeps it current, so large results open faster. This works only while ~org-files-db-cache-mode~ is on. When the mode is off, each view runs as a normal query.
 
-- ~M-x org-files-db-cache-start~ (or ~(org-files-db-cache-mode 1)~) prepares all views with ~:cache t~. Cache mode starts watch mode if it is not already active.
-- ~M-x org-files-db-cache-stop~ (or ~(org-files-db-cache-mode -1)~) removes the prepared views. With a prefix argument it also stops watch mode.
+- ~M-x org-files-db-cache-start~ or ~(org-files-db-cache-mode 1)~ prepares all views with ~:cache t~. If watch mode is not on, cache mode also starts it.
+- ~M-x org-files-db-cache-stop~ or ~(org-files-db-cache-mode -1)~ removes the prepared views. With a prefix argument, it also stops watch mode.
 
-Cache mode snapshots the view definitions when it starts. Restart it after changing ~org-files-db-views~, ~org-files-db-configs~ or the default configuration. Views prepared by Emacs are private to the running Emacs session and are removed when you stop cache mode or exit Emacs.
+Cache mode reads the view definitions when it starts. If you change ~org-files-db-views~, ~org-files-db-configs~ or the default configuration, restart cache mode. The prepared views belong to the Emacs session that made them. Emacs removes them when you stop cache mode or exit Emacs.
 
 ** Candidate cache
 
-While ~org-files-db-cache-mode~ is active, Emacs also keeps the built completion candidates of every view with ~:cache t~ (one entry per view), so opening the same view again is instant: ~:cache t~ means the Emacs candidate cache plus the ~orgfdb~ prepared view. Views without ~:cache t~ and all views while the mode is off are never kept. The candidates are reused until the index changes, the view definition changes or the date changes; the index state is checked with one quick ~orgfdb status~ call. There is no size limit. Toggling ~org-files-db-cache-mode~ clears it. ~M-x org-files-db-cache-report~ lists the kept views with their rows, approximate memory, index generation and build time in ~*org-files-db cache*~.
+While ~org-files-db-cache-mode~ is on, Emacs also keeps the completion candidates of each view with ~:cache t~, one entry for each view. When you open such a view again, it shows at once. So ~:cache t~ gives two things: the Emacs candidate cache and the view that ~orgfdb~ prepares.
+
+Emacs does not keep the candidates of views without ~:cache t~, and keeps no candidates while the mode is off. Emacs uses the kept candidates again until the index, the view definition or the date changes. To find out whether the index changed, Emacs runs one short ~orgfdb status~ call. The cache has no size limit. When you turn ~org-files-db-cache-mode~ off or on, Emacs empties the cache. ~M-x org-files-db-cache-report~ shows the kept views in ~*org-files-db cache*~, with their rows, their approximate memory, the index generation and the build time.
 
 ** Watch mode
 
-~orgfdb~ keeps the index current while a watcher process runs. ~org-files-db-watch-mode~ makes sure there is one for every configuration in ~org-files-db-configs~. A watcher that is already running outside Emacs is reused and left alone; watchers started by Emacs are stopped when you stop the mode or exit Emacs.
+~orgfdb~ keeps the index current while a watcher process runs. ~org-files-db-watch-mode~ makes sure that a watcher runs for each configuration in ~org-files-db-configs~. If a watcher already runs outside Emacs, Emacs uses it and does not stop it. Emacs stops the watchers that it started when you stop the mode or exit Emacs.
 
-- ~M-x org-files-db-watch-start~ (or ~(org-files-db-watch-mode 1)~) starts the watchers.
-- ~M-x org-files-db-watch-stop~ (or ~(org-files-db-watch-mode -1)~) stops those started by Emacs. It is refused while cache mode is active; stop cache mode first.
+- ~M-x org-files-db-watch-start~ or ~(org-files-db-watch-mode 1)~ starts the watchers.
+- ~M-x org-files-db-watch-stop~ or ~(org-files-db-watch-mode -1)~ stops the watchers that Emacs started. This does not work while cache mode is on. Stop cache mode first.
 
-~org-files-db-watch-startup-timeout~ (default 60) is the number of seconds to wait for a watcher to become ready, or ~nil~ to wait without limit.
+~org-files-db-watch-startup-timeout~ is the number of seconds that Emacs waits until a watcher is ready. The default is 60. With ~nil~, Emacs waits without a limit.
 
 * Result actions
 
-Selecting a result runs an action with that result. The default action depends on the query target:
+When you select a result, Emacs runs an action with it. The default action depends on the query target:
 
 - ~org-files-db-heading-action~ for ~headings~
 - ~org-files-db-file-action~ for ~files~
 - ~org-files-db-link-action~ for ~links~
 
-All three default to ~org-files-db-actions-open-result~. A view overrides them with ~:action~, a single call with ~:action~ in ~org-files-db-query~. An action is any function that takes the selected result as its only argument.
+The default of all three is ~org-files-db-actions-open-result~. A view can set a different action with ~:action~. One call of ~org-files-db-query~ can also set it with ~:action~. An action is a function that takes the selected result as its only argument.
 
-Built-in actions:
+The package has these actions:
 
-- ~org-files-db-actions-open-result~ opens a heading, a file or the source of a link at its position.
-- ~org-files-db-actions-open-link-target~ opens the target of a link result: a resolved target at the target heading or file, any other link (a web link, a directory, an unresolved file) as Org would open it from its source file.
-- ~org-files-db-actions-follow-heading-link~ opens the first link found in a heading, in its headline first and then in its section, directly at its target (a file, a heading, or Dired for a directory). For a file result it uses the first link before the first heading. The heading's own buffer is not displayed and is closed again when it was not open before.
-- ~org-files-db-actions-follow-or-open-heading~ follows a link in the headline itself, of any type, and otherwise opens the heading. It suits headings that are links, such as an index or path hierarchy of links to notes. With Embark it is on ~j~.
-  A view that lists only headings with a link in the headline itself and follows that link (needs ~orgfdb~ with the ~source-context~ predicate):
+- ~org-files-db-actions-open-result~ opens a heading, a file, or the source of a link, at its position.
+- ~org-files-db-actions-open-link-target~ opens the target of a link result. If ~orgfdb~ resolved the target (found it in the index), it opens the target heading or file. Org opens all other links, for example a web link, a directory or a file that is not in the index, as if you followed the link in its source file.
+- ~org-files-db-actions-follow-heading-link~ opens the first link of a heading directly at its target. The target is a file, a heading, or Dired for a directory. The action looks in the headline first and then in the section. For a file result, it uses the first link before the first heading. Emacs does not show the buffer of the heading, and closes it again if it was not open before.
+- ~org-files-db-actions-follow-or-open-heading~ follows a link in the headline itself, of any type. If the headline has no link, it opens the heading. Use it for headings that are links, for example an index or a path hierarchy of links to notes. With Embark, the key is ~j~. This view lists only headings with a link in the headline and follows that link. It needs a version of ~orgfdb~ with the ~source-context~ predicate:
 
   #+begin_src emacs-lisp
   (setq org-files-db-views
         '(("paths" :query (headings (has-link (links (source-context "heading"))))
                    :action org-files-db-actions-follow-or-open-heading)))
   #+end_src
-- ~org-files-db-actions-insert-file-link~ inserts a ~file:~ link to a file result at point, relative to the current buffer when it visits a file.
-- ~org-files-db-actions-insert-heading-link~ inserts a link to a heading result at point: an ~id:~ link if the heading has an ~ID~, else a file link with the ~CUSTOM_ID~. A heading with neither gets the file link with the heading title, or, when ~org-files-db-create-heading-id~ is ~custom-id~ or ~id~, a new ~CUSTOM_ID~ (from ~org-id-new~) or ~ID~ saved in its file and a link to it. For a file result it inserts a file link.
-- ~org-files-db-actions-rename-file~ renames a file result and updates the ~file:~ links that point to it in other files. Links whose text no longer matches the index are skipped and counted in the message. The change spans several files and is not atomic, so use version control.
+- ~org-files-db-actions-insert-file-link~ inserts a ~file:~ link to a file result at point. If the current buffer visits a file, the link is relative to that file.
+- ~org-files-db-actions-insert-heading-link~ inserts a link to a heading result at point:
+  - If the heading has an ~ID~, it inserts an ~id:~ link.
+  - If the heading has a ~CUSTOM_ID~, it inserts a file link to that ~CUSTOM_ID~.
+  - If the heading has neither, ~org-files-db-create-heading-id~ decides. With ~nil~, the default, it inserts a file link with the heading title. With ~custom-id~, it adds a new ~CUSTOM_ID~ (made with ~org-id-new~) to the heading. With ~id~, it adds a new ~ID~. In both cases it saves the file and inserts a link to the new identifier.
+  - For a file result, it inserts a file link.
+- ~org-files-db-actions-rename-file~ renames the file of a result and changes the ~file:~ links to it in other files. If the text of a link is not the same as in the index, the action does not change that link and counts it in the message. The change edits more than one file and cannot be undone as one step, so use version control.
 
-Actions that need more data than the list shows, such as the link and rename actions, ask ~orgfdb~ for it when you run them. If the files were indexed again since the result list was built, they stop with the message "Index changed, run the query again" and change nothing. Run the query again and select the result once more.
+Some actions need more data than the list shows, for example the link actions and the rename action. These actions get the data from ~orgfdb~ when you run them. If ~orgfdb~ indexed the files again after Emacs made the list, the action stops with the message "Index changed, run the query again" and changes nothing. Then run the query again and select the result again.
 
 * Renaming or moving a directory
 
-~M-x org-files-db-rename-directory~ renames a directory or moves it to another parent and updates the indexed ~file:~ links. It asks for the directory and the new path (a bare name stays in the same parent); a missing parent of the destination is created. With a prefix argument it asks for the configuration.
+~M-x org-files-db-rename-directory~ renames a directory or moves it to a different parent directory. It also changes the ~file:~ links in the index that point into the directory. The command asks for the directory and for the new path. A name without a path keeps the directory in the same parent. If the parent of the new path does not exist, the command creates it. With a prefix argument, the command also asks for the configuration.
 
-- In Dired the directory at point (or the current Dired directory on a file line) is the default source, and the Dired buffer showing the parent is reverted after the change.
-- With Embark, ~M~ in the file action map (~embark-file-map~) runs ~org-files-db-embark-rename-directory~ on the directory at point or in the minibuffer and asks only for the destination. An existing ~M~ binding is kept.
-- Incoming links from files outside the directory are rewritten, keeping their format, description, search option and relative or absolute form. Links to the directory itself are rewritten too. Relative links between files inside the directory stay unchanged unless they pass through the directory name (~../dir/file.org~), absolute ones inside it are rewritten.
-- When moving to another parent, relative ~file:~ links in files inside the directory that point outside it are rewritten relative to the new location. Absolute links stay unchanged, and a pure rename leaves relative links as they are.
-- The links come from ~orgfdb~ and are guarded by the index state, so a changed index stops with "Index changed, run the query again" before anything changes.
-- The plan is shown in ~*org-files-db rename directory*~ like a diff: per file, each link with its line number, the old text as a removed and the new text as an added line, then the skipped links and nothing changes until you confirm. Links whose text no longer matches the index are skipped and counted in the message.
-- The command refuses an existing destination, a destination inside the directory and modified buffers visiting an affected file or a file inside the directory. Buffers visiting files inside the directory follow the move.
-- When a step fails, the edited files are restored, the directory is moved back, and the error lists anything that could not be undone. It does not check whether the directory is the root of a configured directory, so do not move a root.
+- In Dired, the default directory is the directory at point. On a file line, it is the directory that Dired shows. After the change, Emacs updates the Dired buffer that shows the parent.
+- With Embark, ~M~ in the file action map (~embark-file-map~) runs ~org-files-db-embark-rename-directory~ on the directory at point or in the minibuffer. It asks only for the new path. If ~M~ already has a binding, Emacs keeps that binding.
+- The command changes links from files outside the directory to files inside it. These links keep their format, description, search option, and relative or absolute form. It also changes links to the directory itself.
+- Relative links between files inside the directory stay the same, unless they go through the directory name, for example ~../dir/file.org~. The command changes absolute links between files inside the directory.
+- When you move the directory to a different parent, the command also changes relative ~file:~ links from files inside the directory to files outside it. The links stay relative to the new location. Absolute links stay the same. A rename in the same parent does not change relative links.
+- The command gets the links from ~orgfdb~ and checks the state of the index. If the index changed, the command stops with "Index changed, run the query again" before it changes anything.
+- The command shows its plan in ~*org-files-db rename directory*~, similar to a diff. For each file, the plan shows each link with its line number, the old text as a removed line and the new text as an added line. After the changes, the plan lists the links that the command skips. Nothing changes until you confirm. If the text of a link is not the same as in the index, the command skips that link and counts it in the message.
+- The command stops if the new path exists or is inside the directory. It also stops if a buffer that visits an affected file, or a file inside the directory, has unsaved changes. Buffers that visit files inside the directory move with the directory.
+- If a step fails, the command restores the edited files and moves the directory back. The error message lists each change that the command did not undo.
+- The command does not check whether the directory is the root of a directory in your configuration. Do not move such a root.
 
-~M-x org-files-db-undo-rename-directory~ undoes the last rename or move of the session: it restores the original text of the edited files and moves the directory back. It shows the files whose links it restores, asks for confirmation and refuses, changing nothing, when the new directory is gone, the old path exists again, an edited file changed since or a buffer visiting it is modified. It needs no ~orgfdb~ call; the record is forgotten after a successful undo.
+~M-x org-files-db-undo-rename-directory~ undoes the last rename or move of the Emacs session. It restores the original text of the edited files and moves the directory back. It first shows the files whose links it restores and asks for confirmation. It changes nothing in these cases: the new directory does not exist, the old path exists again, an edited file changed after the rename, or a buffer that visits an edited file has unsaved changes. The undo does not call ~orgfdb~. After a successful undo, Emacs forgets the rename.
 
 * Result buffer
 
-Instead of selecting one result in the minibuffer you can list every row in a read-only buffer.
+You can show all rows in a read-only buffer instead of selecting one result in the minibuffer.
 
 - ~M-x org-files-db-show-view~ asks for a view and shows it in ~*org-files-db: NAME*~.
 - ~M-x org-files-db-show-query~ reads a query like ~org-files-db-query~ and shows it in ~*org-files-db: query*~.
-- ~(org-files-db-show-query QUERY &rest KEYS)~ takes the same keywords as ~org-files-db-query~ (~:config~, ~:columns~, ~:sort~, ~:row-source~, ~:action~). ~(org-files-db-show-view NAME)~ does the same for a view. Both return the buffer.
-- A view with ~:display buffer~ is shown this way by ~org-files-db-view~ too. Only ~buffer~ and ~nil~ are valid.
+- ~(org-files-db-show-query QUERY &rest KEYS)~ takes the same keywords as ~org-files-db-query~: ~:config~, ~:columns~, ~:sort~, ~:row-source~ and ~:action~. ~(org-files-db-show-view NAME)~ does the same for a view. Both functions return the buffer.
+- ~org-files-db-view~ also shows a view with ~:display buffer~ in this buffer. The only valid values of ~:display~ are ~buffer~ and ~nil~.
 
 #+begin_src emacs-lisp
 (setq org-files-db-views
@@ -244,49 +251,55 @@ Instead of selecting one result in the minibuffer you can list every row in a re
 (org-files-db-show-query '(headings (todo "NEXT")))
 #+end_src
 
-The buffer uses ~org-files-db-export-mode~ and does not need Embark. Each line is one row as the table shows it. In the buffer:
+The buffer uses ~org-files-db-export-mode~ and does not need Embark. Each line is one row, as the table shows it. These keys work in the buffer:
 
-- ~RET~ runs the action of the view or call, else the default action for the result kind
-- ~o~ exports the rows as an outline, see [[*Outline export][Outline export]]
-- ~g~ runs the query again and keeps point on the same line number
-- ~n~ and ~p~ move to the next and previous line
+- ~RET~ runs the action of the view or of the call. Without one, it runs the default action for the kind of result.
+- ~o~ exports the rows as an outline, see [[*Outline export][Outline export]].
+- ~g~ runs the query again and keeps point on the same line number.
+- ~n~ and ~p~ go to the next line and to the previous line.
 
-An empty result shows one line "No results". The buffer is reused when you show the same view or query again, and it is never refreshed automatically.
+If the query finds nothing, the buffer shows one line, "No results". When you show the same view or query again, Emacs uses the same buffer. Emacs does not update the buffer automatically.
 
 * Embark integration
 
-Embark is optional and never required. Results complete in the ~org-files-db-result~ category. Once Embark is loaded, ~embark-act~ on a result offers ~org-files-db-embark-result-map~:
+You do not need Embark. Results use the completion category ~org-files-db-result~. When Embark is loaded, ~embark-act~ on a result offers the actions of ~org-files-db-embark-result-map~:
 
 - ~o~ opens the result
 - ~t~ opens the link target
 - ~f~ inserts a file link
 - ~h~ inserts a heading link
 - ~l~ follows the first link in the heading
-- ~j~ follows the link in the headline, or else opens the heading
+- ~j~ follows the link in the headline, or opens the heading
 - ~r~ renames the file
 
-~embark-export~ lists the rows that match the current minibuffer filter, in the displayed order, in an ~*org-files-db export*~ buffer using ~org-files-db-export-mode~. In that buffer:
+~embark-export~ lists the rows that match the current filter in the minibuffer, in the order that you see. It shows them in an ~*org-files-db export*~ buffer that uses ~org-files-db-export-mode~. These keys work in that buffer:
 
-- ~RET~ runs the default action for the result on the current line
-- ~n~ and ~p~ move to the next and previous line
-- ~embark-act~ on a line offers the same actions as in the minibuffer
-- ~o~ exports the rows as an outline, see below
+- ~RET~ runs the default action for the result on the current line.
+- ~n~ and ~p~ go to the next line and to the previous line.
+- ~embark-act~ on a line offers the same actions as in the minibuffer.
+- ~o~ exports the rows as an outline, see below.
 
 ** Outline export
 
-~org-files-db-embark-export-outline~ exports heading results as an Org outline of links in a read-only ~*org-files-db outline*~ buffer. Run ~embark-export~ (~E~) on the results first, then press ~o~ in the ~*org-files-db export*~ buffer to turn its rows into the outline. Other result kinds are refused with "Outline export needs heading results". ~org-files-db-outline-export~ does the same from Lisp for a list of heading records and their presentation.
+~org-files-db-embark-export-outline~ exports heading results as an Org outline of links. It shows the outline in the read-only buffer ~*org-files-db outline*~. First run ~embark-export~ (~E~) on the results. Then press ~o~ in the ~*org-files-db export*~ buffer to make the outline from its rows. For all other kinds of results, the export stops with "Outline export needs heading results". ~org-files-db-outline-export~ does the same from Lisp, for a list of heading records and their presentation.
 
-Every file becomes a top-level heading with a link to the file, and its headings sit one level deeper than in the file. Headlines keep the TODO keyword, priority and local tags (not inherited ones); the title is a link to the heading: ~file:PATH::#CUSTOM_ID~, else ~id:ID~, else ~file:PATH::LINE~. Matched headings are highlighted with the face ~org-files-db-outline-match~. ~C-x C-s~ in the buffer saves the text, without faces, to a file.
+Each file becomes a top-level heading with a link to the file. Its headings are one level deeper than in the file. Each headline keeps its TODO keyword, its priority and its own tags, but not inherited tags. The title is a link to the heading:
 
-The structure comes from ~orgfdb~, the content is read from the source files. If the index no longer matches a file, the export stops with "Index changed, run the query again" and exports nothing.
+- ~file:PATH::#CUSTOM_ID~ if the heading has a ~CUSTOM_ID~
+- else ~id:ID~ if the heading has an ~ID~
+- else ~file:PATH::LINE~
 
-- ~org-files-db-outline-export-ancestors~ (default ~t~) keeps the ancestors of matched headings. When ~nil~ only matched headings are listed, flat on level 2 under their file.
-- ~org-files-db-outline-export-children~ (default ~nil~) adds the direct child headings (~children~) or all descendant headings (~subtree~) of matched headings as links.
+The face ~org-files-db-outline-match~ marks the headings that match the query. ~C-x C-s~ in the buffer saves the text to a file, without faces.
+
+The structure comes from ~orgfdb~, and the text comes from the source files. If the index is not the same as a file, the export stops with "Index changed, run the query again" and exports nothing.
+
+- ~org-files-db-outline-export-ancestors~ (default ~t~) keeps the ancestors of the headings that match. With ~nil~, the outline lists only the headings that match, all on level 2 under their file.
+- ~org-files-db-outline-export-children~ (default ~nil~) adds links to child headings of the headings that match. With ~children~, it adds the direct children. With ~subtree~, it adds all descendants.
 - ~org-files-db-outline-export-planning~ (default ~t~) copies the planning line.
-- ~org-files-db-outline-export-properties~ (default ~nil~) copies the property drawer of matched headings.
-- ~org-files-db-outline-export-body~ (default ~nil~) copies the body text of matched headings.
+- ~org-files-db-outline-export-properties~ (default ~nil~) copies the property drawer of the headings that match.
+- ~org-files-db-outline-export-body~ (default ~nil~) copies the body text of the headings that match.
 
-Ancestors and added children only get their headline, and ancestors also their planning line, never properties or body.
+Ancestors and added children get only their headline. Ancestors also get their planning line. They never get properties or body text.
 
 * Development
 
@@ -296,10 +309,11 @@ make ci
 #+end_src
 
 - ~make setup~ installs the development dependencies with [[https://emacs-eask.github.io/][Eask]].
-- ~make ci~ runs the full check: package, install, byte-compilation, linting and Buttercup tests.
+- ~make ci~ runs all checks: package, install, byte-compilation, linters and Buttercup tests.
+- ~make check-offline~ runs the same checks without Eask, with packages from GitHub. Use it where Eask cannot get packages from the package archives.
 - ~make test~ runs only the Buttercup tests.
 - ~make fmt~ formats the Emacs Lisp files.
-- ~make bench~ runs the on-demand end-to-end benchmark against a real ~orgfdb~. The results are in [[file:docs/benchmark.org][docs/benchmark.org]].
+- ~make bench~ runs the benchmark against a real ~orgfdb~. [[file:docs/benchmark.org][docs/benchmark.org]] has the results.
 
 * Repository structure
 
@@ -326,6 +340,6 @@ docs/                              Benchmark results and agent workflow
 
 See [[file:CONTRIBUTING.org][CONTRIBUTING.org]].
 
-* Licence
+* License
 
-This project is licensed under the GNU General Public License version 3 only. See [[file:LICENSE][LICENSE]].
+This project uses the GNU General Public License version 3 only. See [[file:LICENSE][LICENSE]].
