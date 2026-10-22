@@ -20,7 +20,7 @@
 (source "nongnu")
 (source "melpa")
 
-(depends-on "emacs" "29.4")
+(depends-on "emacs" "29.3")
 
 (development
  (depends-on "buttercup")
