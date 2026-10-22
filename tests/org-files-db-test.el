@@ -2808,6 +2808,20 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                    location))))
     (json-serialize data)))
 
+(describe "directory rename fixtures"
+  (it "give each link id one link across all fixtures of the corpus"
+    (let ((links (make-hash-table)))
+      (dolist (name '("dir-incoming-links.json" "dir-outgoing-links.json"
+                      "dir-named-links.json"))
+        (seq-doseq (link (alist-get 'results
+                                    (json-parse-string
+                                     (org-files-db-test--fixture-text name)
+                                     :object-type 'alist :null-object nil)))
+          (let ((id (alist-get 'id link))
+                (key (list (alist-get 'raw link) (alist-get 'location link))))
+            (expect (gethash id links key) :to-equal key)
+            (puthash id key links)))))))
+
 (describe "renaming a directory"
   (let (corpus old new json outgoing-json named-json messages)
     (before-each
@@ -2923,6 +2937,9 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
       (it "rewrites links to the directory and relative links through it"
         (setq named-json (org-files-db-test--corpus-fixture
                           "dir-named-links.json" corpus))
+        (with-temp-file (file "projekte/alt/notiz.org")
+          (insert (text "projekte/alt/notiz.org")
+                  "* Loop\n[[file:../alt/notiz2.org][loop]]\n"))
         (rename)
         (expect (text "index.org") :to-match
                 (regexp-quote "[[file:projekte/neu][Alt]] [[file:projekte/neu/][Alt2]]"))

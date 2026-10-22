@@ -5,12 +5,13 @@ ELISP_FILES := $(shell find lisp tests -type f -name '*.el' | sort)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help all setup ci compile fmt lint test bench package install clean emacs
+.PHONY: help all setup ci check-offline compile fmt lint test bench package install clean emacs
 
 help:
 	@printf '%s\n' \
 		'make setup    Install development dependencies' \
 		'make ci       Compile, lint and test' \
+		'make check-offline  Same checks without Eask (dependencies from GitHub)' \
 		'make compile  Byte-compile the package' \
 		'make fmt      Format all Emacs Lisp files' \
 		'make lint     Run package and source linters' \
@@ -28,6 +29,9 @@ setup:
 	$(EASK) install-deps --dev
 
 ci: clean setup package install compile lint test
+
+check-offline:
+	EMACS=$(EMACS) scripts/check-offline.sh
 
 compile:
 	@printf '\n\e[1;34m%-10s\e[0m\n\n' '>> COMPILE'

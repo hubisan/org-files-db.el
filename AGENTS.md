@@ -51,6 +51,9 @@ Emacs Lisp client for the `orgfdb` CLI of
 - Run `make fmt` after editing Emacs Lisp. Run `make ci` (Eask package, install, compile,
   lint: package-lint, checkdoc, indent, relint; Buttercup tests) before declaring work done.
   Compiler and linter warnings are errors. State exactly which checks were not run.
+- Where Eask cannot reach the package archives (Claude Code on the web), run
+  `make check-offline` instead of `make ci`; it runs the same checks with packages cloned by
+  `.claude/hooks/session-start.sh`.
 - Add or update Buttercup tests for behavior changes; test guidance: `docs/agents/WORKFLOW.md`,
   section Tests.
 - Update docs in the same change: `README.org` when user-facing behavior or claims change,
