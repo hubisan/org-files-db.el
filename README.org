@@ -199,8 +199,9 @@ Built-in actions:
 - ~org-files-db-actions-open-result~ opens a heading, a file or the source of a link at its position.
 - ~org-files-db-actions-open-link-target~ opens the target of a link result: a resolved target at the target heading or file, any other link (a web link, a directory, an unresolved file) as Org would open it from its source file.
 - ~org-files-db-actions-follow-heading-link~ opens the first link found in a heading, in its headline first and then in its section, directly at its target (a file, a heading, or Dired for a directory). For a file result it uses the first link before the first heading. The heading's own buffer is not displayed and is closed again when it was not open before.
+- ~org-files-db-actions-follow-or-open-heading~ follows a link in the headline itself, of any type, and otherwise opens the heading. It suits headings that are links, such as an index or path hierarchy of links to notes. With Embark it is on ~j~.
 - ~org-files-db-actions-insert-file-link~ inserts a ~file:~ link to a file result at point, relative to the current buffer when it visits a file.
-- ~org-files-db-actions-insert-heading-link~ inserts a link to a heading result at point: an ~id:~ link if the heading has an ~ID~, else a file link with the ~CUSTOM_ID~. A heading with neither gets a new ~ID~ (saved in its file) when ~org-files-db-create-heading-id~ is non-nil, the default, and otherwise a file link with the heading title. For a file result it inserts a file link.
+- ~org-files-db-actions-insert-heading-link~ inserts a link to a heading result at point: an ~id:~ link if the heading has an ~ID~, else a file link with the ~CUSTOM_ID~. A heading with neither gets the file link with the heading title, or, when ~org-files-db-create-heading-id~ is ~custom-id~ or ~id~, a new ~CUSTOM_ID~ (from ~org-id-new~) or ~ID~ saved in its file and a link to it. For a file result it inserts a file link.
 - ~org-files-db-actions-rename-file~ renames a file result and updates the ~file:~ links that point to it in other files. Links whose text no longer matches the index are skipped and counted in the message. The change spans several files and is not atomic, so use version control.
 
 Actions that need more data than the list shows, such as the link and rename actions, ask ~orgfdb~ for it when you run them. If the files were indexed again since the result list was built, they stop with the message "Index changed, run the query again" and change nothing. Run the query again and select the result once more.
@@ -254,6 +255,7 @@ Embark is optional and never required. Results complete in the ~org-files-db-res
 - ~f~ inserts a file link
 - ~h~ inserts a heading link
 - ~l~ follows the first link in the heading
+- ~j~ follows the link in the headline, or else opens the heading
 - ~r~ renames the file
 
 ~embark-export~ lists the rows that match the current minibuffer filter, in the displayed order, in an ~*org-files-db export*~ buffer using ~org-files-db-export-mode~. In that buffer:

@@ -861,6 +861,19 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
 Used by integrations that act on a candidate whose text properties were
 stripped.")
 
+(defvar org-files-db-presentation--last-read nil
+  "The cons (PRESENTATION . CANDIDATES) of the last `completing-read', or nil.
+Some completion UIs, such as Ivy, strip text properties and run Embark actions
+after the minibuffer exited, when the dynamic binding of
+`org-files-db-presentation--current-read-presentation' is gone.")
+
+(defun org-files-db-presentation--last-read-presentation (candidate)
+  "Return the last read presentation when CANDIDATE is one of its candidates."
+  (when (and org-files-db-presentation--last-read
+             (stringp candidate)
+             (member candidate (cdr org-files-db-presentation--last-read)))
+    (car org-files-db-presentation--last-read)))
+
 (defun org-files-db-presentation--read (presentation &optional prompt candidates)
   "Read one action record from PRESENTATION with PROMPT.
 Use CANDIDATES, the built candidates of PRESENTATION, when given. They are
@@ -869,6 +882,7 @@ never modified."
                         (org-files-db-presentation--candidates presentation))))
     (unless candidates
       (user-error "The query returned no results"))
+    (setq org-files-db-presentation--last-read (cons presentation candidates))
     (let ((selected
            (let ((org-files-db-presentation--current-read-presentation
                   presentation))

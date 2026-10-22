@@ -2,8 +2,10 @@
 
 * Unreleased
 
+- =ADDED= Added ~org-files-db-actions-follow-or-open-heading~, which follows a link in the headline itself or else opens the heading; Embark binds it to ~j~.
+- =FIXED= Embark actions on a candidate whose properties were stripped after the minibuffer exited, as with Ivy, no longer fail with "No presentation available for this result".
 - =CHANGED= ~org-files-db-actions-open-link-target~ opens links without a resolved target, such as web links or directories, as Org would open them from their source file.
-- =CHANGED= ~org-files-db-actions-insert-heading-link~ creates an ~ID~ for a heading without ~ID~ and ~CUSTOM_ID~; ~org-files-db-create-heading-id~ (default ~t~) turns this off. On a file result it inserts a file link.
+- =CHANGED= ~org-files-db-actions-insert-heading-link~ can create a ~CUSTOM_ID~ (from ~org-id-new~) or an ~ID~ for a heading without either, as ~org-files-db-create-heading-id~ sets (~nil~, the default, ~custom-id~ or ~id~). On a file result it inserts a file link.
 - =CHANGED= ~org-files-db-actions-follow-heading-link~ follows the first link before the first heading of a file result.
 - =CHANGED= ~org-files-db-rename-directory~ creates a missing destination parent and shows its plan like a diff, grouped by file; the undo plan names the files whose links it restores.
 - =FIXED= ~org-files-db-rename-directory~ also rewrites links to the directory itself or a directory inside it, and relative links between files inside the directory that pass through its name (~../dir/file.org~).

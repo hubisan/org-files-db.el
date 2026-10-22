@@ -77,6 +77,10 @@ DOC is the docstring."
     org-files-db-actions-follow-heading-link
   "Follow the first link in the heading result CANDIDATE.")
 
+(org-files-db-embark--define-action org-files-db-embark-follow-or-open-heading
+    org-files-db-actions-follow-or-open-heading
+  "Follow the headline link of the result CANDIDATE, or else open it.")
+
 (org-files-db-embark--define-action org-files-db-embark-rename-file
     org-files-db-actions-rename-file
   "Rename the file of the result CANDIDATE.")
@@ -88,6 +92,7 @@ DOC is the docstring."
   "f" #'org-files-db-embark-insert-file-link
   "h" #'org-files-db-embark-insert-heading-link
   "l" #'org-files-db-embark-follow-heading-link
+  "j" #'org-files-db-embark-follow-or-open-heading
   "r" #'org-files-db-embark-rename-file)
 
 ;;; Directory
