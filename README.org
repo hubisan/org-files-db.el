@@ -200,6 +200,8 @@ Set ~org-files-db-search-input-style~ to ~fts~ to type a raw SQLite FTS5 express
 - With ~ivy-mode~, the candidates change while you type.
 - With other completion UIs, you first type the expression and press ~RET~. Then you select a match.
 
+A heading matches when all words occur in its title or body, also on different lines. Of each matching heading, the search shows the lines with the most of your words, and lines with all words come first.
+
 The search starts only when the input has at least ~org-files-db-search-min-input~ characters (default ~3~). The face ~org-files-db-search-match~ marks the match.
 
 Search needs ~fts5_enabled = true~ in the ~orgfdb~ configuration, and ~index_body_text = true~ to find body text. Run ~orgfdb rebuild~ after you change them. Search needs an ~orgfdb~ with ~search --occurrences~.

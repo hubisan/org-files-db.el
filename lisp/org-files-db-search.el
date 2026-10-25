@@ -26,6 +26,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'char-fold)
 (require 'seq)
 (require 'subr-x)
 (require 'org-files-db-core)
@@ -46,8 +47,10 @@ they fall back to the owning heading when the match has no source position.
 SNIPPET is the matched text line, with the match from SNIPPET-START to
 SNIPPET-END in characters.  RANGES lists all matches in SNIPPET as
 \(START . END) character offsets, more than one when matches on the same
-line are grouped."
+line are grouped.  MATCHED lists the matched texts of all grouped
+matches, also of those whose RANGES are not in SNIPPET."
   ranges
+  matched
   heading-id
   title
   file
@@ -76,10 +79,13 @@ A row without occurrences yields one occurrence at its heading."
                :heading-id (org-files-db-search--field row 'id)
                :title title :file file :field 'title
                :line heading-line :byte-start heading-byte
-               :snippet title :snippet-start 0 :snippet-end 0 :ranges nil))
+               :snippet title :snippet-start 0 :snippet-end 0 :ranges nil :matched nil))
       (mapcar
        (lambda (occurrence)
-         (let ((line (org-files-db-search--field occurrence 'line)))
+         (let* ((line (org-files-db-search--field occurrence 'line))
+                (snippet (or (org-files-db-search--field occurrence 'snippet) ""))
+                (start (org-files-db-search--field occurrence 'snippet_start))
+                (end (org-files-db-search--field occurrence 'snippet_end)))
            (org-files-db-search--make-occurrence
             :heading-id (org-files-db-search--field row 'id)
             :title title
@@ -89,11 +95,12 @@ A row without occurrences yields one occurrence at its heading."
             :byte-start (if line
                             (org-files-db-search--field occurrence 'byte_start)
                           heading-byte)
-            :snippet (or (org-files-db-search--field occurrence 'snippet) "")
-            :snippet-start (org-files-db-search--field occurrence 'snippet_start)
-            :snippet-end (org-files-db-search--field occurrence 'snippet_end)
-            :ranges (list (cons (org-files-db-search--field occurrence 'snippet_start)
-                                (org-files-db-search--field occurrence 'snippet_end))))))
+            :snippet snippet
+            :snippet-start start
+            :snippet-end end
+            :ranges (list (cons start end))
+            :matched (and start end (<= start end (length snippet))
+                          (list (substring-no-properties snippet start end))))))
        occurrences))))
 
 (defun org-files-db-search-occurrences (expression &optional config substring)
@@ -117,22 +124,73 @@ nil uses the default.  Non-nil SUBSTRING searches the substring index."
        (eq (org-files-db-search-occurrence-field a)
            (org-files-db-search-occurrence-field b))
        (equal (org-files-db-search-occurrence-line a)
-              (org-files-db-search-occurrence-line b))
-       (equal (org-files-db-search-occurrence-snippet a)
-              (org-files-db-search-occurrence-snippet b))))
+              (org-files-db-search-occurrence-line b))))
 
 (defun org-files-db-search--group-occurrences (occurrences)
   "Merge consecutive OCCURRENCES on the same line into the first one.
-The merged occurrence keeps the position of the first match and the
-ranges of all matches on that line."
+The merged occurrence keeps the position and snippet of the first match,
+the matched texts of all matches, and the ranges of the matches that share
+its snippet.  A long line has a different snippet around each match."
   (let ((result nil))
     (dolist (occurrence occurrences)
-      (if (and result (org-files-db-search--same-line-p (car result) occurrence))
-          (setf (org-files-db-search-occurrence-ranges (car result))
-                (append (org-files-db-search-occurrence-ranges (car result))
-                        (org-files-db-search-occurrence-ranges occurrence)))
-        (push occurrence result)))
+      (let ((first (car result)))
+        (if (and first (org-files-db-search--same-line-p first occurrence))
+            (progn
+              (setf (org-files-db-search-occurrence-matched first)
+                    (append (org-files-db-search-occurrence-matched first)
+                            (org-files-db-search-occurrence-matched occurrence)))
+              (when (equal (org-files-db-search-occurrence-snippet first)
+                           (org-files-db-search-occurrence-snippet occurrence))
+                (setf (org-files-db-search-occurrence-ranges first)
+                      (append (org-files-db-search-occurrence-ranges first)
+                              (org-files-db-search-occurrence-ranges occurrence)))))
+          (push occurrence result))))
     (nreverse result)))
+
+(defun org-files-db-search--score (occurrence words)
+  "Return how many of WORDS the matched texts of OCCURRENCE contain.
+Case and diacritics are ignored.  Without WORDS, count the distinct
+matched texts."
+  (let ((matched (org-files-db-search-occurrence-matched occurrence))
+        (case-fold-search t))
+    (if words
+        (seq-count (lambda (word)
+                     (let ((regexp (char-fold-to-regexp word)))
+                       (seq-some (lambda (text) (string-match-p regexp text))
+                                 matched)))
+                   words)
+      (length (seq-uniq (mapcar #'downcase matched))))))
+
+(defun org-files-db-search--rank (occurrences words)
+  "Return the best OCCURRENCES for the search WORDS, best first.
+Keep the lines of each heading that match the most WORDS, then sort all
+kept lines by that number.  Lines with equal numbers keep the orgfdb rank
+and source order."
+  (let ((scores (mapcar (lambda (occurrence)
+                          (cons occurrence
+                                (org-files-db-search--score occurrence words)))
+                        occurrences))
+        (best (make-hash-table :test #'equal)))
+    (dolist (entry scores)
+      (let ((id (org-files-db-search-occurrence-heading-id (car entry))))
+        (puthash id (max (cdr entry) (gethash id best 0)) best)))
+    (mapcar #'car
+            (sort (seq-filter
+                   (lambda (entry)
+                     (= (cdr entry)
+                        (gethash (org-files-db-search-occurrence-heading-id
+                                  (car entry))
+                                 best)))
+                   scores)
+                  (lambda (a b) (> (cdr a) (cdr b)))))))
+
+(defun org-files-db-search--words (input)
+  "Return the search words of INPUT, nil for a raw FTS5 expression."
+  (pcase org-files-db-search-input-style
+    ('fts nil)
+    ('substring (seq-filter (lambda (word) (>= (length word) 3))
+                            (split-string input nil t)))
+    (_ (split-string input nil t))))
 
 (defun org-files-db-search--candidate (occurrence)
   "Return the completion candidate string for OCCURRENCE."
@@ -197,8 +255,10 @@ Signal a `user-error' when INPUT gives no search expression."
   (let ((expression (org-files-db-search--expression input)))
     (unless expression
       (user-error "Substring search needs a word of at least 3 characters"))
-    (org-files-db-search-occurrences
-     expression config (eq org-files-db-search-input-style 'substring))))
+    (org-files-db-search--rank
+     (org-files-db-search-occurrences
+      expression config (eq org-files-db-search-input-style 'substring))
+     (org-files-db-search--words input))))
 
 (defun org-files-db-search--input-long-enough-p (input)
   "Return non-nil when INPUT reaches `org-files-db-search-min-input'."
