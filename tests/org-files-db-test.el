@@ -4207,7 +4207,7 @@ SCHEDULED: <2026-10-02 Fri>
     (push arguments calls)
     (list :status 0 :stdout json :stderr ""))
 
-  (it "requests occurrences and keeps rank and source order"
+  (it "requests occurrences, keeps the order and groups one line"
     (cl-letf (((symbol-function 'org-files-db-process--run-process)
                #'org-files-db-test--search-process))
       (let ((occurrences (org-files-db-search-occurrences "test")))
@@ -4215,33 +4215,45 @@ SCHEDULED: <2026-10-02 Fri>
                 '("--error-format" "json" "search" "--format" "json"
                   "--occurrences" "test"))
         (expect (mapcar #'org-files-db-search-occurrence-byte-start occurrences)
-                :to-equal '(70 79 0))
+                :to-equal '(70 0))
         (expect (mapcar #'org-files-db-search-occurrence-line occurrences)
-                :to-equal '(8 8 1))
+                :to-equal '(8 1))
+        (expect (org-files-db-search-occurrence-ranges (car occurrences))
+                :to-equal '((4 . 8) (13 . 17)))
         (expect (org-files-db-search-occurrence-field (car occurrences))
                 :to-equal 'body))))
 
   (it "falls back to the heading when an occurrence has no source position"
     (cl-letf (((symbol-function 'org-files-db-process--run-process)
                #'org-files-db-test--search-process))
-      (let ((root (nth 2 (org-files-db-search-occurrences "test"))))
+      (let ((root (nth 1 (org-files-db-search-occurrences "test"))))
         (expect (org-files-db-search-occurrence-line root) :to-equal 1)
         (expect (org-files-db-search-occurrence-byte-start root) :to-equal 0))))
 
-  (it "builds unique candidates that highlight the match"
+  (it "builds one candidate per line that highlights every match"
     (cl-letf (((symbol-function 'org-files-db-process--run-process)
                #'org-files-db-test--search-process))
       (let* ((candidates (org-files-db-search--candidates
                           (org-files-db-search-occurrences "test")))
              (first (car (nth 0 candidates)))
-             (second (car (nth 1 candidates))))
-        (expect (length (delete-dups (mapcar #'car candidates))) :to-equal 3)
+             (title (car (nth 1 candidates))))
+        (expect (length candidates) :to-equal 2)
         (expect first :to-equal "Videos  a.org:8  Ein test und test.")
-        (expect second :to-match "\\[2\\]\\'")
-        (let ((match (string-search "test" first)))
+        (dolist (match (list (string-search "test" first)
+                             (string-search "test" first 25)))
           (expect (get-text-property match 'face first)
                   :to-equal 'org-files-db-search-match))
-        (expect (car (nth 2 candidates)) :to-equal "a  a.org:1"))))
+        (expect title :to-equal "a  a.org:1")
+        (expect (get-text-property 0 'face title)
+                :to-equal '(org-files-db-search-match org-files-db-heading)))))
+
+  (it "numbers candidates with identical text"
+    (let* ((occurrence (org-files-db-search--make-occurrence
+                        :title "T" :file "/n/a.org" :field 'body :line 3
+                        :snippet "x" :ranges nil))
+           (candidates (org-files-db-search--candidates
+                        (list occurrence (copy-sequence occurrence)))))
+      (expect (car (nth 1 candidates)) :to-match "\\[2\\]\\'")))
 
   (it "searches only from the minimum input and hides invalid input"
     (let ((org-files-db-search-min-input 3))
@@ -4250,7 +4262,7 @@ SCHEDULED: <2026-10-02 Fri>
         (expect (org-files-db-search--live-candidates "te " nil) :to-equal nil)
         (expect calls :to-equal nil)
         (expect (length (org-files-db-search--live-candidates "test" nil))
-                :to-equal 3))
+                :to-equal 2))
       (cl-letf (((symbol-function 'org-files-db-process--run-process)
                  (lambda (&rest _args)
                    (list :status 1 :stdout ""
@@ -4264,12 +4276,12 @@ SCHEDULED: <2026-10-02 Fri>
                 ((symbol-function 'read-string) (lambda (&rest _) "test"))
                 ((symbol-function 'completing-read)
                  (lambda (_prompt table &rest _)
-                   (nth 1 (all-completions "" table))))
+                   (nth 0 (all-completions "" table))))
                 ((symbol-function 'org-files-db-actions--goto)
                  (lambda (&rest args) (setq goto args))))
         (let ((ivy-mode nil))
           (org-files-db-search))
-        (expect goto :to-equal '("/n/a.org" 8 79)))))
+        (expect goto :to-equal '("/n/a.org" 8 70)))))
 
   (it "turns input words into quoted prefix terms in any order"
     (let ((org-files-db-search-input-style 'words))

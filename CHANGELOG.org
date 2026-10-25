@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =CHANGED= ~org-files-db-search~ shows one candidate per matched line with every match on it highlighted, instead of one candidate per matched word. A title match shows the highlighted title.
 - =ADDED= ~org-files-db-search-input-style~ ~substring~ matches each word of at least three characters anywhere inside words (~zept~ finds "Rezept") with ~orgfdb search --substring~. It needs ~substring_search = true~ in the ~orgfdb~ configuration (hubisan/org-files-db#126).
 - =CHANGED= ~org-files-db-search~ searches each typed word as a word prefix, in any order, so results appear while a word is still incomplete (~tr~ finds "Trigger"). The new option ~org-files-db-search-input-style~ set to ~fts~ restores raw FTS5 expressions.
 - =ADDED= ~org-files-db-search~ searches heading titles and body text with ~orgfdb search --occurrences~ and opens the selected match at its exact position (hubisan/org-files-db#122). With ~ivy-mode~ the candidates update while you type; otherwise the expression is read first. Searching starts at ~org-files-db-search-min-input~ characters (default ~3~); the face ~org-files-db-search-match~ marks the match.
