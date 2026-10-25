@@ -225,7 +225,8 @@ ENTRIES is a sequence of key and value pairs."
           (org-files-db-presentation--plist definition "presentation column")))
     (org-files-db-presentation--check-options
      properties
-     '(:width :truncate :separator :include-root :include-match)
+     '(:width :truncate :separator :include-root :include-match
+       :abbreviate-home)
      (format "presentation column %s" name))
     (let ((object
            (org-files-db-presentation--json-object
@@ -244,6 +245,11 @@ ENTRIES is a sequence of key and value pairs."
                  object))
       (when outline
         (puthash "outline_path" outline object))
+      (when (plist-member properties :abbreviate-home)
+        (puthash "abbreviate_home"
+                 (org-files-db-presentation--json-boolean
+                  (plist-get properties :abbreviate-home))
+                 object))
       object)))
 
 (defun org-files-db-presentation--sort-json (definition)

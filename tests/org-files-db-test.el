@@ -690,6 +690,16 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
       (expect (alist-get 'direction sort) :to-equal "desc")
       (expect (alist-get 'kind row-source) :to-equal "tags")))
 
+  (it "serializes home abbreviation for path columns"
+    (let* ((json (org-files-db-presentation--spec-json
+                  '((file-dir :abbreviate-home t :width (max 65))
+                    (file-path :abbreviate-home nil))
+                  nil nil))
+           (columns (alist-get 'columns (org-files-db-process--parse-json json))))
+      (expect (alist-get 'name (aref columns 0)) :to-equal "file-dir")
+      (expect (alist-get 'abbreviate_home (aref columns 0)) :to-equal t)
+      (expect (alist-get 'abbreviate_home (aref columns 1)) :to-equal :false)))
+
   (it "serializes Rust defaults without duplicating presentation semantics"
     (let* ((json (org-files-db-presentation--spec-json '((title)) nil nil))
            (spec (org-files-db-process--parse-json json))
@@ -698,6 +708,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
       (expect (alist-get 'mode (alist-get 'width column)) :to-equal "auto")
       (expect (alist-get 'truncate column) :to-equal nil)
       (expect (alist-get 'outline_path column) :to-equal nil)
+      (expect (alist-get 'abbreviate_home column) :to-equal nil)
       (expect (alist-get 'sort spec) :to-equal [])
       (expect (alist-get 'row_source spec) :to-equal nil)))
 
