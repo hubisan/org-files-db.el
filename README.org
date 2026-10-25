@@ -191,7 +191,9 @@ Emacs does not keep the candidates of views without ~:cache t~, and keeps no can
 
 ~M-x org-files-db-search~ searches the titles and the body text of all headings and opens the place of the match, not only its heading. Each candidate is one match: the heading, the file and line, and the matched line with the match highlighted. With a prefix argument, you select the configuration first.
 
-The input is a SQLite FTS5 expression: ~word~, ~pref*~ for a prefix, ~"two words"~ for a phrase, and ~AND~, ~OR~ and ~NOT~. FTS5 matches whole words, not parts of words. Use ripgrep for regular expressions or parts of words.
+Each word you type matches the start of a word, in any order: ~rez foc~ finds a heading "Focaccia" with "Rezept" in its body. A word does not match inside another word: ~zept~ does not find "Rezept". Use ripgrep for regular expressions or parts inside words.
+
+Set ~org-files-db-search-input-style~ to ~fts~ to type a raw SQLite FTS5 expression instead: ~word~ (whole word only), ~pref*~ for a prefix, ~"two words"~ for a phrase, and ~AND~, ~OR~ and ~NOT~.
 
 - With ~ivy-mode~, the candidates change while you type.
 - With other completion UIs, you first type the expression and press ~RET~. Then you select a match.
