@@ -26,6 +26,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 (require 'org-files-db-core)
 (require 'org-files-db-process)
@@ -90,14 +91,15 @@ A row without occurrences yields one occurrence at its heading."
             :snippet-end (org-files-db-search--field occurrence 'snippet_end))))
        occurrences))))
 
-(defun org-files-db-search-occurrences (expression &optional config)
+(defun org-files-db-search-occurrences (expression &optional config substring)
   "Return the occurrences that FTS5 EXPRESSION matches as a list.
 Each element is an `org-files-db-search-occurrence', in result rank order
 and then in source order.  CONFIG is a name from `org-files-db-configs';
-nil uses the default."
+nil uses the default.  Non-nil SUBSTRING searches the substring index."
   (let* ((config-name (org-files-db-process--config-name config))
          (rows (org-files-db-process--call-json
                 (append (list "search" "--format" "json" "--occurrences")
+                        (and substring (list "--substring"))
                         (org-files-db-process--config-arguments config-name)
                         (list expression)))))
     (mapcan #'org-files-db-search--row-occurrences (append rows nil))))
@@ -140,14 +142,30 @@ nil uses the default."
     (nreverse result)))
 
 (defun org-files-db-search--expression (input)
-  "Return the FTS5 expression for the user INPUT.
-See `org-files-db-search-input-style'."
-  (if (eq org-files-db-search-input-style 'fts)
-      (string-trim input)
-    (mapconcat (lambda (word)
-                 (format "\"%s\"*" (string-replace "\"" "\"\"" word)))
-               (split-string input nil t)
-               " AND ")))
+  "Return the FTS5 expression for the user INPUT, or nil for no search.
+See `org-files-db-search-input-style'.  The `substring' style drops words
+shorter than three characters, which the trigram index cannot match."
+  (pcase org-files-db-search-input-style
+    ('fts (string-trim input))
+    (style
+     (let ((words (split-string input nil t)))
+       (when (eq style 'substring)
+         (setq words (seq-filter (lambda (word) (>= (length word) 3)) words)))
+       (when words
+         (mapconcat (lambda (word)
+                      (format (if (eq style 'substring) "\"%s\"" "\"%s\"*")
+                              (string-replace "\"" "\"\"" word)))
+                    words
+                    " AND "))))))
+
+(defun org-files-db-search--input-occurrences (input config)
+  "Return the occurrences for the user INPUT with CONFIG.
+Signal a `user-error' when INPUT gives no search expression."
+  (let ((expression (org-files-db-search--expression input)))
+    (unless expression
+      (user-error "Substring search needs a word of at least 3 characters"))
+    (org-files-db-search-occurrences
+     expression config (eq org-files-db-search-input-style 'substring))))
 
 (defun org-files-db-search--input-long-enough-p (input)
   "Return non-nil when INPUT reaches `org-files-db-search-min-input'."
@@ -160,9 +178,8 @@ expressions give no candidates instead of an error."
   (when (org-files-db-search--input-long-enough-p input)
     (condition-case nil
         (org-files-db-search--candidates
-         (org-files-db-search-occurrences
-          (org-files-db-search--expression input) config))
-      (org-files-db-error nil))))
+         (org-files-db-search--input-occurrences input config))
+      ((org-files-db-error user-error) nil))))
 
 (defun org-files-db-search-open-occurrence (occurrence)
   "Open the source of OCCURRENCE at the match and return nil."
@@ -199,8 +216,7 @@ expressions give no candidates instead of an error."
   "Read an expression, then one of its occurrences, using CONFIG."
   (let* ((expression (org-files-db-search--read-expression))
          (candidates (org-files-db-search--candidates
-                      (org-files-db-search-occurrences
-                       (org-files-db-search--expression expression) config)))
+                      (org-files-db-search--input-occurrences expression config)))
          (strings (mapcar #'car candidates)))
     (unless candidates
       (user-error "No matches for %s" expression))

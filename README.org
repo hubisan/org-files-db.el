@@ -193,6 +193,8 @@ Emacs does not keep the candidates of views without ~:cache t~, and keeps no can
 
 Each word you type matches the start of a word, in any order: ~rez foc~ finds a heading "Focaccia" with "Rezept" in its body. A word does not match inside another word: ~zept~ does not find "Rezept". Use ripgrep for regular expressions or parts inside words.
 
+To also match inside words, set ~substring_search = true~ in the ~[search]~ section of the ~orgfdb~ configuration, run ~orgfdb rebuild~, and set ~org-files-db-search-input-style~ to ~substring~. Then ~zept~ finds "Rezept" and ~praam~ finds "Präambel". Each word needs at least 3 characters; shorter words are ignored. The extra index is about three times the size of the indexed text.
+
 Set ~org-files-db-search-input-style~ to ~fts~ to type a raw SQLite FTS5 expression instead: ~word~ (whole word only), ~pref*~ for a prefix, ~"two words"~ for a phrase, and ~AND~, ~OR~ and ~NOT~.
 
 - With ~ivy-mode~, the candidates change while you type.

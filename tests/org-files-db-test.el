@@ -4279,7 +4279,24 @@ SCHEDULED: <2026-10-02 Fri>
               :to-equal "\"a\"\"b\"* AND \"OR\"*"))
     (let ((org-files-db-search-input-style 'fts))
       (expect (org-files-db-search--expression " \"a b\" OR c ")
-              :to-equal "\"a b\" OR c")))
+              :to-equal "\"a b\" OR c"))
+    (let ((org-files-db-search-input-style 'substring))
+      (expect (org-files-db-search--expression "zept ab foc")
+              :to-equal "\"zept\" AND \"foc\"")
+      (expect (org-files-db-search--expression "ab c") :to-equal nil)))
+
+  (it "searches the substring index in substring style"
+    (let ((org-files-db-search-min-input 3)
+          (org-files-db-search-input-style 'substring))
+      (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                 #'org-files-db-test--search-process))
+        (org-files-db-search--live-candidates "zept" nil)
+        (expect (car calls) :to-equal
+                '("--error-format" "json" "search" "--format" "json"
+                  "--occurrences" "--substring" "\"zept\""))
+        (setq calls nil)
+        (expect (org-files-db-search--live-candidates "ab c" nil) :to-equal nil)
+        (expect calls :to-equal nil))))
 
   (it "sends word prefixes while typing"
     (let ((org-files-db-search-min-input 2)
