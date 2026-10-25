@@ -181,9 +181,13 @@ Ancestors and matched headings both keep their planning line."
 (defcustom org-files-db-search-input-style 'words
   "How `org-files-db-search' reads the input.
 `words' searches each whitespace-separated word as a word prefix, in any
-order, so `rez foc' finds \"Focaccia ... Rezept\".  `fts' passes the input
-as a raw SQLite FTS5 expression, for phrases, OR and NOT."
+order, so `rez foc' finds \"Focaccia ... Rezept\".  `substring' matches
+each word of at least three characters anywhere inside words, so `zept'
+finds \"Rezept\"; it needs `substring_search = true' in the orgfdb
+configuration.  `fts' passes the input as a raw SQLite FTS5 expression, for
+phrases, OR and NOT."
   :type '(choice (const :tag "Word prefixes in any order" words)
+                 (const :tag "Substrings in any order" substring)
                  (const :tag "Raw FTS5 expression" fts))
   :group 'org-files-db)
 
