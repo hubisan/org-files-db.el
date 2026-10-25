@@ -44,7 +44,10 @@
 FIELD is `title' or `body'.  LINE and BYTE-START locate the match in FILE;
 they fall back to the owning heading when the match has no source position.
 SNIPPET is the matched text line, with the match from SNIPPET-START to
-SNIPPET-END in characters."
+SNIPPET-END in characters.  RANGES lists all matches in SNIPPET as
+\(START . END) character offsets, more than one when matches on the same
+line are grouped."
+  ranges
   heading-id
   title
   file
@@ -73,7 +76,7 @@ A row without occurrences yields one occurrence at its heading."
                :heading-id (org-files-db-search--field row 'id)
                :title title :file file :field 'title
                :line heading-line :byte-start heading-byte
-               :snippet title :snippet-start 0 :snippet-end 0))
+               :snippet title :snippet-start 0 :snippet-end 0 :ranges nil))
       (mapcar
        (lambda (occurrence)
          (let ((line (org-files-db-search--field occurrence 'line)))
@@ -88,7 +91,9 @@ A row without occurrences yields one occurrence at its heading."
                           heading-byte)
             :snippet (or (org-files-db-search--field occurrence 'snippet) "")
             :snippet-start (org-files-db-search--field occurrence 'snippet_start)
-            :snippet-end (org-files-db-search--field occurrence 'snippet_end))))
+            :snippet-end (org-files-db-search--field occurrence 'snippet_end)
+            :ranges (list (cons (org-files-db-search--field occurrence 'snippet_start)
+                                (org-files-db-search--field occurrence 'snippet_end))))))
        occurrences))))
 
 (defun org-files-db-search-occurrences (expression &optional config substring)
@@ -102,29 +107,57 @@ nil uses the default.  Non-nil SUBSTRING searches the substring index."
                         (and substring (list "--substring"))
                         (org-files-db-process--config-arguments config-name)
                         (list expression)))))
-    (mapcan #'org-files-db-search--row-occurrences (append rows nil))))
+    (org-files-db-search--group-occurrences
+     (mapcan #'org-files-db-search--row-occurrences (append rows nil)))))
+
+(defun org-files-db-search--same-line-p (a b)
+  "Return non-nil when occurrences A and B are on the same matched line."
+  (and (equal (org-files-db-search-occurrence-heading-id a)
+              (org-files-db-search-occurrence-heading-id b))
+       (eq (org-files-db-search-occurrence-field a)
+           (org-files-db-search-occurrence-field b))
+       (equal (org-files-db-search-occurrence-line a)
+              (org-files-db-search-occurrence-line b))
+       (equal (org-files-db-search-occurrence-snippet a)
+              (org-files-db-search-occurrence-snippet b))))
+
+(defun org-files-db-search--group-occurrences (occurrences)
+  "Merge consecutive OCCURRENCES on the same line into the first one.
+The merged occurrence keeps the position of the first match and the
+ranges of all matches on that line."
+  (let ((result nil))
+    (dolist (occurrence occurrences)
+      (if (and result (org-files-db-search--same-line-p (car result) occurrence))
+          (setf (org-files-db-search-occurrence-ranges (car result))
+                (append (org-files-db-search-occurrence-ranges (car result))
+                        (org-files-db-search-occurrence-ranges occurrence)))
+        (push occurrence result)))
+    (nreverse result)))
 
 (defun org-files-db-search--candidate (occurrence)
   "Return the completion candidate string for OCCURRENCE."
   (let* ((snippet (copy-sequence (string-trim-right
                                   (org-files-db-search-occurrence-snippet occurrence))))
-         (start (org-files-db-search-occurrence-snippet-start occurrence))
-         (end (min (org-files-db-search-occurrence-snippet-end occurrence)
-                   (length snippet)))
+         (title-p (eq (org-files-db-search-occurrence-field occurrence) 'title))
          (location (format "%s:%s"
                            (file-name-nondirectory
                             (org-files-db-search-occurrence-file occurrence))
                            (or (org-files-db-search-occurrence-line occurrence) "?"))))
-    (when (and start (< start end))
-      (add-face-text-property start end 'org-files-db-search-match nil snippet))
+    (when title-p
+      (add-face-text-property 0 (length snippet) 'org-files-db-heading t snippet))
+    (dolist (range (org-files-db-search-occurrence-ranges occurrence))
+      (let ((start (car range))
+            (end (min (or (cdr range) 0) (length snippet))))
+        (when (and start (< start end))
+          (add-face-text-property start end 'org-files-db-search-match nil snippet))))
     (concat
-     (propertize (org-files-db-search-occurrence-title occurrence)
-                 'face 'org-files-db-heading)
+     (if title-p
+         snippet
+       (propertize (org-files-db-search-occurrence-title occurrence)
+                   'face 'org-files-db-heading))
      "  "
      (propertize location 'face 'org-files-db-file-path)
-     (if (eq (org-files-db-search-occurrence-field occurrence) 'body)
-         (concat "  " (string-trim-left snippet))
-       ""))))
+     (if title-p "" (concat "  " (string-trim-left snippet))))))
 
 (defun org-files-db-search--candidates (occurrences)
   "Return an alist of unique candidate strings and OCCURRENCES."
