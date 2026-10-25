@@ -153,7 +153,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
     (expect (featurep 'org-files-db-views) :to-equal t)
     (expect (featurep 'org-files-db-actions) :to-equal t)
     (expect (featurep 'org-files-db-watch) :to-equal t)
-    (expect (featurep 'org-files-db-search) :to-equal nil)
+    (expect (featurep 'org-files-db-search) :to-equal t)
     (expect (featurep 'org-files-db-cache) :to-equal t))
 
   (it "loads Core without specialized org-files-db modules"
@@ -218,7 +218,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
     (expect (boundp 'org-files-db-config-file) :to-equal nil)
     (expect (boundp 'org-files-db-search-columns) :to-equal nil)
     (expect (boundp 'org-files-db-search-sort) :to-equal nil)
-    (expect (boundp 'org-files-db-search-min-input) :to-equal nil))
+    (expect (boundp 'org-files-db-search-min-input) :to-equal t))
 
   (it "defines presentation defaults for all query targets"
     (expect (> (length org-files-db-heading-columns) 0) :to-equal t)
@@ -4183,5 +4183,97 @@ SCHEDULED: <2026-10-02 Fri>
                 :to-equal
                 (org-files-db-presentation-generation
                  (cdr (car presentations))))))))
+
+(describe "org-files-db-search"
+  :var (json calls)
+  (before-each
+    (setq calls nil)
+    (spy-on 'org-files-db-process--config-name :and-return-value "notes")
+    (spy-on 'org-files-db-process--config-arguments :and-return-value nil)
+    (setq json
+          (concat
+           "[{\"id\":2,\"title\":\"Videos\",\"location\":{\"file_path\":\"/n/a.org\","
+           "\"line\":4,\"byte_start\":30},\"rank\":-1.0,\"occurrences\":["
+           "{\"field\":\"body\",\"line\":8,\"column\":4,\"byte_start\":70,\"byte_end\":74,"
+           "\"snippet\":\"Ein test und test.\",\"snippet_start\":4,\"snippet_end\":8},"
+           "{\"field\":\"body\",\"line\":8,\"column\":13,\"byte_start\":79,\"byte_end\":83,"
+           "\"snippet\":\"Ein test und test.\",\"snippet_start\":13,\"snippet_end\":17}]},"
+           "{\"id\":1,\"title\":\"a\",\"location\":{\"file_path\":\"/n/a.org\","
+           "\"line\":1,\"byte_start\":0},\"rank\":-0.5,\"occurrences\":["
+           "{\"field\":\"title\",\"line\":null,\"column\":null,\"byte_start\":null,"
+           "\"byte_end\":null,\"snippet\":\"a\",\"snippet_start\":0,\"snippet_end\":1}]}]")))
+
+  (defun org-files-db-test--search-process (arguments &optional _input)
+    (push arguments calls)
+    (list :status 0 :stdout json :stderr ""))
+
+  (it "requests occurrences and keeps rank and source order"
+    (cl-letf (((symbol-function 'org-files-db-process--run-process)
+               #'org-files-db-test--search-process))
+      (let ((occurrences (org-files-db-search-occurrences "test")))
+        (expect (car calls) :to-equal
+                '("--error-format" "json" "search" "--format" "json"
+                  "--occurrences" "test"))
+        (expect (mapcar #'org-files-db-search-occurrence-byte-start occurrences)
+                :to-equal '(70 79 0))
+        (expect (mapcar #'org-files-db-search-occurrence-line occurrences)
+                :to-equal '(8 8 1))
+        (expect (org-files-db-search-occurrence-field (car occurrences))
+                :to-equal 'body))))
+
+  (it "falls back to the heading when an occurrence has no source position"
+    (cl-letf (((symbol-function 'org-files-db-process--run-process)
+               #'org-files-db-test--search-process))
+      (let ((root (nth 2 (org-files-db-search-occurrences "test"))))
+        (expect (org-files-db-search-occurrence-line root) :to-equal 1)
+        (expect (org-files-db-search-occurrence-byte-start root) :to-equal 0))))
+
+  (it "builds unique candidates that highlight the match"
+    (cl-letf (((symbol-function 'org-files-db-process--run-process)
+               #'org-files-db-test--search-process))
+      (let* ((candidates (org-files-db-search--candidates
+                          (org-files-db-search-occurrences "test")))
+             (first (car (nth 0 candidates)))
+             (second (car (nth 1 candidates))))
+        (expect (length (delete-dups (mapcar #'car candidates))) :to-equal 3)
+        (expect first :to-equal "Videos  a.org:8  Ein test und test.")
+        (expect second :to-match "\\[2\\]\\'")
+        (let ((match (string-search "test" first)))
+          (expect (get-text-property match 'face first)
+                  :to-equal 'org-files-db-search-match))
+        (expect (car (nth 2 candidates)) :to-equal "a  a.org:1"))))
+
+  (it "searches only from the minimum input and hides invalid input"
+    (let ((org-files-db-search-min-input 3))
+      (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                 #'org-files-db-test--search-process))
+        (expect (org-files-db-search--live-candidates "te " nil) :to-equal nil)
+        (expect calls :to-equal nil)
+        (expect (length (org-files-db-search--live-candidates "test" nil))
+                :to-equal 3))
+      (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                 (lambda (&rest _args)
+                   (list :status 1 :stdout ""
+                         :stderr "{\"error\":{\"kind\":\"query-invalid\",\"message\":\"bad\"}}"))))
+        (expect (org-files-db-search--live-candidates "\"tes" nil) :to-equal nil))))
+
+  (it "opens the selected occurrence at the match"
+    (let (goto)
+      (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                 #'org-files-db-test--search-process)
+                ((symbol-function 'read-string) (lambda (&rest _) "test"))
+                ((symbol-function 'completing-read)
+                 (lambda (_prompt table &rest _)
+                   (nth 1 (all-completions "" table))))
+                ((symbol-function 'org-files-db-actions--goto)
+                 (lambda (&rest args) (setq goto args))))
+        (let ((ivy-mode nil))
+          (org-files-db-search))
+        (expect goto :to-equal '("/n/a.org" 8 79)))))
+
+  (it "rejects a too short expression without ivy"
+    (let ((org-files-db-search-min-input 3))
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "ab")))
+        (expect (org-files-db-search--read-expression) :to-throw 'user-error)))))
 
 ;;; org-files-db-test.el ends here

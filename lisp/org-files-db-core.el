@@ -173,6 +173,16 @@ Ancestors and matched headings both keep their planning line."
   :type 'boolean
   :group 'org-files-db)
 
+(defcustom org-files-db-search-min-input 3
+  "Minimum number of characters before `org-files-db-search' searches."
+  :type 'natnum
+  :group 'org-files-db)
+
+(defface org-files-db-search-match
+  '((t (:inherit match)))
+  "Face for the matched text in `org-files-db-search' candidates."
+  :group 'org-files-db)
+
 (defface org-files-db-outline-match
   '((t (:inherit highlight)))
   "Face for matched headings in the org-files-db outline export."

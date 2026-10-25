@@ -187,6 +187,19 @@ Emacs does not keep the candidates of views without ~:cache t~, and keeps no can
 
 ~org-files-db-watch-startup-timeout~ is the number of seconds that Emacs waits until a watcher is ready. The default is 60. With ~nil~, Emacs waits without a limit.
 
+* Full text search
+
+~M-x org-files-db-search~ searches the titles and the body text of all headings and opens the place of the match, not only its heading. Each candidate is one match: the heading, the file and line, and the matched line with the match highlighted. With a prefix argument, you select the configuration first.
+
+The input is a SQLite FTS5 expression: ~word~, ~pref*~ for a prefix, ~"two words"~ for a phrase, and ~AND~, ~OR~ and ~NOT~. FTS5 matches whole words, not parts of words. Use ripgrep for regular expressions or parts of words.
+
+- With ~ivy-mode~, the candidates change while you type.
+- With other completion UIs, you first type the expression and press ~RET~. Then you select a match.
+
+The search starts only when the input has at least ~org-files-db-search-min-input~ characters (default ~3~). The face ~org-files-db-search-match~ marks the match.
+
+Search needs ~fts5_enabled = true~ in the ~orgfdb~ configuration, and ~index_body_text = true~ to find body text. Run ~orgfdb rebuild~ after you change them. Search needs an ~orgfdb~ with ~search --occurrences~.
+
 * Result actions
 
 When you select a result, Emacs runs an action with it. The default action depends on the query target:
