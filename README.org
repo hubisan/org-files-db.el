@@ -93,6 +93,7 @@ The query can be a quoted form or a string. When you call the command from Lisp,
 - ~:width~ is ~auto~ (the width of the widest value), ~(max N)~ (automatic, but N characters at most) or ~(fixed N)~.
 - ~:truncate~ is ~(:position left|middle|right :marker STRING)~. It sets how ~orgfdb~ shortens a value that is too long.
 - ~:separator~, ~:include-root~ and ~:include-match~ change the outline path columns ~outline-path~, ~source-outline-path~ and ~target-outline-path~.
+- ~:abbreviate-home t~ shows paths in your home directory as =~/...= in the columns ~file-dir~ and ~file-path~. ~file-dir~ is the directory of the file, so you can show it next to ~file-name~ without the file name twice. Actions still use the full path.
 
 If you do not give ~:columns~, Emacs uses the default columns for the query target. You can change them with ~org-files-db-heading-columns~, ~org-files-db-file-columns~ and ~org-files-db-link-columns~.
 

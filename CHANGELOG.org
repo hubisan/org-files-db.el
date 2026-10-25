@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =ADDED= Columns accept ~:abbreviate-home~, which shows paths in the home directory as =~/...= in the ~file-dir~ and ~file-path~ columns (hubisan/org-files-db#123). The ~file-dir~ column needs an ~orgfdb~ with that column.
 - =CHANGED= README uses plain English: shorter sentences, active voice and terms explained at first use.
 - =CHANGED= The package supports Emacs 29.3 or newer (was 29.4).
 - =CHANGED= README shows a view that lists headings with a link in the headline and follows it.
