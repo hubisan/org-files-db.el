@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =ADDED= ~org-files-db-search~ searches heading titles and body text with ~orgfdb search --occurrences~ and opens the selected match at its exact position (hubisan/org-files-db#122). With ~ivy-mode~ the candidates update while you type; otherwise the expression is read first. Searching starts at ~org-files-db-search-min-input~ characters (default ~3~); the face ~org-files-db-search-match~ marks the match.
 - =ADDED= Columns accept ~:abbreviate-home~, which shows paths in the home directory as =~/...= in the ~file-dir~ and ~file-path~ columns (hubisan/org-files-db#123). The ~file-dir~ column needs an ~orgfdb~ with that column.
 - =CHANGED= README uses plain English: shorter sentences, active voice and terms explained at first use.
 - =CHANGED= The package supports Emacs 29.3 or newer (was 29.4).
