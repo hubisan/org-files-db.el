@@ -139,6 +139,16 @@ nil uses the default."
         (push (cons candidate occurrence) result)))
     (nreverse result)))
 
+(defun org-files-db-search--expression (input)
+  "Return the FTS5 expression for the user INPUT.
+See `org-files-db-search-input-style'."
+  (if (eq org-files-db-search-input-style 'fts)
+      (string-trim input)
+    (mapconcat (lambda (word)
+                 (format "\"%s\"*" (string-replace "\"" "\"\"" word)))
+               (split-string input nil t)
+               " AND ")))
+
 (defun org-files-db-search--input-long-enough-p (input)
   "Return non-nil when INPUT reaches `org-files-db-search-min-input'."
   (>= (length (string-trim input)) org-files-db-search-min-input))
@@ -150,7 +160,8 @@ expressions give no candidates instead of an error."
   (when (org-files-db-search--input-long-enough-p input)
     (condition-case nil
         (org-files-db-search--candidates
-         (org-files-db-search-occurrences (string-trim input) config))
+         (org-files-db-search-occurrences
+          (org-files-db-search--expression input) config))
       (org-files-db-error nil))))
 
 (defun org-files-db-search-open-occurrence (occurrence)
@@ -182,13 +193,14 @@ expressions give no candidates instead of an error."
     (unless (org-files-db-search--input-long-enough-p expression)
       (user-error "Search needs at least %d characters"
                   org-files-db-search-min-input))
-    (string-trim expression)))
+    expression))
 
 (defun org-files-db-search--read-with-completion (config)
   "Read an expression, then one of its occurrences, using CONFIG."
   (let* ((expression (org-files-db-search--read-expression))
          (candidates (org-files-db-search--candidates
-                      (org-files-db-search-occurrences expression config)))
+                      (org-files-db-search-occurrences
+                       (org-files-db-search--expression expression) config)))
          (strings (mapcar #'car candidates)))
     (unless candidates
       (user-error "No matches for %s" expression))
@@ -207,9 +219,10 @@ expressions give no candidates instead of an error."
 ;;;###autoload
 (defun org-files-db-search (&optional config)
   "Search heading titles and bodies and open the selected occurrence.
-The input is a SQLite FTS5 expression, such as `word', `pref*' or
-\"a phrase\".  Matches appear from `org-files-db-search-min-input'
-characters on.  With `ivy-mode', results update while you type; otherwise
+By default each input word matches the start of a word, in any order;
+see `org-files-db-search-input-style' for raw FTS5 expressions.
+Matches appear from `org-files-db-search-min-input' characters on.
+With `ivy-mode', results update while you type; otherwise
 read the expression first and then select an occurrence.  CONFIG is a name
 from `org-files-db-configs'; with a prefix argument, select it first.
 Return the selected `org-files-db-search-occurrence'."

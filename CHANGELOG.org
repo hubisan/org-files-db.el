@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =CHANGED= ~org-files-db-search~ searches each typed word as a word prefix, in any order, so results appear while a word is still incomplete (~tr~ finds "Trigger"). The new option ~org-files-db-search-input-style~ set to ~fts~ restores raw FTS5 expressions.
 - =ADDED= ~org-files-db-search~ searches heading titles and body text with ~orgfdb search --occurrences~ and opens the selected match at its exact position (hubisan/org-files-db#122). With ~ivy-mode~ the candidates update while you type; otherwise the expression is read first. Searching starts at ~org-files-db-search-min-input~ characters (default ~3~); the face ~org-files-db-search-match~ marks the match.
 - =ADDED= Columns accept ~:abbreviate-home~, which shows paths in the home directory as =~/...= in the ~file-dir~ and ~file-path~ columns (hubisan/org-files-db#123). The ~file-dir~ column needs an ~orgfdb~ with that column.
 - =CHANGED= README uses plain English: shorter sentences, active voice and terms explained at first use.

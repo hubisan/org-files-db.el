@@ -178,6 +178,15 @@ Ancestors and matched headings both keep their planning line."
   :type 'natnum
   :group 'org-files-db)
 
+(defcustom org-files-db-search-input-style 'words
+  "How `org-files-db-search' reads the input.
+`words' searches each whitespace-separated word as a word prefix, in any
+order, so `rez foc' finds \"Focaccia ... Rezept\".  `fts' passes the input
+as a raw SQLite FTS5 expression, for phrases, OR and NOT."
+  :type '(choice (const :tag "Word prefixes in any order" words)
+                 (const :tag "Raw FTS5 expression" fts))
+  :group 'org-files-db)
+
 (defface org-files-db-search-match
   '((t (:inherit match)))
   "Face for the matched text in `org-files-db-search' candidates."

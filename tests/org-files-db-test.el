@@ -4271,6 +4271,24 @@ SCHEDULED: <2026-10-02 Fri>
           (org-files-db-search))
         (expect goto :to-equal '("/n/a.org" 8 79)))))
 
+  (it "turns input words into quoted prefix terms in any order"
+    (let ((org-files-db-search-input-style 'words))
+      (expect (org-files-db-search--expression "  rez  foc ")
+              :to-equal "\"rez\"* AND \"foc\"*")
+      (expect (org-files-db-search--expression "a\"b OR")
+              :to-equal "\"a\"\"b\"* AND \"OR\"*"))
+    (let ((org-files-db-search-input-style 'fts))
+      (expect (org-files-db-search--expression " \"a b\" OR c ")
+              :to-equal "\"a b\" OR c")))
+
+  (it "sends word prefixes while typing"
+    (let ((org-files-db-search-min-input 2)
+          (org-files-db-search-input-style 'words))
+      (cl-letf (((symbol-function 'org-files-db-process--run-process)
+                 #'org-files-db-test--search-process))
+        (org-files-db-search--live-candidates "tr" nil)
+        (expect (car (last (car calls))) :to-equal "\"tr\"*"))))
+
   (it "rejects a too short expression without ivy"
     (let ((org-files-db-search-min-input 3))
       (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "ab")))
