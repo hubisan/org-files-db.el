@@ -4247,6 +4247,36 @@ SCHEDULED: <2026-10-02 Fri>
         (expect (get-text-property 0 'face title)
                 :to-equal '(org-files-db-search-match org-files-db-heading)))))
 
+  (it "keeps the best lines of each heading and puts them first"
+    (cl-flet ((line (id line matched)
+                (org-files-db-search--make-occurrence
+                 :heading-id id :title "T" :file "/n/a.org" :field 'body
+                 :line line :snippet "s" :ranges nil :matched matched)))
+      (let* ((pneu-only (line 1 3 '("Pneu")))
+             (both (line 1 5 '("pneus" "Velo")))
+             (velo-only (line 2 7 '("velo")))
+             (accent (line 3 9 '("Präambel" "Pneu"))))
+        (expect (org-files-db-search--rank
+                 (list velo-only pneu-only both accent) '("pneu" "velo"))
+                :to-equal (list both velo-only accent))
+        (expect (org-files-db-search--score accent '("praam" "pneu"))
+                :to-equal 2)
+        (expect (org-files-db-search--score both nil) :to-equal 2))))
+
+  (it "merges a long line with different snippets into one candidate"
+    (let* ((first (org-files-db-search--make-occurrence
+                   :heading-id 1 :field 'body :line 4 :snippet "aa pneu"
+                   :ranges '((3 . 7)) :matched '("pneu")))
+           (second (org-files-db-search--make-occurrence
+                    :heading-id 1 :field 'body :line 4 :snippet "velo bb"
+                    :ranges '((0 . 4)) :matched '("velo")))
+           (grouped (org-files-db-search--group-occurrences (list first second))))
+      (expect (length grouped) :to-equal 1)
+      (expect (org-files-db-search-occurrence-ranges (car grouped))
+              :to-equal '((3 . 7)))
+      (expect (org-files-db-search-occurrence-matched (car grouped))
+              :to-equal '("pneu" "velo"))))
+
   (it "numbers candidates with identical text"
     (let* ((occurrence (org-files-db-search--make-occurrence
                         :title "T" :file "/n/a.org" :field 'body :line 3
