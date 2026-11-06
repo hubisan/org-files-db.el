@@ -76,13 +76,7 @@
 
 (defun org-files-db-results--line-text (candidate)
   "Return the visible row text of completion CANDIDATE."
-  (or (and (> (length candidate) 0)
-           (get-text-property 0 'display candidate)
-           (let ((display (get-text-property 0 'display candidate)))
-             (and (stringp display) (not (string-empty-p display)) display)))
-      (substring-no-properties
-       (replace-regexp-in-string
-        "\u2063[\ue000-\uf8ff]*\\'" "" candidate))))
+  (org-files-db-presentation--candidate-visible candidate))
 
 (defun org-files-db-results--insert (candidates)
   "Insert one line per completion candidate of CANDIDATES at point."
