@@ -41,19 +41,32 @@ and candidate construction, which allocate many short-lived and
 long-lived objects. The previous value is restored afterwards.")
 
 (defcustom org-files-db-executable "orgfdb"
-  "Path or command name of the orgfdb executable."
+  "Path or command name of the orgfdb executable.
+A command name is looked up in the variable `exec-path'. Example:
+
+  (setq org-files-db-executable \"~/.cargo/bin/orgfdb\")"
   :type 'string
   :group 'org-files-db)
 
 (defcustom org-files-db-configs nil
   "Named orgfdb configuration files.
 Each entry has the form (NAME . FILE). NAME is a unique non-empty string.
-FILE is the configuration file for that name."
+FILE is the orgfdb configuration file for that name. Use more than one
+entry for separate indexes. Select one per call with a prefix argument or
+the :config keyword; without one, `org-files-db-default-config' applies.
+Example:
+
+  (setq org-files-db-configs
+        \\='((\"main\" . \"~/org/org-files-db.toml\")
+          (\"work\" . \"~/work/org-files-db.toml\")))"
   :type '(alist :key-type string :value-type file)
   :group 'org-files-db)
 
 (defcustom org-files-db-default-config nil
-  "Name of the default entry in `org-files-db-configs'."
+  "Name of the default entry in `org-files-db-configs'.
+It must be set as soon as `org-files-db-configs' is not empty. Example:
+
+  (setq org-files-db-default-config \"main\")"
   :type '(choice (const :tag "Not configured" nil) string)
   :group 'org-files-db)
 
@@ -62,14 +75,60 @@ FILE is the configuration file for that name."
     (priority :width (fixed 3))
     (outline-path :width (max 80))
     (file-name :width (max 30)))
-  "Default columns for heading query results."
+  "Default columns for heading query results.
+Each column is a list (NAME OPTION VALUE ...). Columns for headings:
+
+  title             todo-keyword      todo-type         priority
+  outline-path      tags              scheduled-raw     deadline-raw
+  closed-raw        file-title        file-name         file-path
+  file-dir          line-number
+
+With a row source only: tag (:row-source tags), property-name and
+property-value (effective-properties), keyword-name and keyword-value
+\(keywords).
+
+Options for every column:
+
+  :width     auto (widest value), (max N) or (fixed N); default auto.
+  :truncate  (:position left|middle|right :marker STRING) for values that
+             are too wide; default position right, marker \"…\".
+
+Options for outline-path, source-outline-path and target-outline-path:
+
+  :separator      string between the outline parts; default \" » \".
+  :include-root   t to start with the file title; default nil.
+  :include-match  nil to leave out the matched heading itself; default t.
+
+Option for file-path and file-dir:
+
+  :abbreviate-home  t to show paths under the home directory with ~/.
+
+Example:
+
+  (setq org-files-db-heading-columns
+        \\='((todo-keyword :width (fixed 6))
+          (outline-path :width (max 80) :separator \" / \")
+          (tags :width (max 20) :truncate (:position left))))
+
+The presentation reference of org-files-db describes the columns in full."
   :type '(repeat sexp)
   :group 'org-files-db)
 
 (defcustom org-files-db-file-columns
   '((file-title :width (max 50))
     (file-path :width (max 100)))
-  "Default columns for file query results."
+  "Default columns for file query results.
+Each column is a list (NAME OPTION VALUE ...). Columns for files:
+
+  file-title  file-name  file-path  file-dir  tags  line-number
+
+With a row source only: tag (:row-source tags), property-name and
+property-value (effective-properties), keyword-name and keyword-value
+\(keywords). See `org-files-db-heading-columns' for the options. Example:
+
+  (setq org-files-db-file-columns
+        \\='((file-title :width (max 50))
+          (file-dir :width (max 60) :abbreviate-home t)))"
   :type '(repeat sexp)
   :group 'org-files-db)
 
@@ -78,37 +137,107 @@ FILE is the configuration file for that name."
     (link-target :width (max 60))
     (source-outline-path :width (max 70))
     (file-name :width (max 30)))
-  "Default columns for link query results."
+  "Default columns for link query results.
+Each column is a list (NAME OPTION VALUE ...). Columns for links:
+
+  link-type            link-target          link-description
+  resolution-status    source-outline-path  target-outline-path
+  file-name            file-path            file-dir
+  line-number
+
+The file columns describe the file that holds the link. See
+`org-files-db-heading-columns' for the options. Example:
+
+  (setq org-files-db-link-columns
+        \\='((link-description :width (max 40))
+          (target-outline-path :width (max 60))
+          (resolution-status :width (fixed 10))))"
   :type '(repeat sexp)
   :group 'org-files-db)
 
 (defcustom org-files-db-heading-sort nil
-  "Default sorting for heading query results."
+  "Default sort order for heading query results.
+A list of rules (COLUMN :direction asc|desc); the direction defaults to asc.
+Rules apply in order. COLUMN is any column name of
+`org-files-db-heading-columns'; it does not have to be shown. Missing values
+sort last. nil keeps the order that orgfdb returns. Example:
+
+  (setq org-files-db-heading-sort
+        \\='((priority :direction asc)
+          (outline-path :direction asc)))"
   :type '(repeat sexp)
   :group 'org-files-db)
 
 (defcustom org-files-db-file-sort nil
-  "Default sorting for file query results."
+  "Default sort order for file query results.
+A list of rules (COLUMN :direction asc|desc); the direction defaults to asc.
+Rules apply in order. COLUMN is any column name of
+`org-files-db-file-columns'; it does not have to be shown. Missing values
+sort last. nil keeps the order that orgfdb returns. Example:
+
+  (setq org-files-db-file-sort
+        \\='((file-path :direction asc)))"
   :type '(repeat sexp)
   :group 'org-files-db)
 
 (defcustom org-files-db-link-sort nil
-  "Default sorting for link query results."
+  "Default sort order for link query results.
+A list of rules (COLUMN :direction asc|desc); the direction defaults to asc.
+Rules apply in order. COLUMN is any column name of
+`org-files-db-link-columns'; it does not have to be shown. Missing values
+sort last. nil keeps the order that orgfdb returns. Example:
+
+  (setq org-files-db-link-sort
+        \\='((resolution-status :direction asc)
+          (link-target :direction asc)))"
   :type '(repeat sexp)
   :group 'org-files-db)
 
 (defcustom org-files-db-heading-action 'org-files-db-actions-open-result
-  "Default action for heading query results."
+  "Function to run on a selected heading result.
+It takes the result record as its only argument. A view or a call can
+override it with :action. Built-in actions include
+`org-files-db-actions-open-result', `org-files-db-actions-open-link-target',
+`org-files-db-actions-follow-heading-link',
+`org-files-db-actions-follow-or-open-heading',
+`org-files-db-actions-insert-file-link',
+`org-files-db-actions-insert-heading-link' and
+`org-files-db-actions-rename-file'. Example:
+
+  (setq org-files-db-heading-action
+        #\\='org-files-db-actions-insert-heading-link)"
   :type 'function
   :group 'org-files-db)
 
 (defcustom org-files-db-file-action 'org-files-db-actions-open-result
-  "Default action for file query results."
+  "Function to run on a selected file result.
+It takes the result record as its only argument. A view or a call can
+override it with :action. Built-in actions include
+`org-files-db-actions-open-result', `org-files-db-actions-open-link-target',
+`org-files-db-actions-follow-heading-link',
+`org-files-db-actions-follow-or-open-heading',
+`org-files-db-actions-insert-file-link',
+`org-files-db-actions-insert-heading-link' and
+`org-files-db-actions-rename-file'. Example:
+
+  (setq org-files-db-file-action
+        #\\='org-files-db-actions-insert-file-link)"
   :type 'function
   :group 'org-files-db)
 
 (defcustom org-files-db-link-action 'org-files-db-actions-open-result
-  "Default action for link query results."
+  "Function to run on a selected link result.
+It takes the result record as its only argument. A view or a call can
+override it with :action. Built-in actions include
+`org-files-db-actions-open-result', `org-files-db-actions-open-link-target',
+`org-files-db-actions-follow-heading-link',
+`org-files-db-actions-follow-or-open-heading',
+`org-files-db-actions-insert-file-link',
+`org-files-db-actions-insert-heading-link' and
+`org-files-db-actions-rename-file'. Example:
+
+  (setq org-files-db-link-action
+        #\\='org-files-db-actions-insert-heading-link)"
   :type 'function
   :group 'org-files-db)
 
@@ -126,16 +255,38 @@ nothing and inserts a file link with the heading title as search option."
 
 (defcustom org-files-db-views nil
   "Named org-files-db query views.
-Each entry starts with a unique view name and a flat property list.
-Supported keys are :config, :query, :columns, :sort, :row-source, :cache,
-and :action. A view without :config uses `org-files-db-default-config'.
-Caching is disabled for a view unless :cache is t."
+Each entry is (NAME KEY VALUE ...) with a unique string NAME. Keys:
+
+  :query       the structural query (required).
+  :config      a name from `org-files-db-configs'; default
+               `org-files-db-default-config'.
+  :columns     columns as in `org-files-db-heading-columns'.
+  :sort        sort rules as in `org-files-db-heading-sort'.
+  :row-source  tags, effective-properties or keywords.
+  :action      function to run on the selected result.
+  :cache       t to keep the view prepared while `org-files-db-cache-mode'
+               is on; default nil.
+  :display     buffer to show all rows in a result buffer; default nil.
+
+Run a view with `org-files-db-view' or `org-files-db-show-view'. Example:
+
+  (setq org-files-db-views
+        \\='((\"open-tasks\"
+           :query (headings (not (done)))
+           :sort ((priority :direction asc)))
+          (\"tags\"
+           :query (headings)
+           :row-source tags
+           :columns ((tag :width (max 20)) (outline-path))
+           :display buffer)))"
   :type '(repeat sexp)
   :group 'org-files-db)
 
 (defcustom org-files-db-watch-startup-timeout 60
   "Maximum seconds to wait for an orgfdb watcher to become ready.
-Set this to nil to wait without a timeout."
+Set this to nil to wait without a timeout. Example:
+
+  (setq org-files-db-watch-startup-timeout 120)"
   :type '(choice (const :tag "No timeout" nil) number)
   :group 'org-files-db)
 
@@ -144,14 +295,17 @@ Set this to nil to wait without a timeout."
 (defcustom org-files-db-outline-export-ancestors t
   "Whether the outline export includes the ancestors of matched headings.
 When non-nil the outline keeps the heading hierarchy of each file. When nil
-only the matched headings are exported, flat directly under their file."
+only the matched headings are exported, flat directly under their file.
+Ancestors get only their headline and planning line."
   :type 'boolean
   :group 'org-files-db)
 
 (defcustom org-files-db-outline-export-children nil
   "Which descendants of matched headings the outline export adds as links.
 Nil adds none, `children' adds the direct child headings and `subtree' adds
-all descendant headings."
+all descendant headings. Added headings get only their headline. Example:
+
+  (setq org-files-db-outline-export-children \\='children)"
   :type '(choice (const :tag "None" nil)
                  (const :tag "Direct children" children)
                  (const :tag "Whole subtree" subtree))
@@ -164,12 +318,18 @@ Ancestors and matched headings both keep their planning line."
   :group 'org-files-db)
 
 (defcustom org-files-db-outline-export-properties nil
-  "Whether the outline export copies the property drawer of matched headings."
+  "Whether the outline export copies the property drawer of matched headings.
+Example:
+
+  (setq org-files-db-outline-export-properties t)"
   :type 'boolean
   :group 'org-files-db)
 
 (defcustom org-files-db-outline-export-body nil
-  "Whether the outline export copies the body text of matched headings."
+  "Whether the outline export copies the body text of matched headings.
+Example:
+
+  (setq org-files-db-outline-export-body t)"
   :type 'boolean
   :group 'org-files-db)
 
