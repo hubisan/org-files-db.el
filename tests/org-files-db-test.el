@@ -1008,7 +1008,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
              :rows (vector row)))
            (candidate (car (org-files-db-presentation--candidates presentation)))
            (searchable (substring-no-properties candidate))
-           (visible (get-text-property 0 'display candidate)))
+           (visible (org-files-db-presentation--candidate-visible candidate)))
       (expect searchable :to-match "A complete heading value")
       (expect searchable :to-match "notes\\.org")
       (expect (substring-no-properties visible)
@@ -1097,9 +1097,33 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                :display-text "REVI…     "
                :role 'todo))))
            (visible
-            (org-files-db-presentation--visible-row row)))
+            (org-files-db-presentation--candidate-visible
+             (org-files-db-presentation--candidate-body row))))
       (expect (get-text-property 0 'face visible)
               :to-equal 'org-warning)))
+
+  (it "keeps padded cells as plain text and only truncated cells as display"
+    (let* ((row
+            (org-files-db-presentation--make-presentation-row
+             :result-index 0
+             :row-context nil
+             :cells
+             (vector
+              (org-files-db-presentation--make-presentation-cell
+               :search-text "Passphrase" :display-text "Passphrase  " :role 'title)
+              (org-files-db-presentation--make-presentation-cell
+               :search-text "A long heading" :display-text "A long…" :role 'heading))))
+           (body (org-files-db-presentation--candidate-body row)))
+      (expect (substring-no-properties body)
+              :to-equal "Passphrase    A long heading")
+      (expect (get-text-property 0 'display body) :to-be nil)
+      (expect (get-text-property 0 'face body) :to-equal 'org-files-db-title)
+      (expect (substring-no-properties
+               (get-text-property (length "Passphrase    ") 'display body))
+              :to-equal "A long…")
+      (expect (substring-no-properties
+               (org-files-db-presentation--candidate-visible body))
+              :to-equal "Passphrase    A long…")))
 
   (it "faces only non-empty cells and leaves the cell texts untouched"
     (let* ((text (copy-sequence "Task"))
@@ -1115,7 +1139,8 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                :search-text "" :display-text "" :role 'tag)
               (org-files-db-presentation--make-presentation-cell
                :search-text "a" :display-text "a" :role 'tag))))
-           (visible (org-files-db-presentation--visible-row row)))
+           (visible (org-files-db-presentation--candidate-visible
+                     (org-files-db-presentation--candidate-body row))))
       (expect (substring-no-properties visible) :to-equal "Task    a")
       (expect (get-text-property 0 'face visible)
               :to-equal 'org-files-db-title)
@@ -1160,7 +1185,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                  :rows (vector row)))
                (candidate
                 (car (org-files-db-presentation--candidates presentation)))
-               (visible (get-text-property 0 'display candidate)))
+               (visible (org-files-db-presentation--candidate-visible candidate)))
           (expect (get-text-property 0 'face visible)
                   :to-equal 'org-files-db-heading)))))
 
@@ -1234,10 +1259,10 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
       (expect (equal (car captured-candidates) (cadr captured-candidates))
               :to-equal nil)
       (expect (substring-no-properties
-               (get-text-property 0 'display (car captured-candidates)))
+               (org-files-db-presentation--candidate-visible (car captured-candidates)))
               :to-equal "Same")
       (expect (substring-no-properties
-               (get-text-property 0 'display (cadr captured-candidates)))
+               (org-files-db-presentation--candidate-visible (cadr captured-candidates)))
               :to-equal "Same")))
 
   (it "preserves Rust row order in completion metadata"

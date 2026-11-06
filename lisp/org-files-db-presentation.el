@@ -226,7 +226,7 @@ ENTRIES is a sequence of key and value pairs."
     (org-files-db-presentation--check-options
      properties
      '(:width :truncate :separator :include-root :include-match
-       :abbreviate-home)
+              :abbreviate-home)
      (format "presentation column %s" name))
     (let ((object
            (org-files-db-presentation--json-object
@@ -722,50 +722,6 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
     ('property-value 'org-files-db-property-value)
     (_ nil)))
 
-(defun org-files-db-presentation--visible-row (row)
-  "Return the Rust-prepared visible string for ROW."
-  (let* ((cells (org-files-db-presentation-row-cells row))
-         (count (length cells))
-         (index 0)
-         (position 0)
-         segments
-         faces)
-    (while (< index count)
-      (let* ((cell (aref cells index))
-             (text (org-files-db-presentation-cell-display-text cell))
-             (length (length text)))
-        (when (> length 0)
-          (let ((face
-                 (org-files-db-presentation--role-face
-                  (org-files-db-presentation-cell-role cell)
-                  (org-files-db-presentation-cell-search-text cell))))
-            (when face
-              (push face faces)
-              (push (+ position length) faces)
-              (push position faces))))
-        (push text segments)
-        (setq position (+ position length 2)
-              index (1+ index))))
-    (let ((visible (mapconcat #'identity (nreverse segments) "  ")))
-      (while faces
-        (put-text-property (pop faces) (pop faces) 'face (pop faces) visible))
-      visible)))
-
-(defun org-files-db-presentation--search-row (row)
-  "Return complete searchable text for presentation ROW."
-  (let* ((cells (org-files-db-presentation-row-cells row))
-         (count (length cells))
-         (index 0)
-         values)
-    (while (< index count)
-      (let ((value
-             (org-files-db-presentation-cell-search-text
-              (aref cells index))))
-        (unless (string-empty-p value)
-          (push value values)))
-      (setq index (1+ index)))
-    (mapconcat #'identity (nreverse values) "  ")))
-
 (defun org-files-db-presentation--candidate-identity (index)
   "Return a compact hidden identity suffix for zero-based INDEX."
   (let ((value (1+ index))
@@ -799,12 +755,81 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
                   position (1+ position)))
           (and (> value 0) (1- value)))))))
 
+(defun org-files-db-presentation--padded-p (display search)
+  "Return non-nil when DISPLAY is SEARCH followed by spaces only."
+  (let ((length (length display))
+        (position (length search)))
+    (and (<= position length)
+         (eq t (compare-strings search nil nil display 0 position))
+         (progn
+           (while (and (< position length) (eq (aref display position) ?\s))
+             (setq position (1+ position)))
+           (= position length)))))
+
+(defun org-files-db-presentation--candidate-body (row)
+  "Return the completion text for ROW with its faces.
+A cell whose display text is its search text plus padding is plain text, so
+completion UIs can highlight matches in it. Any other cell, such as a
+truncated one, keeps its search text and shows its display text through a
+`display' property."
+  (let* ((cells (org-files-db-presentation-row-cells row))
+         (count (length cells))
+         (index 0)
+         (position 0)
+         segments
+         spans)
+    (while (< index count)
+      (let* ((cell (aref cells index))
+             (display (org-files-db-presentation-cell-display-text cell))
+             (search (org-files-db-presentation-cell-search-text cell))
+             (face (and (> (length display) 0)
+                        (org-files-db-presentation--role-face
+                         (org-files-db-presentation-cell-role cell) search)))
+             (plain (org-files-db-presentation--padded-p display search))
+             (text (if plain display search))
+             (end (+ position (length text))))
+        (push text segments)
+        (unless plain
+          (push (list position end
+                      (if face (propertize display 'face face) display))
+                spans))
+        (when (and face (< position end))
+          (push (list position end face) spans))
+        (setq position (+ end 2)
+              index (1+ index))))
+    (let ((body (mapconcat #'identity (nreverse segments) "  ")))
+      (dolist (span spans)
+        (put-text-property (nth 0 span) (nth 1 span)
+                           (if (stringp (nth 2 span)) 'display 'face)
+                           (nth 2 span) body))
+      body)))
+
+(defun org-files-db-presentation--candidate-visible (candidate)
+  "Return the text that completion shows for CANDIDATE, with faces.
+Replace each span with a string `display' property by that string and drop
+the hidden identity suffix."
+  (let ((length (length candidate))
+        (position 0)
+        parts)
+    (while (< position length)
+      (let ((next (next-single-property-change position 'display candidate length))
+            (display (get-text-property position 'display candidate)))
+        (push (if (stringp display)
+                  display
+                (substring candidate position next))
+              parts)
+        (setq position next)))
+    (replace-regexp-in-string
+     "\u2063[\ue000-\uf8ff]*\\'" ""
+     (apply #'concat (nreverse parts)) t t)))
+
 (defun org-files-db-presentation--candidate (presentation row index)
   "Return one completion candidate for ROW at INDEX in PRESENTATION."
   (let* ((result (org-files-db-presentation--row-result presentation row))
-         (visible (org-files-db-presentation--visible-row row))
-         (search (org-files-db-presentation--search-row row))
-         (body (if (string-empty-p search) (string #x2060) search))
+         (body (org-files-db-presentation--candidate-body row))
+         (body (if (string-blank-p body)
+                   (propertize (string #x2060) 'display body)
+                 body))
          (body-length (length body))
          (candidate (concat body (org-files-db-presentation--candidate-identity index)))
          (metadata
@@ -816,8 +841,9 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
                 (org-files-db-presentation-config presentation)
                 'org-files-db-presentation presentation
                 'rear-nonsticky t)))
-    (add-text-properties 0 body-length (cons 'display (cons visible metadata))
-                         candidate)
+    ;; Readers take the metadata from the first character; setting it on the
+    ;; whole body would split every face and display interval again.
+    (add-text-properties 0 1 metadata candidate)
     (add-text-properties body-length (length candidate)
                          (cons 'display (cons "" metadata))
                          candidate)
