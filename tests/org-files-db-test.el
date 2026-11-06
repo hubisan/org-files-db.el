@@ -700,6 +700,14 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
       (expect (alist-get 'abbreviate_home (aref columns 0)) :to-equal t)
       (expect (alist-get 'abbreviate_home (aref columns 1)) :to-equal :false)))
 
+  (it "serializes extension stripping for the file name column"
+    (let* ((json (org-files-db-presentation--spec-json
+                  '((file-name :strip-extension t) (file-path))
+                  nil nil))
+           (columns (alist-get 'columns (org-files-db-process--parse-json json))))
+      (expect (alist-get 'strip_extension (aref columns 0)) :to-equal t)
+      (expect (alist-get 'strip_extension (aref columns 1)) :to-equal nil)))
+
   (it "serializes Rust defaults without duplicating presentation semantics"
     (let* ((json (org-files-db-presentation--spec-json '((title)) nil nil))
            (spec (org-files-db-process--parse-json json))
