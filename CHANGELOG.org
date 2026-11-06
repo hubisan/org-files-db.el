@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =ADDED= Column option ~:strip-extension~ for ~file-name~ shows the file name without its extension (needs ~orgfdb~ with ~strip_extension~).
 - =CHANGED= The docstrings of all options list their values and give an example; the column options list the available columns and column options for each query target.
 - =FIXED= Completion UIs highlight the matched input in query and view results again. Cells are plain text unless ~orgfdb~ truncated them; only truncated cells still show their text through a ~display~ property.
 - =CHANGED= ~org-files-db-search~ shows the lines that match the most search words first. Of each heading it keeps only the lines with the most words, so each extra word makes the list shorter. A long line no longer shows up once for each match.

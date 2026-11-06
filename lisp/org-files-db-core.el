@@ -103,10 +103,16 @@ Option for file-path and file-dir:
 
   :abbreviate-home  t to show paths under the home directory with ~/.
 
+Option for file-name:
+
+  :strip-extension  t to show the name without its extension, notes for
+                    notes.org.
+
 Example:
 
   (setq org-files-db-heading-columns
         \\='((todo-keyword :width (fixed 6))
+          (file-name :width (max 30) :strip-extension t)
           (outline-path :width (max 80) :separator \" / \")
           (tags :width (max 20) :truncate (:position left))))
 
