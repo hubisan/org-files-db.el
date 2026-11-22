@@ -226,7 +226,7 @@ ENTRIES is a sequence of key and value pairs."
     (org-files-db-presentation--check-options
      properties
      '(:width :truncate :separator :include-root :include-match
-              :abbreviate-home :strip-extension)
+              :abbreviate-home :strip-extension :depth)
      (format "presentation column %s" name))
     (let ((object
            (org-files-db-presentation--json-object
@@ -255,6 +255,12 @@ ENTRIES is a sequence of key and value pairs."
                  (org-files-db-presentation--json-boolean
                   (plist-get properties :strip-extension))
                  object))
+      (when (plist-member properties :depth)
+        (let ((depth (plist-get properties :depth)))
+          (unless (and (integerp depth) (> depth 0))
+            (user-error "Presentation column %s: :depth must be a positive integer, got %S"
+                        name depth))
+          (puthash "depth" depth object)))
       object)))
 
 (defun org-files-db-presentation--sort-json (definition)

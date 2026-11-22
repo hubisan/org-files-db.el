@@ -700,6 +700,17 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
       (expect (alist-get 'abbreviate_home (aref columns 0)) :to-equal t)
       (expect (alist-get 'abbreviate_home (aref columns 1)) :to-equal :false)))
 
+  (it "serializes the path depth and rejects invalid values"
+    (let* ((json (org-files-db-presentation--spec-json
+                  '((file-path :depth 2) (file-dir))
+                  nil nil))
+           (columns (alist-get 'columns (org-files-db-process--parse-json json))))
+      (expect (alist-get 'depth (aref columns 0)) :to-equal 2)
+      (expect (alist-get 'depth (aref columns 1)) :to-equal nil))
+    (expect (org-files-db-presentation--spec-json
+             '((file-path :depth 0)) nil nil)
+            :to-throw 'user-error))
+
   (it "serializes extension stripping for the file name column"
     (let* ((json (org-files-db-presentation--spec-json
                   '((file-name :strip-extension t) (file-path))
