@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =ADDED= Commands ~org-files-db-search-title~ and ~org-files-db-search-body~ search only heading titles or only body text, with ~orgfdb search --title~ and ~--body~ (#78).
 - =ADDED= Column option ~:depth N~ for ~file-path~ and ~file-dir~ shows only the first N directory components, for example =~/memento/path/…/a.org=; the search keeps the complete path (needs ~orgfdb~ with ~depth~).
 - =ADDED= Column option ~:strip-extension~ for ~file-name~ shows the file name without its extension (needs ~orgfdb~ with ~strip_extension~).
 - =CHANGED= The docstrings of all options list their values and give an example; the column options list the available columns and column options for each query target.

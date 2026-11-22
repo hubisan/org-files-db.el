@@ -191,7 +191,7 @@ Emacs does not keep the candidates of views without ~:cache t~, and keeps no can
 
 * Full text search
 
-~M-x org-files-db-search~ searches the titles and the body text of all headings and opens the place of the match, not only its heading. Each candidate is one match: the heading, the file and line, and the matched line with the match highlighted. With a prefix argument, you select the configuration first.
+~M-x org-files-db-search~ searches the titles and the body text of all headings and opens the place of the match, not only its heading. Each candidate is one match: the heading, the file and line, and the matched line with the match highlighted. With a prefix argument, you select the configuration first. ~M-x org-files-db-search-title~ searches only the titles and ~M-x org-files-db-search-body~ only the body text.
 
 Each word you type matches the start of a word, in any order: ~rez foc~ finds a heading "Focaccia" with "Rezept" in its body. A word does not match inside another word: ~zept~ does not find "Rezept". Use ripgrep for regular expressions or parts inside words.
 

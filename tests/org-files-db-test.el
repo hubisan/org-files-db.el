@@ -4267,6 +4267,29 @@ SCHEDULED: <2026-10-02 Fri>
         (expect (org-files-db-search-occurrence-field (car occurrences))
                 :to-equal 'body))))
 
+  (it "limits the search to titles or bodies"
+    (cl-letf (((symbol-function 'org-files-db-process--run-process)
+               #'org-files-db-test--search-process))
+      (let ((org-files-db-search--scope 'title))
+        (org-files-db-search-occurrences "test")
+        (expect (car calls) :to-equal
+                '("--error-format" "json" "search" "--format" "json"
+                  "--occurrences" "--title" "test")))
+      (let ((org-files-db-search--scope 'body))
+        (org-files-db-search-occurrences "test")
+        (expect (car calls) :to-equal
+                '("--error-format" "json" "search" "--format" "json"
+                  "--occurrences" "--body" "test")))))
+
+  (it "binds the scope in the title and body commands"
+    (let (scopes)
+      (spy-on 'org-files-db-search :and-call-fake
+              (lambda (&rest _) (push org-files-db-search--scope scopes)))
+      (org-files-db-search-title)
+      (org-files-db-search-body)
+      (org-files-db-search)
+      (expect scopes :to-equal '(nil body title))))
+
   (it "falls back to the heading when an occurrence has no source position"
     (cl-letf (((symbol-function 'org-files-db-process--run-process)
                #'org-files-db-test--search-process))
