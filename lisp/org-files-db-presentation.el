@@ -951,6 +951,11 @@ never modified."
        "Invalid presentation result_index: %S" index))
     (aref results index)))
 
+(defun org-files-db-presentation-records (presentation)
+  "Return the action records of the rows of PRESENTATION in row order."
+  (mapcar (lambda (row) (org-files-db-presentation--row-result presentation row))
+          (append (org-files-db-presentation-rows presentation) nil)))
+
 (provide 'org-files-db-presentation)
 
 ;;; org-files-db-presentation.el ends here

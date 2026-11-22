@@ -344,6 +344,21 @@ view again."
        (lambda () (org-files-db-views--presentation name)))
      (org-files-db-views--resolved-action resolved))))
 
+;;;###autoload
+(defun org-files-db-outline-view (&optional name)
+  "Show the headings of predefined view NAME directly as an Org outline.
+When NAME is nil, read one configured view name interactively. The view must
+query headings. Return the outline buffer. See `org-files-db-outline-export'."
+  (interactive)
+  (let* ((name (or name (org-files-db-views--read-name)))
+         (resolved (org-files-db-views--resolve
+                    (org-files-db-views--get name))))
+    (unless (eq (org-files-db-views--resolved-target resolved) 'headings)
+      (user-error "Outline export needs heading results"))
+    (let ((presentation (org-files-db-views--presentation name)))
+      (org-files-db-outline-export
+       (org-files-db-presentation-records presentation) presentation))))
+
 (provide 'org-files-db-views)
 
 ;;; org-files-db-views.el ends here
