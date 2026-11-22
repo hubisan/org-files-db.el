@@ -102,6 +102,9 @@ Options for outline-path, source-outline-path and target-outline-path:
 Option for file-path and file-dir:
 
   :abbreviate-home  t to show paths under the home directory with ~/.
+  :depth            N to show only the first N directory components, as in
+                    ~/memento/path/…/a.org for file-path; the search keeps
+                    the complete path.
 
 Option for file-name:
 
