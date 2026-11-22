@@ -227,7 +227,7 @@ of the file heading."
                    (push (cons item extra) items)))
                (setq items (nreverse items))
                (cons (list :pos 0
-                           :matched nil
+                           :matched (org-files-db-outline--matched-p root)
                            :blocks (list (concat "* " (org-link-make-string
                                                        (format "file:%s"
                                                                (abbreviate-file-name file))
@@ -298,12 +298,29 @@ related options. Signal a user error when a record is not a heading or when
 the index changed since PRESENTATION; then nothing is exported."
   (unless records
     (user-error "No results to export"))
-  (unless (cl-every (lambda (record) (eq (org-files-db-record-kind record) 'heading))
+  (unless (cl-every (lambda (record)
+                      (memq (org-files-db-record-kind record) '(heading root)))
                     records)
     (user-error "Outline export needs heading results"))
   (let ((items (mapcan #'org-files-db-outline--file-items
                        (org-files-db-outline--fetch records presentation))))
     (pop-to-buffer-same-window (org-files-db-outline--render items))))
+
+;;;###autoload
+(defun org-files-db-outline-query (query &rest keys)
+  "Show the headings of structural QUERY directly as an Org outline of links.
+KEYS are the keywords :config, :columns, :sort and :row-source of
+`org-files-db-query'. File root results are exported as their file heading.
+Return the outline buffer. See `org-files-db-outline-export'."
+  (interactive
+   (cons (org-files-db-query--read-query)
+         (list :config (org-files-db-process--interactive-config-name
+                        current-prefix-arg))))
+  (unless (eq (org-files-db-query--target query) 'headings)
+    (user-error "Outline export needs heading results"))
+  (let ((presentation (apply #'org-files-db-query-results query keys)))
+    (org-files-db-outline-export
+     (org-files-db-presentation-records presentation) presentation)))
 
 (provide 'org-files-db-outline)
 

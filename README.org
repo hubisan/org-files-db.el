@@ -311,6 +311,15 @@ Each file becomes a top-level heading with a link to the file. Its headings are 
 - else ~id:ID~ if the heading has an ~ID~
 - else ~file:PATH::LINE~
 
+You can also skip the result buffer. ~M-x org-files-db-outline-query~ reads a query and shows its headings directly as the outline. ~M-x org-files-db-outline-view~ does the same for a view that queries headings. From Lisp, ~(org-files-db-outline-query QUERY &rest KEYS)~ takes the keywords ~:config~, ~:columns~, ~:sort~ and ~:row-source~ of ~org-files-db-query~, and ~(org-files-db-outline-view NAME)~ takes a view name. Both return the outline buffer and stop with "Outline export needs heading results" for queries on files or links.
+
+#+begin_src emacs-lisp
+(org-files-db-outline-query '(headings (todo "NEXT")))
+(org-files-db-outline-view "headings")
+#+end_src
+
+A file result of kind ~root~, which a query such as ~(headings)~ returns for every file, exports as the file heading alone and gets the match face. The options below apply to the other headings.
+
 The face ~org-files-db-outline-match~ marks the headings that match the query. ~C-x C-s~ in the buffer saves the text to a file, without faces.
 
 The structure comes from ~orgfdb~, and the text comes from the source files. If the index is not the same as a file, the export stops with "Index changed, run the query again" and exports nothing.

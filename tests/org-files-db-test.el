@@ -3788,11 +3788,55 @@ SCHEDULED: <2026-10-02 Fri>
                       :to-equal (point-max))))))
 
       (it "rejects results that are not headings without exporting"
-        (dolist (kind '(file link root))
+        (dolist (kind '(file link))
           (expect (export '(8) nil (list (record 8 kind)))
                   :to-throw 'user-error '("Outline export needs heading results")))
         (expect 'org-files-db-process--run-process :not :to-have-been-called)
         (expect (get-buffer "*org-files-db outline*") :to-be nil))
+
+      (it "exports a file root result as its marked file heading"
+        (expect (export '(2) nil (list (record 2 'root)))
+                :to-equal (expected "* [[file:@P@][Outline]]\n"))
+        (with-current-buffer "*org-files-db outline*"
+          (goto-char (point-min))
+          (expect (cl-some (lambda (overlay)
+                             (eq (overlay-get overlay 'face)
+                                 'org-files-db-outline-match))
+                           (overlays-at (point)))
+                  :to-be-truthy)))
+
+      (it "shows the headings of a query directly as an outline"
+        (let ((presentation (org-files-db-test--single-result-presentation
+                             (record 8) "main"))
+              (target nil))
+          (spy-on 'org-files-db-query-results :and-return-value presentation)
+          (spy-on 'org-files-db-outline-export
+                  :and-call-fake (lambda (records presentation)
+                                   (setq target (cons records presentation))))
+          (org-files-db-outline-query '(headings (todo "NEXT")) :config "main")
+          (expect 'org-files-db-query-results :to-have-been-called-with
+                  '(headings (todo "NEXT")) :config "main")
+          (expect (mapcar #'org-files-db-record-id (car target)) :to-equal '(8))
+          (expect (cdr target) :to-be presentation)
+          (expect (org-files-db-outline-query '(files))
+                  :to-throw 'user-error '("Outline export needs heading results"))))
+
+      (it "shows the headings of a view directly as an outline"
+        (let* ((presentation (org-files-db-test--single-result-presentation
+                              (record 8) "main"))
+               (org-files-db-configs (org-files-db-test--actions-configs))
+               (org-files-db-default-config "main")
+               (org-files-db-views '(("h" :query (headings)) ("f" :query (files))))
+               (target nil))
+          (spy-on 'org-files-db-views--presentation :and-return-value presentation)
+          (spy-on 'org-files-db-outline-export
+                  :and-call-fake (lambda (records presentation)
+                                   (setq target (cons records presentation))))
+          (org-files-db-outline-view "h")
+          (expect (mapcar #'org-files-db-record-id (car target)) :to-equal '(8))
+          (expect (cdr target) :to-be presentation)
+          (expect (org-files-db-outline-view "f")
+                  :to-throw 'user-error '("Outline export needs heading results"))))
 
       (it "reports a stale index and exports nothing"
         (spy-on 'org-files-db-process--run-process :and-return-value
