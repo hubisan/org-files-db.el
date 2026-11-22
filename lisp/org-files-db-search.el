@@ -103,14 +103,22 @@ A row without occurrences yields one occurrence at its heading."
                           (list (substring-no-properties snippet start end))))))
        occurrences))))
 
+(defvar org-files-db-search--scope nil
+  "Where `org-files-db-search-occurrences' searches: `title', `body' or nil.
+Nil searches both.  The scoped commands bind it.")
+
 (defun org-files-db-search-occurrences (expression &optional config substring)
   "Return the occurrences that FTS5 EXPRESSION matches as a list.
 Each element is an `org-files-db-search-occurrence', in result rank order
 and then in source order.  CONFIG is a name from `org-files-db-configs';
-nil uses the default.  Non-nil SUBSTRING searches the substring index."
+nil uses the default.  Non-nil SUBSTRING searches the substring index.
+`org-files-db-search--scope' limits the search to titles or bodies."
   (let* ((config-name (org-files-db-process--config-name config))
          (rows (org-files-db-process--call-json
                 (append (list "search" "--format" "json" "--occurrences")
+                        (pcase org-files-db-search--scope
+                          ('title (list "--title"))
+                          ('body (list "--body")))
                         (and substring (list "--substring"))
                         (org-files-db-process--config-arguments config-name)
                         (list expression)))))
@@ -324,6 +332,26 @@ expressions give no candidates instead of an error."
                      (complete-with-action action strings string predicate)))
                  nil t)
                 candidates))))
+
+;;;###autoload
+(defun org-files-db-search-title (&optional config)
+  "Search heading titles only and open the selected occurrence.
+Like `org-files-db-search', but body text is not searched.  CONFIG is a
+name from `org-files-db-configs'; with a prefix argument, select it first."
+  (interactive
+   (list (org-files-db-process--interactive-config-name current-prefix-arg)))
+  (let ((org-files-db-search--scope 'title))
+    (org-files-db-search config)))
+
+;;;###autoload
+(defun org-files-db-search-body (&optional config)
+  "Search heading body text only and open the selected occurrence.
+Like `org-files-db-search', but titles are not searched.  CONFIG is a
+name from `org-files-db-configs'; with a prefix argument, select it first."
+  (interactive
+   (list (org-files-db-process--interactive-config-name current-prefix-arg)))
+  (let ((org-files-db-search--scope 'body))
+    (org-files-db-search config)))
 
 ;;;###autoload
 (defun org-files-db-search (&optional config)
