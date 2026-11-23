@@ -72,6 +72,10 @@ DOC is the docstring."
     org-files-db-actions-open-result
   "Open the result CANDIDATE.")
 
+(org-files-db-embark--define-action org-files-db-embark-open-directory
+    org-files-db-actions-open-directory
+  "Open the containing directory of the file result CANDIDATE.")
+
 (org-files-db-embark--define-action org-files-db-embark-open-link-target
     org-files-db-actions-open-link-target
   "Open the target of the link result CANDIDATE.")
@@ -99,6 +103,7 @@ DOC is the docstring."
 (defvar-keymap org-files-db-embark-result-map
   :doc "Embark actions for org-files-db results."
   "o" #'org-files-db-embark-open-result
+  "d" #'org-files-db-embark-open-directory
   "t" #'org-files-db-embark-open-link-target
   "f" #'org-files-db-embark-insert-file-link
   "h" #'org-files-db-embark-insert-heading-link

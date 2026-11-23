@@ -2381,6 +2381,23 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                             ('link "Link opened")
                             (_ "File opened"))))))))
 
+    (it "opens the containing directory of file and root results"
+      (dolist (kind '(file root))
+        (let ((record (org-files-db-test--actions-record kind file))
+              opened)
+          (spy-on 'dired :and-call-fake
+                  (lambda (directory &rest _)
+                    (setq opened directory)))
+          (expect (org-files-db-actions-open-directory record) :to-be nil)
+          (expect opened :to-equal
+                  (file-name-as-directory org-files-db-test--actions-directory))))
+      (expect 'org-files-db-process--run-process :not :to-have-been-called))
+
+    (it "rejects unsupported result kinds when opening a directory"
+      (expect (org-files-db-actions-open-directory
+               (org-files-db-test--actions-record 'heading file))
+              :to-throw 'user-error))
+
     (it "opens a resolved link target at a heading or at the start of a file"
       (let ((byte (string-bytes org-files-db-test--actions-prefix)))
         (dolist (case `((:target-line 3 :target-byte-start ,byte :line 3)
@@ -3378,6 +3395,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
 (describe "Embark integration"
   (let ((cases
          '((org-files-db-embark-open-result org-files-db-actions-open-result "o")
+           (org-files-db-embark-open-directory org-files-db-actions-open-directory "d")
            (org-files-db-embark-open-link-target org-files-db-actions-open-link-target "t")
            (org-files-db-embark-insert-file-link org-files-db-actions-insert-file-link "f")
            (org-files-db-embark-insert-heading-link org-files-db-actions-insert-heading-link "h")

@@ -97,6 +97,15 @@ RECORD opens its file at the start. No orgfdb process is started."
                (_ "File opened")))
     nil))
 
+(defun org-files-db-actions-open-directory (record)
+  "Open the parent directory of file or root RECORD in Dired and return nil.
+Signal a user error for other result kinds. No orgfdb process is started."
+  (unless (memq (org-files-db-record-kind record) '(file root))
+    (user-error "Result is not a file"))
+  (dired (file-name-directory
+          (expand-file-name (org-files-db-record-file record))))
+  nil)
+
 (defun org-files-db-actions--open-link-in (file find)
   "Open the link that FIND returns in a buffer visiting FILE.
 FIND is called without arguments in that buffer and returns a link element

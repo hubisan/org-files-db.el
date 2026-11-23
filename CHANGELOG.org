@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =ADDED= ~org-files-db-actions-open-directory~ opens the containing directory of a file result in Dired; Embark binds it to ~d~.
 - =ADDED= Commands ~org-files-db-outline-query~ and ~org-files-db-outline-view~ show the headings of a query or a view directly as an outline, without the result buffer.
 - =CHANGED= The outline export accepts file ~root~ results, such as those of ~(headings)~, and shows them as the file heading instead of stopping with "Outline export needs heading results".
 - =ADDED= Commands ~org-files-db-search-title~ and ~org-files-db-search-body~ search only heading titles or only body text, with ~orgfdb search --title~ and ~--body~ (#78).

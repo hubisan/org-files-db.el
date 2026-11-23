@@ -221,6 +221,7 @@ The default of all three is ~org-files-db-actions-open-result~. A view can set a
 The package has these actions:
 
 - ~org-files-db-actions-open-result~ opens a heading, a file, or the source of a link, at its position.
+- ~org-files-db-actions-open-directory~ opens the parent directory of a file or root result in Dired. Set ~org-files-db-file-action~ to this function or use it as a view's ~:action~.
 - ~org-files-db-actions-open-link-target~ opens the target of a link result. If ~orgfdb~ resolved the target (found it in the index), it opens the target heading or file. Org opens all other links, for example a web link, a directory or a file that is not in the index, as if you followed the link in its source file.
 - ~org-files-db-actions-follow-heading-link~ opens the first link of a heading directly at its target. The target is a file, a heading, or Dired for a directory. The action looks in the headline first and then in the section. For a file result, it uses the first link before the first heading. Emacs does not show the buffer of the heading, and closes it again if it was not open before.
 - ~org-files-db-actions-follow-or-open-heading~ follows a link in the headline itself, of any type. If the headline has no link, it opens the heading. Use it for headings that are links, for example an index or a path hierarchy of links to notes. With Embark, the key is ~j~. This view lists only headings with a link in the headline and follows that link. It needs a version of ~orgfdb~ with the ~source-context~ predicate:
@@ -287,6 +288,7 @@ If the query finds nothing, the buffer shows one line, "No results". When you sh
 You do not need Embark. Results use the completion category ~org-files-db-result~. When Embark is loaded, ~embark-act~ on a result offers the actions of ~org-files-db-embark-result-map~:
 
 - ~o~ opens the result
+- ~d~ opens the directory containing a file or root result
 - ~t~ opens the link target
 - ~f~ inserts a file link
 - ~h~ inserts a heading link

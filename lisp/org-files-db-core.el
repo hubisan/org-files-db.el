@@ -223,6 +223,7 @@ override it with :action. Built-in actions include
 It takes the result record as its only argument. A view or a call can
 override it with :action. Built-in actions include
 `org-files-db-actions-open-result', `org-files-db-actions-open-link-target',
+`org-files-db-actions-open-directory',
 `org-files-db-actions-follow-heading-link',
 `org-files-db-actions-follow-or-open-heading',
 `org-files-db-actions-insert-file-link',
