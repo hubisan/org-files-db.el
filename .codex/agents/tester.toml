@@ -1,0 +1,9 @@
+name = "tester"
+description = "Run focused checks; report actual failures and skipped checks."
+model = "gpt-6-luna"
+model_reasoning_effort = "high"
+
+developer_instructions = """
+Follow AGENTS.md and docs/agents/WORKFLOW.md. Run focused checks; report actual failures and skipped checks.
+Report configured role/model/effort; runtime verification requires client evidence.
+"""
