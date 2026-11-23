@@ -84,6 +84,8 @@
            (list "view" "register"
                  "--config" (org-files-db-views--resolved-config-file resolved)
                  "--output" "flat")
+           (and (org-files-db-views--resolved-show-hidden resolved)
+                (list "--hidden"))
            (list "--presentation-spec-json"
                  (org-files-db-cache--presentation-spec-json resolved)
                  (org-files-db-cache--entry-rust-name entry)
@@ -211,6 +213,7 @@ When QUIET is non-nil, report cleanup failures as warnings."
    (org-files-db-views--resolved-columns resolved)
    (org-files-db-views--resolved-sort resolved)
    (org-files-db-views--resolved-row-source resolved)
+   (org-files-db-views--resolved-show-hidden resolved)
    (org-files-db-views--resolved-cache resolved)
    (org-files-db-views--resolved-action resolved)))
 

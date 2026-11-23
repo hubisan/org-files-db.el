@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =ADDED= Filesystem queries and views hide dotfiles and dot directories by default. Set ~org-files-db-show-hidden~ to ~t~ or pass ~:show-hidden t~ to a query or named view to include them. Pass ~:show-hidden nil~ to hide them for that query or view.
 - =ADDED= Default columns for filesystem file and directory queries can be configured separately with ~org-files-db-fs-files-columns~ and ~org-files-db-fs-dirs-columns~. Filesystem queries support explicit sorting by ~file-name~, ~file-path~ and ~file-dir~; their default sort order is unchanged.
 - =CHANGED= The filesystem column options are now named ~org-files-db-fs-files-columns~ and ~org-files-db-fs-dirs-columns~. Rename uses of ~org-files-db-fs-file-columns~ and ~org-files-db-fs-dir-columns~ in your configuration.
 - =ADDED= Queries and views can search indexed filesystem files and directories with ~fs-files~ and ~fs-dirs~. Files open with ~find-file~, directories open in Dired, and Embark ~d~ opens a file's containing directory or the selected directory.
