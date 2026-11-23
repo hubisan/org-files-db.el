@@ -1,0 +1,9 @@
+name = "reviewer"
+description = "Independently review risky code diffs using code-review skill; report actionable findings."
+model = "gpt-6.2-sol"
+model_reasoning_effort = "medium"
+
+developer_instructions = """
+Follow AGENTS.md and docs/agents/WORKFLOW.md. Independently review risky code diffs using code-review skill; report actionable findings.
+Report configured role/model/effort; runtime verification requires client evidence.
+"""
