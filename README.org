@@ -101,7 +101,16 @@ The query can be a quoted form or a string. When you call the command from Lisp,
 - ~:depth N~ shows only the first ~N~ directory components in the columns ~file-path~ and ~file-dir~, for example =~/memento/path/…/a.org= with ~:depth 2~ (components count after =~/= with ~:abbreviate-home t~). Searching still matches the complete path. It needs a version of ~orgfdb~ with this option.
 - ~:strip-extension t~ shows the name in the column ~file-name~ without its extension, for example ~notes~ for ~notes.org~. It needs a version of ~orgfdb~ with this option. Sorting and actions still use the full name.
 
-If you do not give ~:columns~, Emacs uses the default columns for the query target. Filesystem queries show ~file-name~ and ~file-dir~ by default. You can change the Org query columns with ~org-files-db-heading-columns~, ~org-files-db-file-columns~ and ~org-files-db-link-columns~.
+If you do not give ~:columns~, Emacs uses the default columns for the query target. Filesystem queries show ~file-name~ and ~file-dir~ by default. Set ~org-files-db-fs-file-columns~ and ~org-files-db-fs-dir-columns~ to configure the defaults for filesystem file and directory queries separately. You can change the Org query columns with ~org-files-db-heading-columns~, ~org-files-db-file-columns~ and ~org-files-db-link-columns~.
+
+#+begin_src emacs-lisp
+(setq org-files-db-fs-file-columns
+      '((file-name :width (max 40) :strip-extension t)
+        (file-path :width (max 100) :abbreviate-home t))
+      org-files-db-fs-dir-columns
+      '((file-name :width (max 40))
+        (file-path :width (max 100) :abbreviate-home t)))
+#+end_src
 
 ** Sorting
 
@@ -114,7 +123,7 @@ If you do not give ~:columns~, Emacs uses the default columns for the query targ
          (outline-path :direction asc)))
 #+end_src
 
-If you do not give ~:sort~, Emacs uses ~org-files-db-heading-sort~, ~org-files-db-file-sort~ or ~org-files-db-link-sort~ for the Org targets. All three are ~nil~ by default. Filesystem queries also keep the order that ~orgfdb~ returns by default. An explicit ~:sort nil~ keeps the ~orgfdb~ order, also when you set a default.
+If you do not give ~:sort~, Emacs uses ~org-files-db-heading-sort~, ~org-files-db-file-sort~ or ~org-files-db-link-sort~ for the Org targets. All three are ~nil~ by default. Filesystem queries also keep the order that ~orgfdb~ returns by default. For filesystem queries, ~file-name~, ~file-path~ and ~file-dir~ can be used as sort columns. An explicit ~:sort nil~ keeps the ~orgfdb~ order, also when you set a default.
 
 ** Row sources
 

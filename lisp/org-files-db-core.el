@@ -164,6 +164,32 @@ The file columns describe the file that holds the link. See
   :type '(repeat sexp)
   :group 'org-files-db)
 
+(defcustom org-files-db-fs-file-columns
+  '((file-name :width (max 50))
+    (file-dir :width (max 100)))
+  "Default columns for filesystem file query results.
+Columns for filesystem entries are `file-name', `file-path' and `file-dir'.
+See `org-files-db-heading-columns' for column options. Example:
+
+  (setq org-files-db-fs-file-columns
+        \\='((file-name :width (max 40) :strip-extension t)
+          (file-path :width (max 100) :abbreviate-home t)))"
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
+(defcustom org-files-db-fs-dir-columns
+  '((file-name :width (max 50))
+    (file-dir :width (max 100)))
+  "Default columns for filesystem directory query results.
+Columns for filesystem entries are `file-name', `file-path' and `file-dir'.
+See `org-files-db-heading-columns' for column options. Example:
+
+  (setq org-files-db-fs-dir-columns
+        \\='((file-name :width (max 40))
+          (file-path :width (max 100) :abbreviate-home t)))"
+  :type '(repeat sexp)
+  :group 'org-files-db)
+
 (defcustom org-files-db-heading-sort nil
   "Default sort order for heading query results.
 A list of rules (COLUMN :direction asc|desc); the direction defaults to asc.

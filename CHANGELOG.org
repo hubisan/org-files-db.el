@@ -2,6 +2,7 @@
 
 * Unreleased
 
+- =ADDED= Default columns for filesystem file and directory queries can be configured separately with ~org-files-db-fs-file-columns~ and ~org-files-db-fs-dir-columns~. Filesystem queries support explicit sorting by ~file-name~, ~file-path~ and ~file-dir~; their default sort order is unchanged.
 - =ADDED= Queries and views can search indexed filesystem files and directories with ~fs-files~ and ~fs-dirs~. Files open with ~find-file~, directories open in Dired, and Embark ~d~ opens a file's containing directory or the selected directory.
 - =ADDED= ~org-files-db-actions-open-directory~ opens the containing directory of a file result in Dired; Embark binds it to ~d~.
 - =ADDED= Commands ~org-files-db-outline-query~ and ~org-files-db-outline-view~ show the headings of a query or a view directly as an outline, without the result buffer.

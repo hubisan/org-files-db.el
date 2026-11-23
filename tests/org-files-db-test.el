@@ -175,6 +175,8 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                         org-files-db-heading-columns
                         org-files-db-file-columns
                         org-files-db-link-columns
+                        org-files-db-fs-file-columns
+                        org-files-db-fs-dir-columns
                         org-files-db-heading-sort
                         org-files-db-file-sort
                         org-files-db-link-sort
@@ -224,12 +226,18 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
     (expect (> (length org-files-db-heading-columns) 0) :to-equal t)
     (expect (> (length org-files-db-file-columns) 0) :to-equal t)
     (expect (> (length org-files-db-link-columns) 0) :to-equal t)
+    (expect (> (length org-files-db-fs-file-columns) 0) :to-equal t)
+    (expect (> (length org-files-db-fs-dir-columns) 0) :to-equal t)
     (expect (org-files-db-presentation--default-columns 'headings)
             :to-equal org-files-db-heading-columns)
     (expect (org-files-db-presentation--default-columns 'files)
             :to-equal org-files-db-file-columns)
     (expect (org-files-db-presentation--default-columns 'links)
             :to-equal org-files-db-link-columns)
+    (expect (org-files-db-presentation--default-columns 'fs-files)
+            :to-equal org-files-db-fs-file-columns)
+    (expect (org-files-db-presentation--default-columns 'fs-dirs)
+            :to-equal org-files-db-fs-dir-columns)
     (expect (org-files-db-presentation--default-sort 'headings)
             :to-equal org-files-db-heading-sort)
     (expect (org-files-db-presentation--default-sort 'files)
@@ -1373,7 +1381,8 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
            (main (org-files-db-test--config-file "main.toml"))
            (org-files-db-configs `(("main" . ,main)))
            (org-files-db-default-config "main")
-           (org-files-db-file-columns '((file-title)))
+           (org-files-db-fs-file-columns '((file-path :width (fixed 45))))
+           (org-files-db-fs-dir-columns '((file-name :width (fixed 30))))
            (org-files-db-file-sort '((file-title)))
            (org-files-db-file-action (lambda (_) (error "Org file action ran"))))
       (unwind-protect
@@ -1395,7 +1404,10 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                                (spec (org-files-db-process--parse-json json)))
                           (expect (mapcar (lambda (column) (alist-get 'name column))
                                           (alist-get 'columns spec))
-                                  :to-equal '("file-name" "file-dir"))
+                                  :to-equal
+                                  (if (eq target 'fs-files)
+                                      '("file-path")
+                                    '("file-name")))
                           (expect (alist-get 'sort spec) :to-equal []))
                         (list :status 0 :stdout wire :stderr "")))
               (with-temp-buffer
@@ -1956,6 +1968,34 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
       (expect (org-files-db-views--resolved-action resolved)
               :to-equal #'ignore)
       (expect (org-files-db-views--resolved-p resolved) :to-equal t)))
+
+  (it "passes filesystem view defaults and explicit columns to the query"
+    (let* ((main (org-files-db-test--config-file "main.toml"))
+           (org-files-db-configs `(("main" . ,main)))
+           (org-files-db-default-config "main")
+           (org-files-db-fs-file-columns '((file-path :width (fixed 45))))
+           (org-files-db-fs-dir-columns '((file-name :width (fixed 30))))
+           (org-files-db-views
+            '(("files" :query (fs-files) :action ignore)
+              ("dirs" :query (fs-dirs) :action ignore)
+              ("dirs-custom" :query (fs-dirs) :columns ((file-dir))
+               :action ignore)))
+           seen)
+      (cl-letf (((symbol-function 'org-files-db-query)
+                 (lambda (query &rest arguments)
+                   (setq seen (cons query arguments))
+                   'selected)))
+        (org-files-db-view "files")
+        (expect (car seen) :to-equal '(fs-files))
+        (expect (plist-get (cdr seen) :columns)
+                :to-equal '((file-path :width (fixed 45))))
+        (org-files-db-view "dirs")
+        (expect (car seen) :to-equal '(fs-dirs))
+        (expect (plist-get (cdr seen) :columns)
+                :to-equal '((file-name :width (fixed 30))))
+        (org-files-db-view "dirs-custom")
+        (expect (car seen) :to-equal '(fs-dirs))
+        (expect (plist-get (cdr seen) :columns) :to-equal '((file-dir))))))
 
   (it "rejects missing queries, unsupported keys, duplicate keys, and invalid cache values"
     (let* ((main (org-files-db-test--config-file "main.toml"))
