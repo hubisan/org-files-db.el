@@ -17,13 +17,15 @@ See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking g
 
 ## Seams: where tests go
 
-A **seam** is the public boundary you test at: the interface where you observe behavior without reaching inside. Tests live at seams, never against internals.
+A **seam** is the public boundary where the behavior can be observed. Test through that
+boundary, not through private implementation details.
 
-**Test only at pre-agreed seams.** Before writing any test, write down the seams under test and confirm them with the user. No test is written at an unconfirmed seam. You can't test everything, so agreeing the seams up front is how testing effort lands on the critical paths and complex logic instead of every edge case.
+Use the seam specified by the ticket or plan. If none is named, infer the narrowest public
+interface that proves the acceptance criterion and state that assumption in the plan. Ask
+the user only when the interface itself is undecided and that choice blocks the work.
 
-Ask: "What's the public interface, and which seams should we test?" Give each proposed seam a one-line note on what it catches and what it misses.
-
-When the shape of that interface is itself in question (how deep the module is, where the seam belongs, what the interface should expose), call the Skill tool with "codebase-design" for the vocabulary. It is the shared source of the module, interface, depth, seam, adapter, leverage and locality terms, and it is a reference to consult, not a session to run.
+When the interface design is still a decision, use `codebase-design` for the module, seam,
+adapter and locality vocabulary before choosing the test boundary.
 
 ## Anti-patterns
 

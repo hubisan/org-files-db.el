@@ -5,8 +5,10 @@
 Prefer the most downstream existing artifact: `ticket > spec > conversation`. Do not
 repeat discovery that the active issue already settles.
 
-Normal flow: `/to-spec` -> `/to-tickets` (usually done by the user) -> planning subagent -> `implementer` subagent -> focused tests -> independent review subagent -> at most one
-correction -> `make ci` -> commit -> PR.
+Normal flow: use the existing ticket, plan only what is still unresolved, implement one
+ticket, run focused tests, review behavior-changing code, allow at most one correction,
+then run the full checks, commit and open a PR. Use `/to-spec` and `/to-tickets` only when
+the current work has no adequate ticket or spec.
 
 ## Roles and model routing
 
@@ -40,19 +42,17 @@ migrations, concurrency and architecture changes require the complex role.
 | Complex or risky code review | `reviewer` | Sol medium | Opus medium |
 | Approved implementation escalation | `implementer-escalated` | Sol high | Sonnet high |
 
-Model and effort are configured in `.codex/agents/*.toml` and
-`.claude/agents/*.md`; those files, not this summary table, are authoritative.
+Codex model and effort are configured in `.codex/agents/*.toml`; those files are
+authoritative when they exist. Claude roles follow the configured Claude agent profiles.
 Haiku is not part of the default Claude workflow. Escalated implementation needs
 explicit user approval; Luna max is approved as a standard role.
 
-**Routing steps:** delegate missing planning to `planner-light` or `planner`,
-then the appropriate implementer. Implementers run focused tests themselves;
-use `tester` only when separate execution or diagnosis is useful. Delegate
-behavior-changing code review independently to `reviewer-light` or `reviewer`.
-For docs-only, config-only and mechanical diffs, the coordinator can inspect
-the diff. Keep the repository's existing tests, review skills, correction budget,
-scope and completion requirements below. Do not rerun planning for a settled spec.
-Do not create unnecessary duplicate tests or review passes.
+**Routing:** delegate planning only when the ticket leaves implementation choices open;
+choose `planner-light` or `planner` by risk. Use one implementer for a ticket and let it
+run focused tests. Use `tester` only when independent test execution or diagnosis adds
+value. Review behavior-changing code with one independent `reviewer-light` or `reviewer`.
+The coordinator reviews docs-only, config-only and mechanical diffs. Reuse settled specs,
+tests and review evidence; do not repeat planning or checks without a concrete reason.
 
 **Model evidence:** Before first delegation, check client support and warn about
 unavailable or superseded model IDs when verifiable. Do not silently substitute
@@ -67,7 +67,8 @@ configured roles in the final report.
 
 ## Skills
 
-Invoke a matching skill through the Skill tool (other harnesses: open its `SKILL.md`).
+Use a matching skill from `.agents/skills/<name>/SKILL.md`. If the current interface has a
+Skill tool, invoke it by name; otherwise read the file directly.
 
 | Situation | Skill |
 | --- | --- |
@@ -156,7 +157,7 @@ change is.
 - Before declaring a ticket complete: review the diff against the issue, run `make ci`,
   update docs and `CHANGELOG.org` as `AGENTS.md` requires, and state what was
   implemented, what was tested and what remains untested.
-- `make ci` needs Eask and the package archives. In Claude Code on the web, where those are
-  blocked, run `make check-offline`: the same compile, lint and Buttercup checks on the
-  container's Emacs 29.3 (the minimum version, also in the CI matrix) with packages cloned
-  by `.claude/hooks/session-start.sh`.
+- `make ci` needs Eask and package archives. If either is unavailable, run
+  `make check-offline`, which performs compile, lint and Buttercup checks using the Emacs
+  and development packages configured for the environment. Set `EMACS` and
+  `ORG_FILES_DB_DEPS` when they are not on the script's default paths.

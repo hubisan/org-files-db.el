@@ -1,56 +1,44 @@
-# Issue tracker: GitHub
+# Issue Tracker
 
-Issues and specs for this repo live as GitHub issues in `hubisan/org-files-db.el`. A spec is an
-issue; its tickets are sub-issues (or a task list in the spec issue with `Part of #<spec>` in
-each ticket).
+Issues and specifications for this repo live in GitHub repository
+`hubisan/org-files-db.el`. A spec is an issue; implementation tickets are linked sub-issues
+or checklist items marked `Part of #<spec>`.
 
-Tooling:
-
-- Local: `gh` CLI, as below.
-- Cloud sessions (claude.ai/code): no `gh`; use the GitHub MCP tools (`issue_read`,
-  `issue_write`, `add_issue_comment`, `list_issues`, `search_issues`, `sub_issue_write`)
-  with the same semantics.
+Use `gh` when available. Otherwise use the connected GitHub tools for the same repository.
+Resolve the repository from the current remote or workspace context; do not guess issue
+numbers or switch repositories.
 
 ## Conventions
 
-- **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
-- **Read an issue**: `gh issue view <number> --comments`, filtering comments by `jq` and also fetching labels.
-- **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
-- **Comment on an issue**: `gh issue comment <number> --body "..."`
-- **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Close**: via the PR body (`Closes #<n>`) when merged, or `gh issue close <number> --comment "..."`
-- Acceptance criteria are a Markdown task list in the issue body; tick them when done.
-- Triage state is a label (see `triage-labels.md`), not a `Status:` line.
+- Read an issue with its comments and labels before acting on it.
+- Keep acceptance criteria as a Markdown task list. Triage state is represented by labels;
+  see `triage-labels.md`.
+- Use `Closes #<issue>` in a PR body when merging should close the ticket.
+- PRs are not a request surface for triage.
+- The `/wayfinder` skill defines maps, child tickets and blocking relationships; use its
+  GitHub operations when creating or resolving a map.
 
-Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
+## Common `gh` commands
 
-## Pull requests as a triage surface
+```sh
+gh issue view <number> --comments
+gh issue create --title "..." --body-file <file>
+gh issue comment <number> --body-file <file>
+gh issue edit <number> --add-label <label>
+gh pr view <number> --comments
+```
 
-**PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
+When a skill says to publish work to the tracker, create or update a GitHub issue. For a
+bare number that might refer to a PR, check `gh pr view <number>` before treating it as an
+issue.
 
-When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
+## Wayfinder
 
-- **Read a PR**: `gh pr view <number> --comments` and `gh pr diff <number>` for the diff.
-- **List external PRs for triage**: `gh pr list --state open --json number,title,body,labels,author,authorAssociation,comments` then keep only `authorAssociation` of `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, or `NONE` (drop `OWNER`/`MEMBER`/`COLLABORATOR`).
-- **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
-
-GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
-
-## When a skill says "publish to the issue tracker"
-
-Create a GitHub issue.
-
-## When a skill says "fetch the relevant ticket"
-
-Run `gh issue view <number> --comments`.
-
-## Wayfinding operations
-
-Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
-
-- **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
-- **Child ticket**: an issue linked to the map as a GitHub sub-issue (`gh api` on the sub-issues endpoint). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
-- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only, the live gate). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
-- **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
-- **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
-- **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+Follow `.agents/skills/wayfinder/SKILL.md` for map and ticket lifecycle. Represent maps as
+`wayfinder:map` issues and decision tickets as child issues. Create tickets before wiring
+blocking edges. Use GitHub's native issue dependencies; the `blocked_by` API expects the
+blocker's database ID (`gh api ... --jq .id`), not its issue number. If native sub-issues or
+dependencies are unavailable, use `Part of #<map>` and `Blocked by: #<issue>` in the body.
+The frontier is open, unblocked and unassigned child tickets. Assign a ticket before working
+it; when resolved, comment with the answer, close it and add a short linked decision to the
+map.

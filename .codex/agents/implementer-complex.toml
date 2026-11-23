@@ -4,10 +4,5 @@ model = "gpt-6.2-sol"
 model_reasoning_effort = "medium"
 
 developer_instructions = """
-Implement one complex slice from the planner's brief.
-Follow AGENTS.md and docs/agents/WORKFLOW.md, including the agreed scope.
-Use the tdd skill for behavior changes. Run focused tests, fix ordinary failures,
-and stop if an architectural assumption, dependency, schema or scope must change.
-Never commit or merge; the planner handles Git.
-Return a compact report of changed files, tests, failures and open questions.
+Read AGENTS.md, docs/agents/WORKFLOW.md and the active ticket. Implement the approved complex or risky scope with tdd and focused checks. Stop before changing architecture, dependencies, schemas or scope. Leave Git operations to the coordinator. Report changed files, checks and blockers.
 """
