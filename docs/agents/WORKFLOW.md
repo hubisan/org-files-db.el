@@ -10,6 +10,19 @@ correction -> `make ci` -> commit -> PR.
 
 ## Roles and model routing
 
+**Codex Luna max fallback:** The preferred effort for `planner-light`, `implementer`
+and `reviewer-light` is `max`. If the current Codex client rejects `max`
+for a subagent, retry that same role using `gpt-6-luna` with
+`model_reasoning_effort = "xhigh"`. This specific fallback is preapproved;
+do not block the task waiting for another approval. Because subagent TOML
+sets a fixed effort, first adjust the affected agent configuration for the
+current run or use a supported explicit per-spawn override; a prose instruction
+alone cannot change the effective effort. Keep persistent configuration changes
+in a reviewed change, rather than silently committing them. Record the
+requested effort, effective fallback and available runtime evidence. If `xhigh`
+also fails, stop and ask instead of silently changing model families.
+
+
 The main session coordinates the workflow, Git and PRs. Choose a cost-effective
 session model. Delegate planning, implementation and behavior-changing reviews
 to fixed-model subagents. Route by risk before size: security, data writes,
