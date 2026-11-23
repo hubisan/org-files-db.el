@@ -8,13 +8,12 @@ Emacs Lisp client for the `orgfdb` CLI of
 - Work is tracked as GitHub issues in `hubisan/org-files-db.el`; the active issue defines
   scope and acceptance criteria. Prefer the most downstream artifact:
   `ticket > spec > conversation`. See `docs/agents/issue-tracker.md`.
-- Stable context, goals, non-goals and rebuild decisions:
-  `.project/tasks/project-context.org`. Public facts: `README.org`. Later phases and
-  backlog are GitHub issues.
-- Implementation, review, model routing, correction budget or completion workflow: read
+- For implementation, review, model routing and completion, follow
   `docs/agents/WORKFLOW.md`.
-- Read history (`.project/tasks/archive/`, `CHANGELOG.org`) only when the active issue
-  requires it.
+- Read `.project/tasks/project-context.org` for project goals and decisions; read
+  `.project/tasks/archive/` or `CHANGELOG.org` only when the ticket needs history.
+- Treat `README.org` as the public behavior reference. Later phases and backlog live in
+  GitHub issues.
 
 ## Rules
 
@@ -51,9 +50,9 @@ Emacs Lisp client for the `orgfdb` CLI of
 - Run `make fmt` after editing Emacs Lisp. Run `make ci` (Eask package, install, compile,
   lint: package-lint, checkdoc, indent, relint; Buttercup tests) before declaring work done.
   Compiler and linter warnings are errors. State exactly which checks were not run.
-- Where Eask cannot reach the package archives (Claude Code on the web), run
-  `make check-offline` instead of `make ci`; it runs the same checks with packages cloned by
-  `.claude/hooks/session-start.sh`.
+- If Eask or package archives are unavailable, run `make check-offline` instead of
+  `make ci`. Set `ORG_FILES_DB_DEPS` to the development package directory when it is not
+  at the script's default path; set `EMACS` when the required Emacs is not on `PATH`.
 - Add or update Buttercup tests for behavior changes; test guidance: `docs/agents/WORKFLOW.md`,
   section Tests.
 - Update docs in the same change: `README.org` when user-facing behavior or claims change,
@@ -71,6 +70,10 @@ Emacs Lisp client for the `orgfdb` CLI of
   missing CLI feature in Emacs Lisp.
 
 ## Agent skills
+
+Repo skills live in `.agents/skills/<name>/SKILL.md`. Use a matching skill for the
+situations listed in `docs/agents/WORKFLOW.md`; when the current surface cannot invoke a
+skill directly, read its `SKILL.md` and follow it.
 
 ### Issue tracker
 

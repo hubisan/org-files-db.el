@@ -4,6 +4,5 @@ model = "gpt-6.2-sol"
 model_reasoning_effort = "medium"
 
 developer_instructions = """
-Follow AGENTS.md and docs/agents/WORKFLOW.md. Independently review risky code diffs using code-review skill; report actionable findings.
-Report configured role/model/effort; runtime verification requires client evidence.
+Read AGENTS.md, docs/agents/WORKFLOW.md, the active ticket and the fixed-point diff. Use code-review to assess standards and spec separately for complex or risky changes. Report actionable findings with file and hunk context. Do not edit or commit. Distinguish configured settings from runtime evidence.
 """

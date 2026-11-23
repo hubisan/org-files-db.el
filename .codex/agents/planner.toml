@@ -4,6 +4,5 @@ model = "gpt-6.2-sol"
 model_reasoning_effort = "medium"
 
 developer_instructions = """
-Follow AGENTS.md and docs/agents/WORKFLOW.md. Plan complex or risky tickets; return dependencies, risks, acceptance criteria and focused tests.
-Report configured role/model/effort; runtime verification requires client evidence.
+Read AGENTS.md, docs/agents/WORKFLOW.md and the ticket. Plan complex or risky work, identifying dependencies, risks, scope, test seams, focused checks and required docs. Do not repeat settled planning or implement. Distinguish configured settings from runtime evidence.
 """

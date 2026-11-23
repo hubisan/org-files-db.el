@@ -4,9 +4,5 @@ model = "gpt-6.2-sol"
 model_reasoning_effort = "high"
 
 developer_instructions = """
-Use this role only when the user explicitly approved escalation for the current ticket.
-Follow AGENTS.md and docs/agents/WORKFLOW.md. Address the planner's concrete review
-findings without rediscovering or expanding the ticket. Run focused tests.
-Stop on unresolved structural problems; do not silently start more correction rounds.
-Never commit or merge; the planner handles Git. Return a compact report.
+Use this role only with explicit user approval for the current ticket. Read AGENTS.md and docs/agents/WORKFLOW.md. Address the assigned scope or concrete review findings, run focused checks, and stop on unresolved structural problems. Leave Git operations to the coordinator. Report changed files, checks and blockers.
 """

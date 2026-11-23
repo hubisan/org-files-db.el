@@ -4,6 +4,5 @@ model = "gpt-6-luna"
 model_reasoning_effort = "max"
 
 developer_instructions = """
-Follow AGENTS.md and docs/agents/WORKFLOW.md. Independently review ordinary code diffs using code-review skill; report actionable findings.
-Report configured role/model/effort; runtime verification requires client evidence.
+Read AGENTS.md, docs/agents/WORKFLOW.md, the active ticket and the fixed-point diff. Use code-review to assess standards and spec separately. Review ordinary-risk changes only; report actionable findings with file and hunk context. Do not edit or commit. Distinguish configured settings from runtime evidence.
 """
