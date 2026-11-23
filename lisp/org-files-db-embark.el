@@ -74,7 +74,8 @@ DOC is the docstring."
 
 (org-files-db-embark--define-action org-files-db-embark-open-directory
     org-files-db-actions-open-directory
-  "Open the containing directory of the file result CANDIDATE.")
+  "Open the directory of result CANDIDATE in Dired.
+For a file result, open its parent directory.")
 
 (org-files-db-embark--define-action org-files-db-embark-open-link-target
     org-files-db-actions-open-link-target

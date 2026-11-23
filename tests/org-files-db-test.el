@@ -834,6 +834,36 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
       (expect (org-files-db-record-file file) :to-equal "/notes/projects.org")
       (expect (org-files-db-record-byte-start file) :to-equal nil)))
 
+  (it "decodes filesystem paths without adding Org identities or locations"
+    (dolist (case '(("fs-files" fs_file "/notes-test/notes/invoice.pdf")
+                    ("fs-dirs" fs_dir "/notes-test/notes/empty")))
+      (pcase-let* ((`(,fixture ,kind ,path) case)
+                   (presentation (org-files-db-presentation--decode
+                                  (org-files-db-test--fixture fixture)))
+                   (record (aref (org-files-db-presentation-results presentation) 0)))
+        (expect (org-files-db-record-kind record) :to-be kind)
+        (expect (org-files-db-record-file record) :to-equal path)
+        (expect (org-files-db-record-id record) :to-be nil)
+        (expect (org-files-db-record-line record) :to-be nil)
+        (expect (org-files-db-record-byte-start record) :to-be nil))))
+
+  (it "decodes percent-encoded filesystem path bytes"
+    (let ((wire (org-files-db-test--fixture "fs-files")))
+      (setf (alist-get 'files wire) ["path-bytes:%2F%74%6D%70%2F%0A%FF"])
+      (let* ((presentation (org-files-db-presentation--decode wire))
+             (record (aref (org-files-db-presentation-results presentation) 0)))
+        (expect (org-files-db-record-file record)
+                :to-equal
+                (decode-coding-string
+                 (unibyte-string #x2f #x74 #x6d #x70 #x2f #x0a #xff)
+                 (or file-name-coding-system default-file-name-coding-system))))
+      (dolist (path '("path-bytes:%2F%GG"
+                      "path-bytes:%72%65%6C%61%74%69%76%65%2F%70%61%74%68"
+                      "path-bytes:%2F%74%6D%70%2F%00"))
+        (setf (alist-get 'files wire) (vector path))
+        (expect (org-files-db-presentation--decode wire)
+                :to-throw 'org-files-db-error))))
+
   (it "decodes link records with resolved and unresolved targets"
     (let* ((results
             (org-files-db-presentation-results
@@ -1338,6 +1368,42 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
 
 
 (describe "public structural query command"
+  (it "opens filesystem query results with their own presentation defaults"
+    (let* ((org-files-db-test--directory (make-temp-file "org-files-db-fs-" t))
+           (main (org-files-db-test--config-file "main.toml"))
+           (org-files-db-configs `(("main" . ,main)))
+           (org-files-db-default-config "main")
+           (org-files-db-file-columns '((file-title)))
+           (org-files-db-file-sort '((file-title)))
+           (org-files-db-file-action (lambda (_) (error "Org file action ran"))))
+      (unwind-protect
+          (dolist (case '((fs-files find-file "/notes-test/notes/invoice.pdf")
+                          (fs-dirs dired "/notes-test/notes/empty")))
+            (pcase-let* ((`(,target ,open ,path) case)
+                         (query (list target))
+                         (wire (org-files-db-test--fixture-text
+                                (format "presentation-v3-%s.json" target)))
+                         (opened nil))
+              (spy-on 'completing-read :and-call-fake
+                      #'org-files-db-test--select-first-candidate)
+              (spy-on open :and-call-fake (lambda (name &rest _) (setq opened name)))
+              (spy-on 'org-files-db-process--run-process :and-call-fake
+                      (lambda (arguments &optional _)
+                        (expect (nth 2 arguments) :to-equal "query")
+                        (expect (car (last arguments)) :to-equal (prin1-to-string query))
+                        (let* ((json (cadr (member "--presentation-spec-json" arguments)))
+                               (spec (org-files-db-process--parse-json json)))
+                          (expect (mapcar (lambda (column) (alist-get 'name column))
+                                          (alist-get 'columns spec))
+                                  :to-equal '("file-name" "file-dir"))
+                          (expect (alist-get 'sort spec) :to-equal []))
+                        (list :status 0 :stdout wire :stderr "")))
+              (with-temp-buffer
+                (expect (org-files-db-record-file (org-files-db-query query))
+                        :to-equal path)
+                (expect opened :to-equal path))))
+        (delete-directory org-files-db-test--directory t))))
+
   (it "uses the target-specific default action for headings files and links"
     (dolist (case '(((headings) . headings)
                     ((files) . files)
@@ -2172,6 +2238,49 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
         (user-error (setq caught err)))
       (expect (error-message-string caught)
               :to-match "restart org-files-db-cache-mode")))
+
+  (it "opens a cached filesystem view from completion and a result buffer"
+    (let* ((main (org-files-db-test--config-file "main.toml"))
+           (org-files-db-configs `(("main" . ,main)))
+           (org-files-db-default-config "main")
+           (org-files-db-views '(("directories" :query (fs-dirs) :cache t)))
+           (wire (org-files-db-test--fixture-text "presentation-v3-fs-dirs.json"))
+           (path "/notes-test/notes/empty")
+           registered reads opened buffer)
+      (spy-on 'org-files-db-watch-start
+              :and-call-fake (lambda () (setq org-files-db-watch-mode t)))
+      (spy-on 'org-files-db-watch--probe-active-p :and-return-value t)
+      (spy-on 'org-files-db-process--run-process
+              :and-call-fake
+              (lambda (arguments &optional _)
+                (let ((stdout
+                       (pcase (cadr (member "view" arguments))
+                         ("register"
+                          (setq registered (car (last arguments)))
+                          "{}")
+                         ("read" (push (car (last arguments)) reads) wire)
+                         ("remove" "{}")
+                         (_ (error "Unexpected process arguments: %S" arguments)))))
+                  (list :status 0 :stdout stdout :stderr ""))))
+      (spy-on 'completing-read :and-call-fake
+              #'org-files-db-test--select-first-candidate)
+      (spy-on 'pop-to-buffer-same-window :and-call-fake #'identity)
+      (spy-on 'dired :and-call-fake (lambda (name &rest _) (push name opened)))
+      (unwind-protect
+          (progn
+            (org-files-db-cache-mode 1)
+            (expect registered :to-equal "(fs-dirs)")
+            (expect (org-files-db-record-file (org-files-db-view "directories"))
+                    :to-equal path)
+            (setq buffer (org-files-db-show-view "directories"))
+            (with-current-buffer buffer
+              (expect (buffer-string) :to-match "empty")
+              (call-interactively (key-binding (kbd "RET"))))
+            (expect opened :to-equal (list path path))
+            (expect (length reads) :to-equal 1))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))
+        (org-files-db-cache-mode -1))))
 
   (it "re-registers the stored snapshot once after view_not_found"
     (let* ((main (org-files-db-test--config-file "main.toml"))
@@ -3424,6 +3533,29 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
       (dolist (case cases)
         (expect (lookup-key org-files-db-embark-result-map (nth 2 case))
                 :to-be (nth 0 case))))
+
+    (it "opens exported filesystem results with RET and Embark d"
+      (spy-on 'pop-to-buffer-same-window :and-call-fake #'identity)
+      (spy-on 'org-files-db-process--run-process :and-throw-error 'error)
+      (dolist (case '(("fs-files" find-file "/notes-test/notes/invoice.pdf" "/notes-test/notes/")
+                      ("fs-dirs" dired "/notes-test/notes/empty" "/notes-test/notes/empty")))
+        (pcase-let* ((`(,fixture ,open ,path ,directory) case)
+                     (presentation (org-files-db-presentation--decode
+                                    (org-files-db-test--fixture fixture)))
+                     (candidates (org-files-db-presentation--candidates presentation))
+                     (buffer (org-files-db-embark-export candidates))
+                     (opened nil))
+          (unwind-protect
+              (with-current-buffer buffer
+                (spy-on open :and-call-fake (lambda (name &rest _) (setq opened name)))
+                (call-interactively (key-binding (kbd "RET")))
+                (expect opened :to-equal path)
+                (setq opened nil)
+                (spy-on 'dired :and-call-fake (lambda (name &rest _) (setq opened name)))
+                (funcall (lookup-key org-files-db-embark-result-map "d")
+                         (substring-no-properties (car candidates)))
+                (expect opened :to-equal directory))
+            (kill-buffer buffer)))))
 
     (it "dispatches the candidate record with the presentation bound"
       (dolist (case cases)
