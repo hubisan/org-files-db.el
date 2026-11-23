@@ -6,16 +6,12 @@ disable-model-invocation: true
 
 Implement the work described by the user in the spec or tickets.
 
-If the user passes a ticket reference, read it from the configured issue tracker and use its
-title and acceptance criteria as the scope. Resolve ambiguous references before editing.
+If the user passes a ticket reference, fetch it from the issue tracker and state its title before starting. If the reference is ambiguous, ask.
 
-Follow `AGENTS.md` and `docs/agents/WORKFLOW.md`. Use the `tdd` skill for behavior changes;
-derive test seams from the ticket or plan and ask only when the interface decision is
-unresolved.
+Call the Skill tool with "tdd" where possible, at pre-agreed seams.
 
-Run the narrowest relevant checks while implementing. Before reporting completion, update
-required docs, run the repository's full check command, and summarize any check that could
-not run.
+Run typechecking regularly, single test files regularly, and the full test suite once at the end.
 
-Leave Git commits, pushes, merges and PRs to the coordinator unless the repository workflow
-assigns them to this role.
+Once done, call the Skill tool with "code-review" to review the work.
+
+Commit your work to the current branch.

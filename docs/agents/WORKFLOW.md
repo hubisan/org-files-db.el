@@ -47,12 +47,19 @@ authoritative when they exist. Claude roles follow the configured Claude agent p
 Haiku is not part of the default Claude workflow. Escalated implementation needs
 explicit user approval; Luna max is approved as a standard role.
 
-**Routing:** delegate planning only when the ticket leaves implementation choices open;
-choose `planner-light` or `planner` by risk. Use one implementer for a ticket and let it
-run focused tests. Use `tester` only when independent test execution or diagnosis adds
-value. Review behavior-changing code with one independent `reviewer-light` or `reviewer`.
-The coordinator reviews docs-only, config-only and mechanical diffs. Reuse settled specs,
-tests and review evidence; do not repeat planning or checks without a concrete reason.
+**Multi-agent default:** for every repository task, launch at least two focused subagent
+assignments in parallel. Pair implementation with an independent spec, standards or test
+analysis that can proceed without editing the same files; split genuinely disjoint tickets
+or file sets when useful. Keep one implementer per ticket and separate file ownership. The
+coordinator owns integration and Git operations.
+
+**Routing:** delegate planning when the ticket leaves implementation choices open; choose
+`planner-light` or `planner` by risk. Let the implementer run focused tests. Use `tester`
+when separate execution or diagnosis helps parallelize the work. Review behavior-changing
+code with `reviewer-light` or `reviewer`; for docs-only, config-only and mechanical changes,
+give a second agent a narrow consistency or reference check. Reuse settled specs, tests and
+review evidence instead of repeating work. Repo-specific rules in `AGENTS.md`, this
+workflow and the active ticket govern when a general skill gives conflicting guidance.
 
 **Model evidence:** Before first delegation, check client support and warn about
 unavailable or superseded model IDs when verifiable. Do not silently substitute
@@ -109,7 +116,7 @@ change is.
 
 ## Testing and context budget
 
-- The implementer runs the narrowest relevant tests while working; the planner runs
+- The implementer runs the narrowest relevant tests while working; the coordinator runs
   `make ci` once at the end of the ticket.
 - Focused Buttercup run, filtered by a regexp over `describe`/`it` descriptions (needs
   `make setup` once):

@@ -14,7 +14,7 @@ numbers or switch repositories.
 - Keep acceptance criteria as a Markdown task list. Triage state is represented by labels;
   see `triage-labels.md`.
 - Use `Closes #<issue>` in a PR body when merging should close the ticket.
-- PRs are not a request surface for triage.
+- **PRs as a request surface: no.** External PRs are not included in triage discovery.
 - The `/wayfinder` skill defines maps, child tickets and blocking relationships; use its
   GitHub operations when creating or resolving a map.
 
@@ -32,7 +32,7 @@ When a skill says to publish work to the tracker, create or update a GitHub issu
 bare number that might refer to a PR, check `gh pr view <number>` before treating it as an
 issue.
 
-## Wayfinder
+## Wayfinding operations
 
 Follow `.agents/skills/wayfinder/SKILL.md` for map and ticket lifecycle. Represent maps as
 `wayfinder:map` issues and decision tickets as child issues. Create tickets before wiring

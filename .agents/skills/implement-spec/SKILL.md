@@ -1,24 +1,42 @@
 ---
 name: implement-spec
-description: "Implement a settled multi-ticket specification in this repository."
+description: "Implement the result of /to-spec and /to-tickets in code."
 disable-model-invocation: true
 ---
 
-Implement the tickets linked to the supplied specification as one coordinated effort.
+You have been provided a spec. This spec should have tickets associated with it, describing how to implement the spec.
 
-## Workflow
+The issue tracker should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`.
 
-1. Read the spec and its ticket graph. Use the issue-tracker rules in `docs/agents/issue-tracker.md`.
-2. Follow `docs/agents/WORKFLOW.md` for role selection, model routing, tests, review,
-   correction limits and Git operations. Reuse settled requirements; do not re-plan them.
-3. Work one unblocked ticket at a time by default. Parallelize only independent tickets
-   with disjoint files and useful overlap in time.
-4. Integrate each completed ticket into the feature branch and update its tracker state
-   according to the configured workflow. Keep each change traceable to its ticket.
-5. Review the integration diff against the spec, run the final full check, and open one PR
-   for the feature when the repository workflow calls for one.
+The goal is the entire spec implemented on a single **integration branch**, with every ticket resolved the way the issue tracker closes work.
 
-Stop and report a blocker when ticket dependencies are unclear, implementation would
-change the agreed scope or architecture, or the required checks cannot be run. The main
-session owns GitHub actions and the integration branch unless the user or repository
-workflow explicitly delegates them.
+The tickets are not a list of steps. They are a **task graph** with blocking relationships between them. This means there is always a **frontier** of tickets which are ready to be grabbed.
+
+Start every subagent with a fresh context window.
+
+Communication to and from subagents should be sparse. Communicate primarily through **context pointers**: to the spec, tickets, research notes, and previous commits. Don't duplicate information already available via pointers.
+
+**Implementer subagents** should be run in the background where possible for maximum concurrency.
+
+## Steps
+
+1. Read the spec and tickets to understand the task graph.
+
+2. (optional) Use an **exploration subagent** to conduct any exploration required by the tickets - relevant codebase files or external documentation. Ensure the exploration subagent can save files - it should save its markdown notes in a directory outside the repo, accessible by all future subagents. This lets **implementer subagents** focus on implementation rather than exploration.
+
+3. Create the integration branch. If the issue tracker closes work through PRs, or the user asks for one, open a draft PR after the first merge in step 5 (a branch with no commits ahead of main can't open one), marked as closing the spec and tickets.
+
+4. Use a fresh **implementer subagent** for each ticket, each in its own worktree on its own branch. Each implementer subagent:
+   - confirms its worktree is based on the integration branch before starting, and resets onto it if not;
+   - calls the Skill tool with `tdd` to build the ticket;
+   - merges the integration branch tip into its own branch before reporting done
+
+5. Once an **implementer subagent** completes, merge its work to the integration branch with a **merger subagent**.
+
+6. If this changes the **frontier** of available tickets, kick off more **implementer subagents** to work on the new tickets. This allows for maximum concurrency.
+
+7. Once all tickets are complete, call the Skill tool with `code-review` on the integration branch. Fix all issues raised by the code review in a single fresh **implementer subagent**.
+
+8. If a draft PR exists, mark it ready for review. Otherwise, resolve each ticket the way the issue tracker closes work, and report the integration branch.
+
+9. Clean up all **implementer subagent** worktrees.
