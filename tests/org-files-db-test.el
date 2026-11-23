@@ -175,8 +175,8 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                         org-files-db-heading-columns
                         org-files-db-file-columns
                         org-files-db-link-columns
-                        org-files-db-fs-file-columns
-                        org-files-db-fs-dir-columns
+                        org-files-db-fs-files-columns
+                        org-files-db-fs-dirs-columns
                         org-files-db-heading-sort
                         org-files-db-file-sort
                         org-files-db-link-sort
@@ -226,8 +226,8 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
     (expect (> (length org-files-db-heading-columns) 0) :to-equal t)
     (expect (> (length org-files-db-file-columns) 0) :to-equal t)
     (expect (> (length org-files-db-link-columns) 0) :to-equal t)
-    (expect (> (length org-files-db-fs-file-columns) 0) :to-equal t)
-    (expect (> (length org-files-db-fs-dir-columns) 0) :to-equal t)
+    (expect (> (length org-files-db-fs-files-columns) 0) :to-equal t)
+    (expect (> (length org-files-db-fs-dirs-columns) 0) :to-equal t)
     (expect (org-files-db-presentation--default-columns 'headings)
             :to-equal org-files-db-heading-columns)
     (expect (org-files-db-presentation--default-columns 'files)
@@ -235,9 +235,9 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
     (expect (org-files-db-presentation--default-columns 'links)
             :to-equal org-files-db-link-columns)
     (expect (org-files-db-presentation--default-columns 'fs-files)
-            :to-equal org-files-db-fs-file-columns)
+            :to-equal org-files-db-fs-files-columns)
     (expect (org-files-db-presentation--default-columns 'fs-dirs)
-            :to-equal org-files-db-fs-dir-columns)
+            :to-equal org-files-db-fs-dirs-columns)
     (expect (org-files-db-presentation--default-sort 'headings)
             :to-equal org-files-db-heading-sort)
     (expect (org-files-db-presentation--default-sort 'files)
@@ -1381,8 +1381,8 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
            (main (org-files-db-test--config-file "main.toml"))
            (org-files-db-configs `(("main" . ,main)))
            (org-files-db-default-config "main")
-           (org-files-db-fs-file-columns '((file-path :width (fixed 45))))
-           (org-files-db-fs-dir-columns '((file-name :width (fixed 30))))
+           (org-files-db-fs-files-columns '((file-path :width (fixed 45))))
+           (org-files-db-fs-dirs-columns '((file-name :width (fixed 30))))
            (org-files-db-file-sort '((file-title)))
            (org-files-db-file-action (lambda (_) (error "Org file action ran"))))
       (unwind-protect
@@ -1973,8 +1973,8 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
     (let* ((main (org-files-db-test--config-file "main.toml"))
            (org-files-db-configs `(("main" . ,main)))
            (org-files-db-default-config "main")
-           (org-files-db-fs-file-columns '((file-path :width (fixed 45))))
-           (org-files-db-fs-dir-columns '((file-name :width (fixed 30))))
+           (org-files-db-fs-files-columns '((file-path :width (fixed 45))))
+           (org-files-db-fs-dirs-columns '((file-name :width (fixed 30))))
            (org-files-db-views
             '(("files" :query (fs-files) :action ignore)
               ("dirs" :query (fs-dirs) :action ignore)

@@ -101,13 +101,13 @@ The query can be a quoted form or a string. When you call the command from Lisp,
 - ~:depth N~ shows only the first ~N~ directory components in the columns ~file-path~ and ~file-dir~, for example =~/memento/path/…/a.org= with ~:depth 2~ (components count after =~/= with ~:abbreviate-home t~). Searching still matches the complete path. It needs a version of ~orgfdb~ with this option.
 - ~:strip-extension t~ shows the name in the column ~file-name~ without its extension, for example ~notes~ for ~notes.org~. It needs a version of ~orgfdb~ with this option. Sorting and actions still use the full name.
 
-If you do not give ~:columns~, Emacs uses the default columns for the query target. Filesystem queries show ~file-name~ and ~file-dir~ by default. Set ~org-files-db-fs-file-columns~ and ~org-files-db-fs-dir-columns~ to configure the defaults for filesystem file and directory queries separately. You can change the Org query columns with ~org-files-db-heading-columns~, ~org-files-db-file-columns~ and ~org-files-db-link-columns~.
+If you do not give ~:columns~, Emacs uses the default columns for the query target. Filesystem queries show ~file-name~ and ~file-dir~ by default. Set ~org-files-db-fs-files-columns~ and ~org-files-db-fs-dirs-columns~ to configure the defaults for filesystem file and directory queries separately. You can change the Org query columns with ~org-files-db-heading-columns~, ~org-files-db-file-columns~ and ~org-files-db-link-columns~.
 
 #+begin_src emacs-lisp
-(setq org-files-db-fs-file-columns
+(setq org-files-db-fs-files-columns
       '((file-name :width (max 40) :strip-extension t)
         (file-path :width (max 100) :abbreviate-home t))
-      org-files-db-fs-dir-columns
+      org-files-db-fs-dirs-columns
       '((file-name :width (max 40))
         (file-path :width (max 100) :abbreviate-home t)))
 #+end_src

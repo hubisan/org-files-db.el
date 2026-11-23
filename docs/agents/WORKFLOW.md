@@ -12,9 +12,9 @@ the current work has no adequate ticket or spec.
 
 ## Roles and model routing
 
-**Codex Luna max fallback:** The preferred effort for `planner-light`, `implementer`
-and `reviewer-light` is `max`. If the current Codex client rejects `max`
-for a subagent, retry that same role using `gpt-6-luna` with
+**Codex Luna 5.6 max fallback:** The preferred effort for all Luna roles is `max`.
+If the current Codex client rejects `max` for a subagent, retry that same role using
+`gpt-5.6-luna` with
 `model_reasoning_effort = "xhigh"`. This specific fallback is preapproved;
 do not block the task waiting for another approval. Because subagent TOML
 sets a fixed effort, first adjust the affected agent configuration for the
@@ -32,20 +32,20 @@ migrations, concurrency and architecture changes require the complex role.
 
 | Task | Subagent | Codex | Claude Code |
 | --- | --- | --- | --- |
-| Simple planning | `planner-light` | Luna max | Sonnet medium |
+| Simple planning | `planner-light` | Luna 5.6 max | Sonnet medium |
 | Complex or risky planning | `planner` | Sol medium | Opus medium |
-| Small implementation | `implementer-light` | Luna high | Sonnet low |
-| Normal implementation | `implementer` | Luna max | Sonnet medium |
+| Small implementation | `implementer-light` | Luna 5.6 max | Sonnet low |
+| Normal implementation | `implementer` | Luna 5.6 max | Sonnet medium |
 | Complex implementation | `implementer-complex` | Sol medium | Opus medium |
-| Optional focused test triage | `tester` | Luna high | Sonnet low |
-| Normal code review | `reviewer-light` | Luna max | Sonnet medium |
+| Optional focused test triage | `tester` | Luna 5.6 max | Sonnet low |
+| Normal code review | `reviewer-light` | Luna 5.6 max | Sonnet medium |
 | Complex or risky code review | `reviewer` | Sol medium | Opus medium |
 | Approved implementation escalation | `implementer-escalated` | Sol high | Sonnet high |
 
 Codex model and effort are configured in `.codex/agents/*.toml`; those files are
 authoritative when they exist. Claude roles follow the configured Claude agent profiles.
 Haiku is not part of the default Claude workflow. Escalated implementation needs
-explicit user approval; Luna max is approved as a standard role.
+explicit user approval; Luna 5.6 max is approved as a standard role.
 
 **Multi-agent default:** for every repository task, launch at least two focused subagent
 assignments in parallel. Pair implementation with an independent spec, standards or test

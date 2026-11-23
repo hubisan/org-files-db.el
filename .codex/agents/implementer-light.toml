@@ -1,7 +1,7 @@
 name = "implementer-light"
 description = "Implement one small low-risk slice; run focused tests and leave changes uncommitted."
-model = "gpt-6-luna"
-model_reasoning_effort = "high"
+model = "gpt-5.6-luna"
+model_reasoning_effort = "max"
 
 developer_instructions = """
 Read AGENTS.md and the active ticket. Implement one small, low-risk change, add focused tests when behavior changes, and leave Git operations to the coordinator. Report changed files, checks and blockers; distinguish configured settings from runtime evidence.
