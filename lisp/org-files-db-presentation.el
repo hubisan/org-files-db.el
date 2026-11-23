@@ -31,6 +31,9 @@
 (require 'url-util)
 (require 'org-files-db-core)
 
+(defvar org-files-db-fs-file-columns)
+(defvar org-files-db-fs-dir-columns)
+
 (defconst org-files-db-presentation--version 3
   "Presentation JSON version supported by this package.")
 
@@ -118,8 +121,8 @@ TARGET-BYTE-START is nil for a file target."
     ('headings org-files-db-heading-columns)
     ('files org-files-db-file-columns)
     ('links org-files-db-link-columns)
-    ((or 'fs-files 'fs-dirs)
-     '((file-name :width (max 50)) (file-dir :width (max 100))))
+    ('fs-files org-files-db-fs-file-columns)
+    ('fs-dirs org-files-db-fs-dir-columns)
     (_ (user-error "Unsupported org-files-db query target: %S" target))))
 
 (defun org-files-db-presentation--default-sort (target)
