@@ -60,7 +60,7 @@
   "Return the structural query target for QUERY."
   (let* ((form (org-files-db-query--form query))
          (target (and (consp form) (car form))))
-    (unless (memq target '(headings files links))
+    (unless (memq target '(headings files links fs-files fs-dirs))
       (user-error "Unsupported org-files-db query target: %S" target))
     target))
 

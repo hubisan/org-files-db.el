@@ -28,6 +28,7 @@
 (require 'cl-lib)
 (require 'json)
 (require 'subr-x)
+(require 'url-util)
 (require 'org-files-db-core)
 
 (defconst org-files-db-presentation--version 3
@@ -51,12 +52,13 @@
 (cl-defstruct (org-files-db-record
                (:constructor org-files-db-presentation--make-record))
   "One decoded version 3 action record.
-KIND is one of the symbols `root', `heading', `file' and `link'.  ID is
-the heading, file or link id.  FILE is the absolute path of the source
-file.  LINE and BYTE-START locate the result in FILE; BYTE-START is nil
-for `root' and `file' records.  The TARGET-* slots are only set for a
-`link' record with a resolved target; TARGET-BYTE-START is nil for a
-file target."
+KIND is one of `root', `heading', `file', `link', `fs_file', and `fs_dir'.
+FILE is the absolute path of the source file or filesystem entry.  ID,
+LINE, and BYTE-START are nil for filesystem entries.  For Org records,
+ID is the heading, file or link id, and LINE and BYTE-START locate the
+result in FILE.  BYTE-START is nil for `root' and `file' records.  The
+TARGET-* slots are only set for a `link' record with a resolved target.
+TARGET-BYTE-START is nil for a file target."
   kind
   id
   file
@@ -75,7 +77,9 @@ file target."
     ("heading" . ("kind" "id" "file" "line" "byte_start"))
     ("file" . ("kind" "id" "file" "line" "byte_start"))
     ("link" . ("kind" "id" "file" "line" "byte_start"
-               "target_file" "target_line" "target_byte_start")))
+               "target_file" "target_line" "target_byte_start"))
+    ("fs_file" . ("kind" "file"))
+    ("fs_dir" . ("kind" "file")))
   "Supported action record kinds with their required positional fields.")
 
 (cl-defstruct (org-files-db-presentation-row
@@ -109,19 +113,22 @@ file target."
     role-symbols))
 
 (defun org-files-db-presentation--default-columns (target)
-  "Return the configured default columns for TARGET."
+  "Return the default columns for TARGET."
   (pcase target
     ('headings org-files-db-heading-columns)
     ('files org-files-db-file-columns)
     ('links org-files-db-link-columns)
+    ((or 'fs-files 'fs-dirs)
+     '((file-name :width (max 50)) (file-dir :width (max 100))))
     (_ (user-error "Unsupported org-files-db query target: %S" target))))
 
 (defun org-files-db-presentation--default-sort (target)
-  "Return the configured default sorting for TARGET."
+  "Return the default sorting for TARGET."
   (pcase target
     ('headings org-files-db-heading-sort)
     ('files org-files-db-file-sort)
     ('links org-files-db-link-sort)
+    ((or 'fs-files 'fs-dirs) nil)
     (_ (user-error "Unsupported org-files-db query target: %S" target))))
 
 (defun org-files-db-presentation--json-object (&rest entries)
@@ -586,6 +593,26 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
        "Presentation record file index %d is out of range" index))
     (aref files index)))
 
+(defun org-files-db-presentation--filesystem-path (path)
+  "Decode PATH's `path-bytes:' representation for a filesystem record."
+  (if (not (string-prefix-p "path-bytes:" path))
+      path
+    (let ((encoded (substring path (length "path-bytes:"))))
+      (unless (string-match-p
+               "\\`\\(?:%[[:xdigit:]][[:xdigit:]]\\)+\\'"
+               encoded)
+        (org-files-db-presentation--error
+         "Malformed encoded filesystem path: %S" path))
+      (let ((decoded
+             (decode-coding-string
+              (url-unhex-string encoded t)
+              (or file-name-coding-system default-file-name-coding-system))))
+        (unless (and (string-prefix-p "/" decoded)
+                     (not (string-match-p (string 0) decoded)))
+          (org-files-db-presentation--error
+           "Encoded filesystem path is invalid or not absolute: %S" path))
+        decoded))))
+
 (defun org-files-db-presentation--decode-record (encoded kinds files)
   "Decode action record ENCODED with result KINDS and FILES."
   (unless (and (vectorp encoded) (> (length encoded) 0))
@@ -602,35 +629,41 @@ When NULLABLE is non-nil, a nil INDEX returns nil."
       (unless (= (length encoded) (length (cdr entry)))
         (org-files-db-presentation--error
          "Invalid presentation %s record length: %d" kind (length encoded)))
-      (let ((id (aref encoded 1))
-            (line (aref encoded 3))
-            (byte-start (aref encoded 4)))
-        (org-files-db-presentation--record-integer id "id")
-        (org-files-db-presentation--record-integer line "line" t)
-        (org-files-db-presentation--record-integer byte-start "byte_start" t)
-        (let ((record
-               (org-files-db-presentation--make-record
-                :kind (intern kind)
-                :id id
-                :file (org-files-db-presentation--record-file
-                       (aref encoded 2) files)
-                :line line
-                :byte-start byte-start)))
-          (when (equal kind "link")
-            (let ((target-file (aref encoded 5))
-                  (target-line (aref encoded 6))
-                  (target-byte-start (aref encoded 7)))
-              (org-files-db-presentation--record-integer
-               target-line "target_line" t)
-              (org-files-db-presentation--record-integer
-               target-byte-start "target_byte_start" t)
-              (setf (org-files-db-record-target-file record)
-                    (org-files-db-presentation--record-file
-                     target-file files t)
-                    (org-files-db-record-target-line record) target-line
-                    (org-files-db-record-target-byte-start record)
-                    target-byte-start)))
-          record)))))
+      (if (member kind '("fs_file" "fs_dir"))
+          (org-files-db-presentation--make-record
+           :kind (intern kind)
+           :file (org-files-db-presentation--filesystem-path
+                  (org-files-db-presentation--record-file
+                   (aref encoded 1) files)))
+        (let ((id (aref encoded 1))
+              (line (aref encoded 3))
+              (byte-start (aref encoded 4)))
+          (org-files-db-presentation--record-integer id "id")
+          (org-files-db-presentation--record-integer line "line" t)
+          (org-files-db-presentation--record-integer byte-start "byte_start" t)
+          (let ((record
+                 (org-files-db-presentation--make-record
+                  :kind (intern kind)
+                  :id id
+                  :file (org-files-db-presentation--record-file
+                         (aref encoded 2) files)
+                  :line line
+                  :byte-start byte-start)))
+            (when (equal kind "link")
+              (let ((target-file (aref encoded 5))
+                    (target-line (aref encoded 6))
+                    (target-byte-start (aref encoded 7)))
+                (org-files-db-presentation--record-integer
+                 target-line "target_line" t)
+                (org-files-db-presentation--record-integer
+                 target-byte-start "target_byte_start" t)
+                (setf (org-files-db-record-target-file record)
+                      (org-files-db-presentation--record-file
+                       target-file files t)
+                      (org-files-db-record-target-line record) target-line
+                      (org-files-db-record-target-byte-start record)
+                      target-byte-start)))
+            record))))))
 
 (defun org-files-db-presentation--map-vector (function vector)
   "Return a new vector of FUNCTION applied to each element of VECTOR."

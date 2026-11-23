@@ -62,13 +62,17 @@ The configuration files must exist and Emacs must be able to read them. Emacs sh
 
 * Queries
 
-~M-x org-files-db-query~ reads a query as an Emacs Lisp form, runs it, and lets you select one result. The [[https://github.com/hubisan/org-files-db/blob/main/docs/reference/query-language.org][query language reference]] describes the query language. A query starts with a target, which is ~headings~, ~files~ or ~links~. Conditions follow the target.
+~M-x org-files-db-query~ reads a query as an Emacs Lisp form, runs it, and lets you select one result. The [[https://github.com/hubisan/org-files-db/blob/main/docs/reference/query-language.org][query language reference]] describes the query language. A query starts with a target, which is ~headings~, ~files~, ~links~, ~fs-files~ or ~fs-dirs~. Conditions follow the target.
 
 #+begin_src emacs-lisp
 (org-files-db-query '(headings (tags "public")))
 (org-files-db-query '(links (status "resolved")))
 (org-files-db-query '(files))
+(org-files-db-query '(fs-files (extension "pdf")))
+(org-files-db-query '(fs-dirs (name "projects")))
 #+end_src
+
+~fs-files~ searches indexed regular files and ~fs-dirs~ searches indexed directories, including configured roots and empty directories. They support name, path and parent filters. ~fs-files~ also supports an extension filter. The [[https://github.com/hubisan/org-files-db/blob/main/docs/reference/query-language.org][query language reference]] lists the predicates.
 
 The query can be a quoted form or a string. When you call the command from Lisp, it returns the selected result. The command takes these keyword arguments:
 
@@ -97,7 +101,7 @@ The query can be a quoted form or a string. When you call the command from Lisp,
 - ~:depth N~ shows only the first ~N~ directory components in the columns ~file-path~ and ~file-dir~, for example =~/memento/path/…/a.org= with ~:depth 2~ (components count after =~/= with ~:abbreviate-home t~). Searching still matches the complete path. It needs a version of ~orgfdb~ with this option.
 - ~:strip-extension t~ shows the name in the column ~file-name~ without its extension, for example ~notes~ for ~notes.org~. It needs a version of ~orgfdb~ with this option. Sorting and actions still use the full name.
 
-If you do not give ~:columns~, Emacs uses the default columns for the query target. You can change them with ~org-files-db-heading-columns~, ~org-files-db-file-columns~ and ~org-files-db-link-columns~.
+If you do not give ~:columns~, Emacs uses the default columns for the query target. Filesystem queries show ~file-name~ and ~file-dir~ by default. You can change the Org query columns with ~org-files-db-heading-columns~, ~org-files-db-file-columns~ and ~org-files-db-link-columns~.
 
 ** Sorting
 
@@ -110,7 +114,7 @@ If you do not give ~:columns~, Emacs uses the default columns for the query targ
          (outline-path :direction asc)))
 #+end_src
 
-If you do not give ~:sort~, Emacs uses ~org-files-db-heading-sort~, ~org-files-db-file-sort~ or ~org-files-db-link-sort~. All three are ~nil~ by default, and ~nil~ keeps the order that ~orgfdb~ returns. An explicit ~:sort nil~ keeps the ~orgfdb~ order, also when you set a default.
+If you do not give ~:sort~, Emacs uses ~org-files-db-heading-sort~, ~org-files-db-file-sort~ or ~org-files-db-link-sort~ for the Org targets. All three are ~nil~ by default. Filesystem queries also keep the order that ~orgfdb~ returns by default. An explicit ~:sort nil~ keeps the ~orgfdb~ order, also when you set a default.
 
 ** Row sources
 
@@ -151,7 +155,11 @@ A view is a query with a name and its own columns, sort order and action. Define
          :action org-files-db-actions-open-link-target)
         ("all-headings"
          :query (headings)
-         :cache t)))
+         :cache t)
+        ("pdf-files"
+         :query (fs-files (extension "pdf")))
+        ("project-directories"
+         :query (fs-dirs (name "projects")))))
 #+end_src
 
 A view is a name and these keys. Each key can occur one time:
@@ -215,6 +223,7 @@ When you select a result, Emacs runs an action with it. The default action depen
 - ~org-files-db-heading-action~ for ~headings~
 - ~org-files-db-file-action~ for ~files~
 - ~org-files-db-link-action~ for ~links~
+- ~org-files-db-actions-open-result~ for ~fs-files~ and ~fs-dirs~
 
 The default of all three is ~org-files-db-actions-open-result~. A view can set a different action with ~:action~. One call of ~org-files-db-query~ can also set it with ~:action~. An action is a function that takes the selected result as its only argument.
 
@@ -222,6 +231,7 @@ The package has these actions:
 
 - ~org-files-db-actions-open-result~ opens a heading, a file, or the source of a link, at its position.
 - ~org-files-db-actions-open-directory~ opens the parent directory of a file or root result in Dired. Set ~org-files-db-file-action~ to this function or use it as a view's ~:action~.
+- Filesystem file results open with ~find-file~. Directory results open in Dired. With Embark, ~d~ opens a file's containing directory or opens the selected directory itself.
 - ~org-files-db-actions-open-link-target~ opens the target of a link result. If ~orgfdb~ resolved the target (found it in the index), it opens the target heading or file. Org opens all other links, for example a web link, a directory or a file that is not in the index, as if you followed the link in its source file.
 - ~org-files-db-actions-follow-heading-link~ opens the first link of a heading directly at its target. The target is a file, a heading, or Dired for a directory. The action looks in the headline first and then in the section. For a file result, it uses the first link before the first heading. Emacs does not show the buffer of the heading, and closes it again if it was not open before.
 - ~org-files-db-actions-follow-or-open-heading~ follows a link in the headline itself, of any type. If the headline has no link, it opens the heading. Use it for headings that are links, for example an index or a path hierarchy of links to notes. With Embark, the key is ~j~. This view lists only headings with a link in the headline and follows that link. It needs a version of ~orgfdb~ with the ~source-context~ predicate:
@@ -288,7 +298,7 @@ If the query finds nothing, the buffer shows one line, "No results". When you sh
 You do not need Embark. Results use the completion category ~org-files-db-result~. When Embark is loaded, ~embark-act~ on a result offers the actions of ~org-files-db-embark-result-map~:
 
 - ~o~ opens the result
-- ~d~ opens the directory containing a file or root result
+- ~d~ opens the directory containing a file or root result, or opens a filesystem directory result itself
 - ~t~ opens the link target
 - ~f~ inserts a file link
 - ~h~ inserts a heading link

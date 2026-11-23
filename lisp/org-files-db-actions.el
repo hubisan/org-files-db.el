@@ -82,28 +82,36 @@ the buffer. Reveal the location when the buffer is in Org mode."
     (org-fold-show-context)))
 
 (defun org-files-db-actions-open-result (record)
-  "Open the source of RECORD and return nil.
-A heading or link RECORD opens its file at the stored position, a file or root
-RECORD opens its file at the start. No orgfdb process is started."
+  "Open RECORD and return nil.
+Open a heading or link at its stored position, a file or root at the start
+of its file, and a filesystem directory in Dired. No orgfdb process is
+started."
   (let ((kind (org-files-db-record-kind record)))
-    (if (memq kind '(heading link))
-        (org-files-db-actions--goto (org-files-db-record-file record)
-                                    (org-files-db-record-line record)
-                                    (org-files-db-record-byte-start record))
-      (org-files-db-actions--goto (org-files-db-record-file record) nil nil))
+    (pcase kind
+      ('fs_dir (org-files-db-actions-open-directory record))
+      ((or 'heading 'link)
+       (org-files-db-actions--goto (org-files-db-record-file record)
+                                   (org-files-db-record-line record)
+                                   (org-files-db-record-byte-start record)))
+      (_ (org-files-db-actions--goto (org-files-db-record-file record) nil nil)))
     (message (pcase kind
                ('heading "Heading opened")
                ('link "Link opened")
+               ('fs_dir "Directory opened")
                (_ "File opened")))
     nil))
 
 (defun org-files-db-actions-open-directory (record)
-  "Open the parent directory of file or root RECORD in Dired and return nil.
-Signal a user error for other result kinds. No orgfdb process is started."
-  (unless (memq (org-files-db-record-kind record) '(file root))
-    (user-error "Result is not a file"))
-  (dired (file-name-directory
-          (expand-file-name (org-files-db-record-file record))))
+  "Open RECORD in Dired and return nil.
+For a file or root record, open its parent directory. For a filesystem
+directory, open the directory itself. Signal a user error for other result
+kinds. No orgfdb process is started."
+  (dired (pcase (org-files-db-record-kind record)
+           ('fs_dir (org-files-db-record-file record))
+           ((or 'file 'root 'fs_file)
+            (file-name-directory
+             (expand-file-name (org-files-db-record-file record))))
+           (_ (user-error "Result is not a file or directory"))))
   nil)
 
 (defun org-files-db-actions--open-link-in (file find)
@@ -473,11 +481,12 @@ skipped. Return nil."
     nil))
 
 (defun org-files-db-actions--default-action (target)
-  "Return the configured default action for TARGET."
+  "Return the default action for TARGET."
   (pcase target
     ('headings org-files-db-heading-action)
     ('files org-files-db-file-action)
     ('links org-files-db-link-action)
+    ((or 'fs-files 'fs-dirs) #'org-files-db-actions-open-result)
     (_ (user-error "Unsupported org-files-db query target: %S" target))))
 
 (provide 'org-files-db-actions)

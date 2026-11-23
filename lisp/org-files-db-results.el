@@ -105,6 +105,8 @@ In a result buffer with its own action, run that action."
                    ('heading 'headings)
                    ((or 'file 'root) 'files)
                    ('link 'links)
+                   ('fs_file 'fs-files)
+                   ('fs_dir 'fs-dirs)
                    (kind (user-error "Unsupported result kind: %S" kind)))))
     (org-files-db-results--call-with
      (or org-files-db-results--action
