@@ -5,53 +5,52 @@
 Prefer the most downstream existing artifact: `ticket > spec > conversation`. Do not
 repeat discovery that the active issue already settles.
 
-Normal flow: `/to-spec` -> `/to-tickets` (usually done by the user) -> planner plans one
-ticket -> `implementer` subagent -> focused tests -> planner review -> at most one
+Normal flow: `/to-spec` -> `/to-tickets` (usually done by the user) -> planning subagent -> `implementer` subagent -> focused tests -> independent review subagent -> at most one
 correction -> `make ci` -> commit -> PR.
 
 ## Roles and model routing
 
-| Role | Claude Code | Codex |
-| --- | --- | --- |
-| Planner and reviewer | main session; model and effort chosen in the session | main session; model and effort chosen in the session |
-| Implementer (default) | subagent `implementer`: Sonnet, effort medium | subagent `implementer`: Luna high (small tickets); `implementer-complex`: Sol medium (complex tickets) |
-| Escalated implementer | subagent `implementer-escalated`: Sonnet, effort high | subagent `implementer-escalated`: Sol high (approval required) |
+The main session coordinates the workflow, Git and PRs. Choose a cost-effective
+session model. Delegate planning, implementation and behavior-changing reviews
+to fixed-model subagents. Route by risk before size: security, data writes,
+migrations, concurrency and architecture changes require the complex role.
 
-The workflow uses versionless model family names. Codex subagent TOML files under
-`.codex/agents/` require exact model IDs; the checked-in IDs are versioned and must
-be updated when the family advances. Claude agents are defined in `.claude/agents/`.
+| Task | Subagent | Codex | Claude Code |
+| --- | --- | --- | --- |
+| Simple planning | `planner-light` | Luna max | Sonnet medium |
+| Complex or risky planning | `planner` | Sol medium | Opus medium |
+| Small implementation | `implementer-light` | Luna high | Sonnet low |
+| Normal implementation | `implementer` | Luna max | Sonnet medium |
+| Complex implementation | `implementer-complex` | Sol medium | Opus medium |
+| Optional focused test triage | `tester` | Luna high | Sonnet low |
+| Normal code review | `reviewer-light` | Luna max | Sonnet medium |
+| Complex or risky code review | `reviewer` | Sol medium | Opus medium |
+| Approved implementation escalation | `implementer-escalated` | Sol high | Sonnet high |
 
-For Codex, delegate small, well-scoped changes, tests and straightforward fixes to
-`implementer` (Luna high). Delegate cross-file features, complex logic and higher-risk
-implementation to `implementer-complex` (Sol medium). Use `implementer-escalated`
-(Sol high) only with explicit user approval. Planning and review keep the model and
-effort chosen for the main session.
+Model and effort are configured in `.codex/agents/*.toml` and
+`.claude/agents/*.md`; those files, not this summary table, are authoritative.
+Haiku is not part of the default Claude workflow. Escalated implementation needs
+explicit user approval; Luna max is approved as a standard role.
 
-Before the first Codex implementation delegation in a session, check the configured
-subagent model IDs against models actually available in the current Codex client and,
-when current release information is accessible, the latest supported release in each
-selected model family. Warn the user if an ID is unavailable, unsupported by this
-client, or superseded; state which agent and model are affected and suggest the
-current supported replacement. Do not silently substitute a model or update the
-config; obtain user approval first. If current availability or release information
-cannot be verified, say so rather than claiming the models are current. Do this
-check once per session (or after a model-related failure), not for each ticket.
-The TOML settings are authoritative for the subagent model and effort.
+**Routing steps:** delegate missing planning to `planner-light` or `planner`,
+then the appropriate implementer. Implementers run focused tests themselves;
+use `tester` only when separate execution or diagnosis is useful. Delegate
+behavior-changing code review independently to `reviewer-light` or `reviewer`.
+For docs-only, config-only and mechanical diffs, the coordinator can inspect
+the diff. Keep the repository's existing tests, review skills, correction budget,
+scope and completion requirements below. Do not rerun planning for a settled spec.
+Do not create unnecessary duplicate tests or review passes.
 
-- The user sets the planner's model and effort (`/model`, `/effort`); Claude
-  subagent settings live in `.claude/agents/*.md`, Codex settings in `.codex/agents/*.toml`.
-- The planner reads the issue, writes a short plan (owned files, seam, focused test
-  command, relevant docs section), and delegates to `implementer`.
-- Use one implementer by default. Start several only for genuinely independent work with
-  disjoint files.
-- The implementer fixes ordinary test failures itself and returns a compact report.
-- The planner reviews. For tickets that change the process layer, the watcher lifecycle,
-  presentation-json decoding or cache-mode behavior, the planner may raise its own effort to
-  medium for the review.
-- `implementer-escalated` and any `xhigh`/`max` effort require explicit user approval.
-- Git/GitHub housekeeping (branch, commit, push, PR, issues, labels) stays in the planner
-  session; delegating it costs more context than it saves.
-- Other harnesses keep the same three roles with their own models.
+**Model evidence:** Before first delegation, check client support and warn about
+unavailable or superseded model IDs when verifiable. Do not silently substitute
+models. For each phase actually run, report
+`phase / role / configured model / effort / status`.
+Use `configured` for config only, `spawn-confirmed` for a launched role, and
+`runtime-verified` only when independent client/task metadata shows the
+effective model *and* effort. An agent self-report is not evidence. Inspect
+`/subagents` in Codex or `/tasks` in Claude Code if supported; note possible
+runtime overrides and unavailable verification. Summarize actual versus
+configured roles in the final report.
 
 ## Skills
 
@@ -59,14 +58,14 @@ Invoke a matching skill through the Skill tool (other harnesses: open its `SKILL
 
 | Situation | Skill |
 | --- | --- |
-| Review of a ticket that changes code (`lisp/`, `tests/`) | `code-review` (planner, before commit) |
+| Review of a ticket that changes code (`lisp/`, `tests/`) | `code-review` (independent reviewer, before commit) |
 | Implementing a ticket with behavior change | `tdd` (implementer) |
 | Hard bug, flaky or unexplained failure | `diagnosing-bugs` |
 | A term or durable decision is being settled (glossary, ADR) | `domain-modeling` |
 | Turning a settled conversation into a spec / tickets | `to-spec`, then `to-tickets` |
 | Editing `AGENTS.md`, `CLAUDE.md`, agent docs or skills | `writing-for-agents` |
 
-Skip `code-review` for docs-only, config-only or purely mechanical changes; the planner's
+Skip `code-review` for docs-only, config-only or purely mechanical changes; the coordinator's
 own diff review is enough there.
 
 `code-review` fixed point: the commit before the ticket's first commit (or `HEAD` plus
