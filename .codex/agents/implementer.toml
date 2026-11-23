@@ -1,7 +1,7 @@
 name = "implementer"
-description = "Implement small, well-scoped tickets, straightforward fixes and focused tests."
+description = "Implement normal feature tickets from an approved plan."
 model = "gpt-6-luna"
-model_reasoning_effort = "high"
+model_reasoning_effort = "max"
 
 developer_instructions = """
 Implement one small, well-scoped slice from the planner's brief.
