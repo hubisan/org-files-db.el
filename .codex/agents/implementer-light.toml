@@ -1,0 +1,9 @@
+name = "implementer-light"
+description = "Implement one small low-risk slice; run focused tests and leave changes uncommitted."
+model = "gpt-6-luna"
+model_reasoning_effort = "high"
+
+developer_instructions = """
+Follow AGENTS.md and docs/agents/WORKFLOW.md. Implement one small low-risk slice; run focused tests and leave changes uncommitted.
+Report configured role/model/effort; runtime verification requires client evidence.
+"""
