@@ -14,17 +14,32 @@ correction -> `make ci` -> commit -> PR.
 | Role | Claude Code | Codex |
 | --- | --- | --- |
 | Planner and reviewer | main session; model and effort chosen in the session | main session; model and effort chosen in the session |
-| Implementer (default) | subagent `implementer`: Sonnet, effort medium | Luna, effort high (small, focused tickets); Sol, effort medium (complex tickets) |
-| Escalated implementer | subagent `implementer-escalated`: Sonnet, effort high | Sol, effort high (approval required) |
+| Implementer (default) | subagent `implementer`: Sonnet, effort medium | subagent `implementer`: Luna high (small tickets); `implementer-complex`: Sol medium (complex tickets) |
+| Escalated implementer | subagent `implementer-escalated`: Sonnet, effort high | subagent `implementer-escalated`: Sol high (approval required) |
 
-Model names carry no version: the current model of that family is meant.
-For Codex, choose Luna high for small, well-scoped changes, tests and straightforward fixes.
-Choose Sol medium for cross-file features, complex logic and higher-risk implementation.
-Sol high is an escalation and requires explicit user approval. Planning and review
-continue to use the model and effort selected for the main session.
+The workflow uses versionless model family names. Codex subagent TOML files under
+`.codex/agents/` require exact model IDs; the checked-in IDs are versioned and must
+be updated when the family advances. Claude agents are defined in `.claude/agents/`.
 
-- In Claude Code, the planner is the main session; the user selects its model and effort (`/model`,
-  `/effort`). Claude subagent model and effort are fixed in `.claude/agents/*.md`.
+For Codex, delegate small, well-scoped changes, tests and straightforward fixes to
+`implementer` (Luna high). Delegate cross-file features, complex logic and higher-risk
+implementation to `implementer-complex` (Sol medium). Use `implementer-escalated`
+(Sol high) only with explicit user approval. Planning and review keep the model and
+effort chosen for the main session.
+
+Before the first Codex implementation delegation in a session, check the configured
+subagent model IDs against models actually available in the current Codex client and,
+when current release information is accessible, the latest supported release in each
+selected model family. Warn the user if an ID is unavailable, unsupported by this
+client, or superseded; state which agent and model are affected and suggest the
+current supported replacement. Do not silently substitute a model or update the
+config; obtain user approval first. If current availability or release information
+cannot be verified, say so rather than claiming the models are current. Do this
+check once per session (or after a model-related failure), not for each ticket.
+The TOML settings are authoritative for the subagent model and effort.
+
+- The user sets the planner's model and effort (`/model`, `/effort`); Claude
+  subagent settings live in `.claude/agents/*.md`, Codex settings in `.codex/agents/*.toml`.
 - The planner reads the issue, writes a short plan (owned files, seam, focused test
   command, relevant docs section), and delegates to `implementer`.
 - Use one implementer by default. Start several only for genuinely independent work with
