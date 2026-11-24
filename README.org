@@ -41,6 +41,14 @@ This query lists all headings that are not done. Select one heading with your co
 
 ~org-files-db-executable~ is the command name or the path of ~orgfdb~. The default is ~"orgfdb"~.
 
+~org-files-db-show-hidden~ controls visibility for ~fs-files~ and ~fs-dirs~. It defaults to ~nil~, so a leading dot in a name below a configured root hides that entry and its descendants. A configured root itself is visible, and an entry reached by another visible route is visible too. Set the option to ~t~ to include hidden entries.
+
+#+begin_src emacs-lisp
+(setq org-files-db-show-hidden t)
+#+end_src
+
+A query or named view can override the setting with ~:show-hidden t~ or ~:show-hidden nil~. Omitting the keyword inherits ~org-files-db-show-hidden~. This feature requires an ~orgfdb~ version that supports ~--hidden~ for queries and registered views.
+
 ~org-files-db-configs~ is an alist of named configurations. Each entry is ~(NAME . FILE)~. NAME is a unique name that is not empty. FILE is the path of an ~orgfdb~ configuration file. Use more than one entry if you keep separate indexes, for example one for work notes and one for private notes.
 
 ~org-files-db-default-config~ is the name of the entry that Emacs uses when you select none. You must set it when ~org-files-db-configs~ is not empty.
@@ -80,6 +88,7 @@ The query can be a quoted form or a string. When you call the command from Lisp,
 - ~:columns~: the columns to show
 - ~:sort~: the sort order
 - ~:row-source~: the row source, see [[*Row sources][Row sources]]
+- ~:show-hidden~ includes hidden entries in ~fs-files~ and ~fs-dirs~ when set to ~t~. Explicit ~nil~ hides them. When omitted, it inherits ~org-files-db-show-hidden~.
 - ~:action~: a function that Emacs calls with the selected result instead of the default action
 
 ** Columns
@@ -176,6 +185,7 @@ A view is a name and these keys. Each key can occur one time:
 - ~:query~ (required): the query
 - ~:config~: the configuration name. The default is ~org-files-db-default-config~.
 - ~:columns~, ~:sort~, ~:row-source~: the same as for ~org-files-db-query~, with the same defaults
+- ~:show-hidden~ sets visibility for filesystem queries and inherits ~org-files-db-show-hidden~ when omitted.
 - ~:action~: the action for this view, see [[*Result actions][Result actions]]
 - ~:cache~: ~t~ to use the cache, see [[*Cache][Cache]]
 - ~:display~: ~buffer~ to show the view in a result buffer instead of in the minibuffer, see [[*Result buffer][Result buffer]]
@@ -189,7 +199,7 @@ Each view name must be unique. Emacs shows an error for a view that is not valid
 - ~M-x org-files-db-cache-start~ or ~(org-files-db-cache-mode 1)~ prepares all views with ~:cache t~. If watch mode is not on, cache mode also starts it.
 - ~M-x org-files-db-cache-stop~ or ~(org-files-db-cache-mode -1)~ removes the prepared views. With a prefix argument, it also stops watch mode.
 
-Cache mode reads the view definitions when it starts. If you change ~org-files-db-views~, ~org-files-db-configs~ or the default configuration, restart cache mode. The prepared views belong to the Emacs session that made them. Emacs removes them when you stop cache mode or exit Emacs.
+Cache mode reads the view definitions when it starts. Restart cache mode after changing ~org-files-db-views~, ~org-files-db-configs~ or the default configuration. Restart it also when a cached filesystem view inherits ~org-files-db-show-hidden~ and you change that setting. The prepared views belong to the Emacs session that made them. Emacs removes them when you stop cache mode or exit Emacs.
 
 ** Candidate cache
 
@@ -283,7 +293,7 @@ You can show all rows in a read-only buffer instead of selecting one result in t
 
 - ~M-x org-files-db-show-view~ asks for a view and shows it in ~*org-files-db: NAME*~.
 - ~M-x org-files-db-show-query~ reads a query like ~org-files-db-query~ and shows it in ~*org-files-db: query*~.
-- ~(org-files-db-show-query QUERY &rest KEYS)~ takes the same keywords as ~org-files-db-query~: ~:config~, ~:columns~, ~:sort~, ~:row-source~ and ~:action~. ~(org-files-db-show-view NAME)~ does the same for a view. Both functions return the buffer.
+- ~(org-files-db-show-query QUERY &rest KEYS)~ takes the same keywords as ~org-files-db-query~: ~:config~, ~:columns~, ~:sort~, ~:row-source~, ~:show-hidden~ and ~:action~. ~(org-files-db-show-view NAME)~ does the same for a view. Both functions return the buffer.
 - ~org-files-db-view~ also shows a view with ~:display buffer~ in this buffer. The only valid values of ~:display~ are ~buffer~ and ~nil~.
 
 #+begin_src emacs-lisp

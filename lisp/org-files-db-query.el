@@ -70,13 +70,24 @@
       query
     (prin1-to-string (org-files-db-query--form query))))
 
+(defun org-files-db-query--effective-show-hidden (target show-hidden)
+  "Return SHOW-HIDDEN when TARGET is a filesystem query target.
+Org query targets always return nil because hidden-entry visibility is a
+filesystem-only option."
+  (and (memq target '(fs-files fs-dirs)) show-hidden))
+
 (cl-defun org-files-db-query-results
-    (query &key config columns (sort nil sort-supplied-p) row-source)
+    (query &key config columns (sort nil sort-supplied-p) row-source
+           (show-hidden org-files-db-show-hidden))
   "Return prepared Rust presentation data for structural QUERY.
 CONFIG is a name from `org-files-db-configs'.  When CONFIG is nil, use the
 configured default.  COLUMNS, SORT, and ROW-SOURCE use the flat Emacs
-presentation forms.  This function does not open completion or run an action."
+presentation forms.  SHOW-HIDDEN includes hidden entries for filesystem
+queries when non-nil.  This function does not open completion or run an
+action."
   (let* ((target (org-files-db-query--target query))
+         (show-hidden
+          (org-files-db-query--effective-show-hidden target show-hidden))
          (config-name (org-files-db-process--config-name config))
          (effective-columns (or columns (org-files-db-presentation--default-columns target)))
          (effective-sort
@@ -89,6 +100,7 @@ presentation forms.  This function does not open completion or run an action."
            (list "query"
                  "--format" "presentation-json"
                  "--presentation-spec-json" spec-json)
+           (and show-hidden (list "--hidden"))
            (org-files-db-process--config-arguments config-name)
            (list (org-files-db-query--string query)))))
     (let ((presentation
@@ -178,11 +190,13 @@ CONFIG defaults to the configuration of PRESENTATION. Signal
 
 ;;;###autoload
 (cl-defun org-files-db-query
-    (query &key config columns (sort nil sort-supplied-p) row-source action)
+    (query &key config columns (sort nil sort-supplied-p) row-source action
+           (show-hidden org-files-db-show-hidden))
   "Run structural QUERY, select one result, and execute its action.
 CONFIG is a name from `org-files-db-configs'.  COLUMNS, SORT, and ROW-SOURCE
 override the configured presentation defaults.  ACTION overrides the default
-action for the query target.  Return the selected action record.
+action for the query target.  SHOW-HIDDEN includes hidden entries for
+filesystem queries when non-nil.  Return the selected action record.
 
 With an interactive prefix argument, select the configuration before running
 the query."
@@ -190,10 +204,13 @@ the query."
    (list (org-files-db-query--read-query)
          :config (org-files-db-process--interactive-config-name current-prefix-arg)))
   (let* ((target (org-files-db-query--target query))
+         (show-hidden
+          (org-files-db-query--effective-show-hidden target show-hidden))
          (effective-action (org-files-db-query--effective-action target action))
          (arguments (list :config config
                           :columns columns
-                          :row-source row-source))
+                          :row-source row-source
+                          :show-hidden show-hidden))
          (arguments (if sort-supplied-p
                         (append arguments (list :sort sort))
                       arguments))

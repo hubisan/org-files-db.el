@@ -172,8 +172,8 @@ action for RET. Reuse an existing buffer of that name and return it."
 (defun org-files-db-show-query (query &rest keys)
   "Show the rows of structural QUERY in a result buffer and return it.
 KEYS are the keywords of `org-files-db-query': :config, :columns, :sort,
-:row-source and :action. In the buffer, RET runs the action, o exports an
-outline and g runs the query again."
+:row-source, :show-hidden and :action. In the buffer, RET runs the action,
+o exports an outline and g runs the query again."
   (interactive
    (cons (org-files-db-query--read-query)
          (list :config (org-files-db-process--interactive-config-name
@@ -181,8 +181,15 @@ outline and g runs the query again."
   (let* ((target (org-files-db-query--target query))
          (action (org-files-db-query--effective-action
                   target (plist-get keys :action)))
+         (show-hidden
+          (org-files-db-query--effective-show-hidden
+           target
+           (if (plist-member keys :show-hidden)
+               (plist-get keys :show-hidden)
+             org-files-db-show-hidden)))
          (arguments (copy-sequence keys)))
     (cl-remf arguments :action)
+    (setq arguments (plist-put arguments :show-hidden show-hidden))
     (org-files-db-results--show
      "*org-files-db: query*"
      (lambda () (apply #'org-files-db-query-results query arguments))

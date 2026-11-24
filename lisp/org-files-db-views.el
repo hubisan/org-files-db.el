@@ -42,7 +42,8 @@
 (defvar org-files-db-cache-mode)
 
 (defconst org-files-db-views--allowed-keys
-  '(:config :query :columns :sort :row-source :cache :action :display)
+  '(:config :query :columns :sort :row-source :show-hidden :cache :action
+            :display)
   "Keys accepted in one flat predefined view definition.")
 
 (cl-defstruct (org-files-db-views--resolved
@@ -57,6 +58,7 @@
   columns
   sort
   row-source
+  show-hidden
   cache
   action
   display)
@@ -131,6 +133,10 @@
                 (plist-get properties :sort)
               (org-files-db-presentation--default-sort target)))
            (row-source (plist-get properties :row-source))
+           (show-hidden
+            (if (plist-member properties :show-hidden)
+                (plist-get properties :show-hidden)
+              org-files-db-show-hidden))
            (cache (plist-get properties :cache))
            (display (plist-get properties :display))
            (action
@@ -138,6 +144,9 @@
              target (plist-get properties :action))))
       (unless (memq cache '(nil t))
         (user-error "View `%s' has invalid :cache value: %S" name cache))
+      (unless (memq show-hidden '(nil t))
+        (user-error "View `%s' has invalid :show-hidden value: %S"
+                    name show-hidden))
       (unless (memq display '(nil buffer))
         (user-error "View `%s' has invalid :display value: %S" name display))
       (org-files-db-presentation--spec-json columns sort row-source)
@@ -151,6 +160,8 @@
        :columns (org-files-db-views--copy-data columns)
        :sort (org-files-db-views--copy-data sort)
        :row-source (org-files-db-views--copy-data row-source)
+       :show-hidden
+       (org-files-db-query--effective-show-hidden target show-hidden)
        :cache cache
        :action action
        :display display))))
@@ -203,6 +214,7 @@
    :columns (org-files-db-views--resolved-columns resolved)
    :sort (org-files-db-views--resolved-sort resolved)
    :row-source (org-files-db-views--resolved-row-source resolved)
+   :show-hidden (org-files-db-views--resolved-show-hidden resolved)
    :action (org-files-db-views--resolved-action resolved)))
 
 ;;;###autoload
@@ -244,7 +256,8 @@ Use the Rust cache when `org-files-db-cache-mode' is active."
    :config (org-files-db-views--resolved-config resolved)
    :columns (org-files-db-views--resolved-columns resolved)
    :sort (org-files-db-views--resolved-sort resolved)
-   :row-source (org-files-db-views--resolved-row-source resolved)))
+   :row-source (org-files-db-views--resolved-row-source resolved)
+   :show-hidden (org-files-db-views--resolved-show-hidden resolved)))
 
 ;;; Candidate cache
 
@@ -341,7 +354,7 @@ view again."
      (format "*org-files-db: %s*" name)
      (if (org-files-db-views--candidate-cache-applies-p resolved)
          (lambda () (org-files-db-views--candidates name))
-       (lambda () (org-files-db-views--presentation name)))
+       (lambda () (org-files-db-views--one-shot-presentation resolved)))
      (org-files-db-views--resolved-action resolved))))
 
 ;;;###autoload

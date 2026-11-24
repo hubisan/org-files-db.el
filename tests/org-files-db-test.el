@@ -180,6 +180,7 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                         org-files-db-heading-sort
                         org-files-db-file-sort
                         org-files-db-link-sort
+                        org-files-db-show-hidden
                         org-files-db-heading-action
                         org-files-db-file-action
                         org-files-db-link-action
@@ -1028,6 +1029,32 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
           (expect (alist-get 'kind (alist-get 'row_source spec))
                   :to-equal "tags"))))))
 
+(describe "filesystem visibility"
+  (before-each
+    (setq org-files-db-test--directory
+          (make-temp-file "org-files-db-filesystem-test-" t)))
+
+  (after-each
+    (when (file-directory-p org-files-db-test--directory)
+      (delete-directory org-files-db-test--directory t)))
+
+  (it "passes hidden visibility only to filesystem query targets"
+    (let* ((main (org-files-db-test--config-file "main.toml"))
+           (org-files-db-configs `(("main" . ,main)))
+           (org-files-db-default-config "main")
+           (org-files-db-show-hidden t)
+           calls)
+      (cl-letf (((symbol-function 'org-files-db-process--call-json)
+                 (lambda (arguments &optional _input)
+                   (push arguments calls)
+                   (org-files-db-test--empty-wire))))
+        (org-files-db-query-results '(fs-files))
+        (org-files-db-query-results '(fs-dirs) :show-hidden nil)
+        (org-files-db-query-results '(headings)))
+      (expect (member "--hidden" (nth 2 calls)) :to-be-truthy)
+      (expect (member "--hidden" (nth 1 calls)) :to-be nil)
+      (expect (member "--hidden" (car calls)) :to-be nil))))
+
 
 (describe "lightweight completion and semantic faces"
   (before-each
@@ -1490,6 +1517,24 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
                 :to-equal '((priority :direction asc)))
         (expect (plist-get (cdr called-arguments) :row-source)
                 :to-equal 'tags))))
+
+  (it "passes effective hidden visibility through the query command"
+    (let* ((result '((kind . "file")))
+           (presentation
+            (org-files-db-test--single-result-presentation result "main"))
+           (called-arguments nil)
+           (org-files-db-file-action #'ignore))
+      (cl-letf (((symbol-function 'org-files-db-query-results)
+                 (lambda (query &rest arguments)
+                   (setq called-arguments (cons query arguments))
+                   presentation))
+                ((symbol-function 'completing-read)
+                 #'org-files-db-test--select-first-candidate))
+        (org-files-db-query '(fs-files) :show-hidden t :action #'ignore))
+      (expect (plist-member (cdr called-arguments) :show-hidden)
+              :to-be-truthy)
+      (expect (plist-get (cdr called-arguments) :show-hidden)
+              :to-be t)))
 
   (it "provides the effective configuration only while the action runs"
     (let* ((result '((kind . "file") (path . "/tmp/example.org")))
@@ -1963,11 +2008,32 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
               :to-equal '((title)))
       (expect (org-files-db-views--resolved-sort resolved)
               :to-equal '((title :direction asc)))
+      (expect (org-files-db-views--resolved-show-hidden resolved)
+              :to-equal nil)
       (expect (org-files-db-views--resolved-cache resolved)
               :to-equal nil)
       (expect (org-files-db-views--resolved-action resolved)
               :to-equal #'ignore)
       (expect (org-files-db-views--resolved-p resolved) :to-equal t)))
+
+  (it "inherits and overrides hidden visibility in filesystem views"
+    (let* ((main (org-files-db-test--config-file "main.toml"))
+           (org-files-db-configs `(("main" . ,main)))
+           (org-files-db-default-config "main")
+           (org-files-db-show-hidden t)
+           (org-files-db-views
+            '(("inherited" :query (fs-files))
+              ("hidden" :query (fs-files) :show-hidden nil)
+              ("org" :query (headings) :show-hidden t))))
+      (expect (org-files-db-views--resolved-show-hidden
+               (org-files-db-views--resolve (nth 0 org-files-db-views)))
+              :to-be t)
+      (expect (org-files-db-views--resolved-show-hidden
+               (org-files-db-views--resolve (nth 1 org-files-db-views)))
+              :to-be nil)
+      (expect (org-files-db-views--resolved-show-hidden
+               (org-files-db-views--resolve (nth 2 org-files-db-views)))
+              :to-be nil)))
 
   (it "passes filesystem view defaults and explicit columns to the query"
     (let* ((main (org-files-db-test--config-file "main.toml"))
@@ -2129,6 +2195,54 @@ OVERRIDES is a plist keyed by keywords such as `:files' or `:results'."
         (expect arguments :to-contain "view")
         (expect arguments :to-contain "register")
         (expect arguments :not :to-contain "--include"))))
+
+  (it "passes filesystem hidden visibility into cache registrations and identity"
+    (let* ((main (org-files-db-test--config-file "main.toml"))
+           (org-files-db-configs `(("main" . ,main)))
+           (org-files-db-default-config "main")
+           (org-files-db-show-hidden t)
+           (org-files-db-views
+            '(("inherited" :query (fs-files) :cache t)
+              ("explicit" :query (fs-files) :cache t :show-hidden nil)))
+           registered)
+      (cl-letf (((symbol-function 'org-files-db-watch-start)
+                 (lambda () (setq org-files-db-watch-mode t)))
+                ((symbol-function 'org-files-db-watch--probe-active-p)
+                 (lambda (_file) t))
+                ((symbol-function 'org-files-db-process--call-json)
+                 (lambda (arguments &optional _input)
+                   (push arguments registered)
+                   '((status . "registered")))))
+        (org-files-db-cache-mode 1))
+      (let ((inherited
+             (seq-find
+              (lambda (arguments)
+                (cl-some
+                 (lambda (argument)
+                   (and (stringp argument)
+                        (string-match-p "inherited" argument)))
+                 arguments))
+              registered))
+            (explicit
+             (seq-find
+              (lambda (arguments)
+                (cl-some
+                 (lambda (argument)
+                   (and (stringp argument)
+                        (string-match-p "explicit" argument)))
+                 arguments))
+              registered)))
+        (expect inherited :to-be-truthy)
+        (expect (member "--hidden" inherited) :to-be-truthy)
+        (expect explicit :to-be-truthy)
+        (expect (member "--hidden" explicit) :to-be nil))
+      (setq org-files-db-show-hidden nil)
+      (let (caught)
+        (condition-case err
+            (org-files-db-view "inherited")
+          (user-error (setq caught err)))
+        (expect (error-message-string caught)
+                :to-match "restart org-files-db-cache-mode"))))
 
   (it "rolls back registrations and watch mode after cache activation failure"
     (let* ((main (org-files-db-test--config-file "main.toml"))
@@ -4164,10 +4278,19 @@ SCHEDULED: <2026-10-02 Fri>
             (org-files-db-show-query '(headings) :config "main" :columns '((title))
                                      :sort nil :action #'ignore)
           (expect (car calls) :to-equal
-                  '((headings) :config "main" :columns ((title)) :sort nil))
+                  '((headings) :config "main" :columns ((title)) :sort nil
+                    :show-hidden nil))
           (org-files-db-results-refresh)
           (expect (length calls) :to-be 2)
           (expect (car calls) :to-equal (cadr calls))))
+
+      (it "keeps inherited hidden visibility through result refresh"
+        (let ((org-files-db-show-hidden t))
+          (with-current-buffer (org-files-db-show-query '(fs-files))
+            (setq org-files-db-show-hidden nil)
+            (org-files-db-results-refresh)))
+        (expect (plist-get (cdr (car calls)) :show-hidden) :to-be t)
+        (expect (plist-get (cdr (cadr calls)) :show-hidden) :to-be t))
 
       (it "shows a view by name and refreshes it through the view path"
         (let* ((main (org-files-db-test--config-file "main.toml"))
@@ -4183,6 +4306,18 @@ SCHEDULED: <2026-10-02 Fri>
             (call-interactively (key-binding (kbd "g")))
             (expect (length calls) :to-be 2)
             (expect (count-lines (point-min) (point-max)) :to-be 4))))
+
+      (it "keeps a view's hidden visibility through result refresh"
+        (let* ((main (org-files-db-test--config-file "main.toml"))
+               (org-files-db-configs `(("main" . ,main)))
+               (org-files-db-default-config "main")
+               (org-files-db-show-hidden t)
+               (org-files-db-views '(("files" :query (fs-files)))))
+          (with-current-buffer (org-files-db-show-view "files")
+            (setq org-files-db-show-hidden nil)
+            (org-files-db-results-refresh)))
+        (expect (plist-get (cdr (car calls)) :show-hidden) :to-be t)
+        (expect (plist-get (cdr (cadr calls)) :show-hidden) :to-be t))
 
       (it "reads the view name with completion when none is given"
         (let* ((main (org-files-db-test--config-file "main.toml"))

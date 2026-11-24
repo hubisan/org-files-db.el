@@ -70,6 +70,16 @@ It must be set as soon as `org-files-db-configs' is not empty. Example:
   :type '(choice (const :tag "Not configured" nil) string)
   :group 'org-files-db)
 
+(defcustom org-files-db-show-hidden nil
+  "Whether filesystem queries include hidden files and directories.
+This setting applies to `fs-files' and `fs-dirs' queries. A query or named
+view can override it with `:show-hidden'. Org queries ignore this setting.
+Example:
+
+  (setq org-files-db-show-hidden t)"
+  :type 'boolean
+  :group 'org-files-db)
+
 (defcustom org-files-db-heading-columns
   '((todo-keyword :width (max 10))
     (priority :width (fixed 3))
@@ -299,6 +309,8 @@ Each entry is (NAME KEY VALUE ...) with a unique string NAME. Keys:
   :columns     columns as in `org-files-db-heading-columns'.
   :sort        sort rules as in `org-files-db-heading-sort'.
   :row-source  tags, effective-properties or keywords.
+  :show-hidden  t to include hidden filesystem entries; default inherits
+               `org-files-db-show-hidden'.
   :action      function to run on the selected result.
   :cache       t to keep the view prepared while `org-files-db-cache-mode'
                is on; default nil.
